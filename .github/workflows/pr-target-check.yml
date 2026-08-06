@@ -1,0 +1,29 @@
+name: PR Target Check
+
+on:
+  pull_request:
+    types: [opened, reopened, edited, synchronize]
+
+jobs:
+  check-target:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce branch strategy
+        run: |
+          BASE="${{ github.event.pull_request.base.ref }}"
+          HEAD="${{ github.event.pull_request.head.ref }}"
+
+          echo "PR: $HEAD → $BASE"
+
+          if [ "$BASE" = "master" ] && [ "$HEAD" != "develop" ]; then
+            echo "❌ Only the 'develop' branch can open PRs to 'master'."
+            echo "   Please target 'develop' instead."
+            exit 1
+          fi
+
+          if [ "$BASE" = "develop" ] && [ "$HEAD" = "master" ]; then
+            echo "❌ Do not merge 'master' back into 'develop'."
+            exit 1
+          fi
+
+          echo "✅ PR target is valid: $HEAD → $BASE"
