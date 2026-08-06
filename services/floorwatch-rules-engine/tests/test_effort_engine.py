@@ -1,0 +1,277 @@
+"""Unit tests for Part A active-time tracking / effort flagging (effort_engine.py)."""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
+
+from effort_engine import EffortEngine  # noqa: E402
+
+
+class FakeRoster:
+    def __init__(self, staffed: dict):
+        self.staffed = staffed
+
+    def is_zone_staffed(self, zone_id: str) -> bool:
+        return self.staffed.get(zone_id, False)
+
+
+class FakeDigest:
+    def __init__(self):
+        self.entries = []
+
+    def append(self, event):
+        self.entries.append(event)
+
+
+class FakeClock:
+    def __init__(self, t=0.0):
+        self.t = t
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, seconds):
+        self.t += seconds
+
+
+ZONES_META = {"theatre3": {"name": "Theatre 3 (post-show)", "role_tag": "janitor", "camera_id": "theatre3_cam_1"}}
+THRESHOLDS = {"_default": {"expected_active_ratio": 0.5}, "clean_door": {"expected_active_ratio": 0.5}}
+
+
+def simulate_active_motion(engine, clock, camera_id, duration_seconds, step=10):
+    """Feed periodic active motion samples (like a real ~0.1Hz pose skill
+    would), since record_motion caps a single gap at max_motion_gap_seconds
+    — a single before/after pair can't represent long stretches of
+    continuous activity."""
+    engine.record_motion(camera_id, active=True)
+    elapsed = 0
+    while elapsed < duration_seconds:
+        clock.advance(step)
+        elapsed += step
+        engine.record_motion(camera_id, active=True)
+
+
+def make_engine(staffed=True, zone_covered=True, **overrides):
+    clock = FakeClock()
+    engine = EffortEngine(
+        roster=FakeRoster({"theatre3": staffed}),
+        digest=FakeDigest(),
+        zones_meta=ZONES_META,
+        task_type_thresholds=THRESHOLDS,
+        shadow_mode=True,
+        update_interval_seconds=30,
+        max_motion_gap_seconds=15,
+        nudge_grace_ratio=0.3,
+        nudge_margin=0.3,
+        zone_is_covered=lambda zone_id: zone_covered,
+        clock=clock,
+        **overrides,
+    )
+    return engine, clock
+
+
+# ── task assignment ──────────────────────────────────────────────────────
+
+def test_assign_task_on_unstaffed_zone_returns_none():
+    engine, _ = make_engine(staffed=False)
+    assert engine.assign_task("Clean Door — Zone 4", "theatre3", 60) is None
+    assert engine.tasks == {}
+
+
+def test_assign_task_on_staffed_zone_creates_open_task():
+    engine, _ = make_engine(staffed=True)
+    evt = engine.assign_task("Clean Door — Zone 4", "theatre3", 60, task_type="clean_door")
+    assert evt["event_type"] == "task_assigned"
+    assert evt["assigned_minutes"] == 60
+    assert evt["task_name"] == "Clean Door — Zone 4"
+    assert len(engine.tasks) == 1
+
+
+# ── motion accumulation ──────────────────────────────────────────────────
+
+def test_record_motion_accumulates_active_seconds_only_when_zone_covered():
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+
+    engine.record_motion("theatre3_cam_1", active=True)  # baseline, no dt yet
+    clock.advance(10)
+    engine.record_motion("theatre3_cam_1", active=True)
+    clock.advance(10)
+    engine.record_motion("theatre3_cam_1", active=True)
+
+    t = engine.tasks[task_id]
+    assert t.active_seconds == 20
+
+
+def test_record_motion_does_not_accumulate_when_inactive():
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+
+    engine.record_motion("theatre3_cam_1", active=False)
+    clock.advance(10)
+    engine.record_motion("theatre3_cam_1", active=False)
+
+    assert engine.tasks[task_id].active_seconds == 0
+
+
+def test_record_motion_does_not_accumulate_when_zone_not_covered():
+    engine, clock = make_engine(staffed=True, zone_covered=False)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+
+    engine.record_motion("theatre3_cam_1", active=True)
+    clock.advance(10)
+    engine.record_motion("theatre3_cam_1", active=True)
+
+    assert engine.tasks[task_id].active_seconds == 0
+
+
+def test_record_motion_caps_large_gap_at_max_gap_seconds():
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+
+    engine.record_motion("theatre3_cam_1", active=True)
+    clock.advance(300)  # a 5-minute gap in samples
+    engine.record_motion("theatre3_cam_1", active=True)
+
+    assert engine.tasks[task_id].active_seconds == 15  # capped at max_motion_gap_seconds
+
+
+def test_record_motion_ignores_other_cameras():
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+
+    engine.record_motion("some_other_cam", active=True)
+    clock.advance(10)
+    engine.record_motion("some_other_cam", active=True)
+
+    assert engine.tasks[task_id].active_seconds == 0
+
+
+# ── periodic updates + mid-task nudge ────────────────────────────────────
+
+def test_tick_emits_periodic_active_time_update():
+    engine, clock = make_engine(staffed=True)
+    engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    assert engine.tick() == []  # not yet due
+    clock.advance(31)
+    out = engine.tick()
+    assert any(e["event_type"] == "task_active_time_update" for e in out)
+
+
+def test_mid_task_nudge_fires_when_active_ratio_falls_behind():
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+
+    # 25 minutes elapsed (well past the 30% grace), only ~5 min active — well behind schedule
+    simulate_active_motion(engine, clock, "theatre3_cam_1", 5 * 60)
+    clock.advance(20 * 60)  # now 25 min elapsed total, no more active motion
+
+    out = engine.tick()
+    nudges = [e for e in out if e["event_type"] == "task_low_effort_nudge"]
+    assert len(nudges) == 1
+    assert nudges[0]["shadow_mode_suppressed"] is True
+    assert engine.tasks[task_id].nudged is True
+
+
+def test_mid_task_nudge_does_not_fire_within_grace_period():
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    clock.advance(5 * 60)  # only 8% elapsed — within grace
+    out = engine.tick()
+    assert not any(e["event_type"] == "task_low_effort_nudge" for e in out)
+
+
+def test_mid_task_nudge_fires_only_once():
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    clock.advance(25 * 60)
+    out1 = engine.tick()
+    assert any(e["event_type"] == "task_low_effort_nudge" for e in out1)
+    clock.advance(60)
+    out2 = engine.tick()
+    assert not any(e["event_type"] == "task_low_effort_nudge" for e in out2)
+
+
+# ── completion + flagging ────────────────────────────────────────────────
+
+def test_complete_task_flags_when_active_time_far_below_threshold():
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+
+    simulate_active_motion(engine, clock, "theatre3_cam_1", 22 * 60)  # 22 of 60 min active — mirrors demo script
+
+    evt = engine.complete_task(task_id)
+    assert evt["event_type"] == "task_flag"
+    assert engine.tasks[task_id].status == "flagged"
+    assert any(e["event_type"] == "task_flag" for e in engine.digest.entries)
+
+
+def test_complete_task_resolves_auto_when_active_time_meets_threshold():
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+
+    simulate_active_motion(engine, clock, "theatre3_cam_1", 40 * 60)  # 40 of 60 min — well above 50% threshold
+
+    evt = engine.complete_task(task_id)
+    assert evt["event_type"] == "task_resolved"
+    assert evt["resolved_by"] == "auto"
+    assert engine.tasks[task_id].status == "resolved"
+
+
+def test_complete_unknown_task_returns_none():
+    engine, _ = make_engine(staffed=True)
+    assert engine.complete_task("nonexistent") is None
+
+
+def test_per_task_type_threshold_used_not_global_default():
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    engine.task_type_thresholds = {"_default": {"expected_active_ratio": 0.9}, "clean_door": {"expected_active_ratio": 0.3}}
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+
+    simulate_active_motion(engine, clock, "theatre3_cam_1", 20 * 60)  # 20/60 = 33% >= clean_door's 30% threshold
+
+    evt = engine.complete_task(task_id)
+    assert evt["event_type"] == "task_resolved"  # would have been flagged under the 90% default
+
+
+# ── supervisor confirm/dismiss ───────────────────────────────────────────
+
+def test_confirm_flag_resolves_with_supervisor_attribution():
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+    engine.complete_task(task_id)  # active_seconds=0 -> flagged
+    assert engine.pending_flags()[0]["task_id"] == task_id
+
+    evt = engine.confirm_flag(task_id, supervisor_id="alice")
+    assert evt["event_type"] == "task_resolved"
+    assert evt["resolved_by"] == "supervisor:alice"
+    assert engine.tasks[task_id].status == "resolved"
+    assert engine.pending_flags() == []
+
+
+def test_dismiss_flag_resolves_with_supervisor_attribution():
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+    engine.complete_task(task_id)
+
+    evt = engine.dismiss_flag(task_id, supervisor_id="bob")
+    assert evt["action_type"] == "dismissed"
+    assert evt["resolved_by"] == "supervisor:bob"
+
+
+def test_confirm_flag_on_non_flagged_task_returns_none():
+    engine, _ = make_engine(staffed=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    assert engine.confirm_flag(task_evt["task_id"]) is None

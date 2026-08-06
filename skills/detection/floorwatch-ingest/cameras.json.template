@@ -1,0 +1,85 @@
+{
+  "_comment": "Copy to cameras.json and edit. One entry per camera. Different cameras in the same deployment can use different source_type values — a client with some cameras on RTSP and others exporting to a folder just lists both. Delete the example entries you don't need; keep only the source-type block matching each camera's source_type.",
+
+  "cameras": [
+
+    {
+      "_comment": "Scenario 1 — live camera/NVR with RTSP (or ONVIF-negotiated RTSP)",
+      "camera_id": "lobby_cam_1",
+      "source_type": "rtsp",
+      "fps": 1,
+      "rtsp": {
+        "url": "rtsp://username:password@192.168.1.50:554/stream1",
+        "max_backoff_seconds": 30
+      }
+    },
+
+    {
+      "_comment": "Scenario 2 — local folder an existing NVR/DVR already writes recordings into. Accepts video files (.mp4/.avi/.mov/.mkv) or image snapshots (.jpg/.png). Never modifies or deletes anything in this folder.",
+      "camera_id": "concession_cam",
+      "source_type": "local_folder",
+      "fps": 1,
+      "local_folder": {
+        "folder": "C:\\CCTV\\concession",
+        "poll_interval_seconds": 5,
+        "state_file": "state/concession_cam_processed.json"
+      }
+    },
+
+    {
+      "_comment": "Scenario 3a — AWS S3. Omit access_key_id/secret_access_key below to use boto3's default credential chain instead (recommended for anything beyond a quick local test — IAM role, env vars, ~/.aws/credentials). If you do need static keys, add them inside the s3 block as: \"access_key_id\": \"${FLOORWATCH_AWS_ACCESS_KEY_ID}\", \"secret_access_key\": \"${FLOORWATCH_AWS_SECRET_ACCESS_KEY}\" (values come from config/secrets.env, never written here directly).",
+      "camera_id": "entrance_cam",
+      "source_type": "s3",
+      "fps": 0.5,
+      "s3": {
+        "bucket": "client-cctv-footage",
+        "prefix": "entrance/",
+        "region": "us-east-1",
+        "poll_interval_seconds": 15,
+        "state_file": "state/entrance_cam_processed.json"
+      }
+    },
+
+    {
+      "_comment": "Scenario 3b — Azure Blob Storage. connection_string is a secret — set it via secrets.env, not hardcoded here in a real deployment (see config/README.md).",
+      "camera_id": "boxoffice_cam",
+      "source_type": "azure_blob",
+      "fps": 0.5,
+      "azure_blob": {
+        "container": "cctv-footage",
+        "prefix": "boxoffice/",
+        "connection_string": "${FLOORWATCH_AZURE_STORAGE_CONNECTION_STRING}",
+        "poll_interval_seconds": 15
+      }
+    },
+
+    {
+      "_comment": "Scenario 3c — Google Cloud Storage. Omit credentials_path to use Application Default Credentials.",
+      "camera_id": "restroom_cam",
+      "source_type": "gcs",
+      "fps": 0.5,
+      "gcs": {
+        "bucket": "client-cctv-footage",
+        "prefix": "restroom/",
+        "credentials_path": "C:\\secrets\\gcs-service-account.json",
+        "poll_interval_seconds": 15
+      }
+    },
+
+    {
+      "_comment": "Scenario 4 — third-party surveillance provider's own API. This is a TEMPLATE — field names below (id_field/download_url_field) must match whatever that vendor's API actually returns; see skills/detection/floorwatch-ingest/scripts/sources/http_api.py's docstring.",
+      "camera_id": "theatre3_cam",
+      "source_type": "http_api",
+      "fps": 0.5,
+      "http_api": {
+        "list_url": "https://provider.example.com/api/v1/cameras/theatre3/clips",
+        "id_field": "id",
+        "download_url_field": "download_url",
+        "auth_header_name": "Authorization",
+        "auth_header_value": "Bearer ${THIRD_PARTY_PROVIDER_API_TOKEN}",
+        "poll_interval_seconds": 15
+      }
+    }
+
+  ]
+}

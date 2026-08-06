@@ -1,0 +1,67 @@
+# Floorwatch Coverage Skill — Configuration Schema
+# Parsed by Aegis skill-registry-service.cjs → parseConfigYaml()
+# Format: params[] with key, type, label, default, description, options
+
+params:
+  - key: auto_start
+    label: Auto Start
+    type: boolean
+    default: false
+    description: "Start this skill automatically when Aegis launches"
+
+  - key: zones_dir
+    label: Zones Directory
+    type: string
+    default: "zones"
+    description: "Directory (relative to this skill) containing <camera_id>.json zone-polygon files"
+
+  - key: person_class
+    label: Person Class Name
+    type: string
+    default: "person"
+    description: "Object class name treated as an occupant"
+
+  - key: min_confidence
+    label: Minimum Confidence
+    type: number
+    default: 0.5
+    description: "Ignore upstream detections below this confidence before zone-mapping"
+
+  - key: anchor_point
+    label: Bbox Anchor Point
+    type: select
+    default: bottom_center
+    description: "Which point of a person's bounding box is tested against zone polygons"
+    options:
+      - { value: bottom_center, label: "Bottom Center (feet)" }
+      - { value: center, label: "Box Center" }
+
+  - key: debounce_seconds
+    label: Gap Debounce Window
+    type: number
+    default: 60
+    description: "Seconds a zone must be continuously unoccupied before a zone_gap event fires"
+
+  - key: gap_confidence_threshold
+    label: Gap Confidence Threshold
+    type: number
+    default: 0.8
+    description: "Minimum detection confidence required to count as coverage for debounce purposes (per Phase 2 spec)"
+
+  - key: redis_url
+    label: Redis URL
+    type: string
+    default: ""
+    description: "If set (e.g. redis://redis:6379/0), events are published onto a Redis Stream in addition to stdout"
+
+  - key: redis_stream
+    label: Redis Stream Name
+    type: string
+    default: "floorwatch:events"
+    description: "Redis Stream key events are XADD'd onto"
+
+  - key: shadow_mode
+    label: Shadow Mode
+    type: boolean
+    default: true
+    description: "Log-only passthrough flag threaded onto events; real notification suppression is enforced by the downstream rules engine"

@@ -1,0 +1,12 @@
+{
+  "_comment": "Pilot contact directory — manually maintained, matching roster.json's pattern. Used only when FLOORWATCH_NOTIFY_CHANNEL is 'twilio' or 'fcm' AND FLOORWATCH_SHADOW_MODE is false. Placeholder values below are NOT real — replace before any real go-live.",
+  "supervisor_phone": "+15550000000",
+  "zones": {
+    "concession": { "employee_phone": "+15550000001", "employee_fcm_token": "" },
+    "boxoffice": { "employee_phone": "+15550000002", "employee_fcm_token": "" },
+    "lobby": { "employee_phone": "+15550000003", "employee_fcm_token": "" },
+    "restroomA": { "employee_phone": "+15550000004", "employee_fcm_token": "" },
+    "theatre3": { "employee_phone": "+15550000005", "employee_fcm_token": "" },
+    "entrance": { "employee_phone": "+15550000006", "employee_fcm_token": "" }
+  }
+}

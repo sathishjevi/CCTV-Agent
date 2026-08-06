@@ -1,0 +1,129 @@
+Collecting tflite-runtime==2.14.0
+  Downloading tflite_runtime-2.14.0-cp39-cp39-manylinux2014_x86_64.whl (2.4 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.4/2.4 MB 16.7 MB/s eta 0:00:00
+Collecting pillow
+  Downloading pillow-11.3.0-cp39-cp39-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (6.6 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 6.6/6.6 MB 39.5 MB/s eta 0:00:00
+Collecting numpy
+  Downloading numpy-2.0.2-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (19.5 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 19.5/19.5 MB 33.4 MB/s eta 0:00:00
+Installing collected packages: pillow, numpy, tflite-runtime
+Successfully installed numpy-2.0.2 pillow-11.3.0 tflite-runtime-2.14.0
+WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv
+
+[notice] A new release of pip is available: 23.0.1 -> 26.0.1
+[notice] To update, run: pip install --upgrade pip
+Get:1 http://deb.debian.org/debian trixie InRelease [140 kB]
+Get:2 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+Get:3 http://deb.debian.org/debian-security trixie-security InRelease [43.4 kB]
+Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9671 kB]
+Get:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages [5412 B]
+Get:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages [114 kB]
+Fetched 10.0 MB in 1s (10.4 MB/s)
+Reading package lists...
+Reading package lists...
+Building dependency tree...
+Reading state information...
+The following additional packages will be installed:
+  libgnutls30t64 libidn2-0 libp11-kit0 libpsl5t64 libtasn1-6 libunistring5
+  publicsuffix
+Suggested packages:
+  gnutls-bin
+The following NEW packages will be installed:
+  libgnutls30t64 libidn2-0 libp11-kit0 libpsl5t64 libtasn1-6 libunistring5
+  libusb-1.0-0 publicsuffix wget
+0 upgraded, 9 newly installed, 0 to remove and 14 not upgraded.
+Need to get 3926 kB of archives.
+After this operation, 13.0 MB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian trixie/main amd64 libunistring5 amd64 1.3-2 [477 kB]
+Get:2 http://deb.debian.org/debian trixie/main amd64 libidn2-0 amd64 2.3.8-2 [109 kB]
+Get:3 http://deb.debian.org/debian trixie/main amd64 libp11-kit0 amd64 0.25.5-3 [425 kB]
+Get:4 http://deb.debian.org/debian trixie/main amd64 libtasn1-6 amd64 4.20.0-2 [49.9 kB]
+Get:5 http://deb.debian.org/debian trixie/main amd64 libgnutls30t64 amd64 3.8.9-3+deb13u2 [1468 kB]
+Get:6 http://deb.debian.org/debian trixie/main amd64 libpsl5t64 amd64 0.21.2-1.1+b1 [57.2 kB]
+Get:7 http://deb.debian.org/debian trixie/main amd64 wget amd64 1.25.0-2 [984 kB]
+Get:8 http://deb.debian.org/debian trixie/main amd64 libusb-1.0-0 amd64 2:1.0.28-1 [59.6 kB]
+Get:9 http://deb.debian.org/debian trixie/main amd64 publicsuffix all 20250328.1952-0.1 [296 kB]
+debconf: unable to initialize frontend: Dialog
+debconf: (TERM is not set, so the dialog frontend is not usable.)
+debconf: falling back to frontend: Readline
+debconf: unable to initialize frontend: Readline
+debconf: (Can't locate Term/ReadLine.pm in @INC (you may need to install the Term::ReadLine module) (@INC entries checked: /etc/perl /usr/local/lib/x86_64-linux-gnu/perl/5.40.1 /usr/local/share/perl/5.40.1 /usr/lib/x86_64-linux-gnu/perl5/5.40 /usr/share/perl5 /usr/lib/x86_64-linux-gnu/perl-base /usr/lib/x86_64-linux-gnu/perl/5.40 /usr/share/perl/5.40 /usr/local/lib/site_perl) at /usr/share/perl5/Debconf/FrontEnd/Readline.pm line 8, <STDIN> line 9.)
+debconf: falling back to frontend: Teletype
+debconf: unable to initialize frontend: Teletype
+debconf: (This frontend requires a controlling tty.)
+debconf: falling back to frontend: Noninteractive
+Fetched 3926 kB in 0s (13.3 MB/s)
+Selecting previously unselected package libunistring5:amd64.
+(Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 5644 files and directories currently installed.)
+Preparing to unpack .../0-libunistring5_1.3-2_amd64.deb ...
+Unpacking libunistring5:amd64 (1.3-2) ...
+Selecting previously unselected package libidn2-0:amd64.
+Preparing to unpack .../1-libidn2-0_2.3.8-2_amd64.deb ...
+Unpacking libidn2-0:amd64 (2.3.8-2) ...
+Selecting previously unselected package libp11-kit0:amd64.
+Preparing to unpack .../2-libp11-kit0_0.25.5-3_amd64.deb ...
+Unpacking libp11-kit0:amd64 (0.25.5-3) ...
+Selecting previously unselected package libtasn1-6:amd64.
+Preparing to unpack .../3-libtasn1-6_4.20.0-2_amd64.deb ...
+Unpacking libtasn1-6:amd64 (4.20.0-2) ...
+Selecting previously unselected package libgnutls30t64:amd64.
+Preparing to unpack .../4-libgnutls30t64_3.8.9-3+deb13u2_amd64.deb ...
+Unpacking libgnutls30t64:amd64 (3.8.9-3+deb13u2) ...
+Selecting previously unselected package libpsl5t64:amd64.
+Preparing to unpack .../5-libpsl5t64_0.21.2-1.1+b1_amd64.deb ...
+Unpacking libpsl5t64:amd64 (0.21.2-1.1+b1) ...
+Selecting previously unselected package wget.
+Preparing to unpack .../6-wget_1.25.0-2_amd64.deb ...
+Unpacking wget (1.25.0-2) ...
+Selecting previously unselected package libusb-1.0-0:amd64.
+Preparing to unpack .../7-libusb-1.0-0_2%3a1.0.28-1_amd64.deb ...
+Unpacking libusb-1.0-0:amd64 (2:1.0.28-1) ...
+Selecting previously unselected package publicsuffix.
+Preparing to unpack .../8-publicsuffix_20250328.1952-0.1_all.deb ...
+Unpacking publicsuffix (20250328.1952-0.1) ...
+Setting up libp11-kit0:amd64 (0.25.5-3) ...
+Setting up libunistring5:amd64 (1.3-2) ...
+Setting up libtasn1-6:amd64 (4.20.0-2) ...
+Setting up libusb-1.0-0:amd64 (2:1.0.28-1) ...
+Setting up publicsuffix (20250328.1952-0.1) ...
+Setting up libidn2-0:amd64 (2.3.8-2) ...
+Setting up libgnutls30t64:amd64 (3.8.9-3+deb13u2) ...
+Setting up libpsl5t64:amd64 (0.21.2-1.1+b1) ...
+Setting up wget (1.25.0-2) ...
+Processing triggers for libc-bin (2.41-12) ...
+--2026-03-31 19:47:38--  https://packages.cloud.google.com/apt/pool/coral-edgetpu-stable/libedgetpu1-max_16.0_amd64_0ac21f1924dd4b125d5cfc5f6d0e4a5e.deb
+Resolving packages.cloud.google.com (packages.cloud.google.com)... 142.251.218.142, 2607:f8b0:4005:801::200e
+Connecting to packages.cloud.google.com (packages.cloud.google.com)|142.251.218.142|:443... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 387960 (379K) [application/vnd.debian.binary-package]
+Saving to: ‘libedgetpu.deb’
+
+     0K .......... .......... .......... .......... .......... 13% 1.50M 0s
+    50K .......... .......... .......... .......... .......... 26% 2.72M 0s
+   100K .......... .......... .......... .......... .......... 39% 3.45M 0s
+   150K .......... .......... .......... .......... .......... 52% 5.38M 0s
+   200K .......... .......... .......... .......... .......... 65% 6.17M 0s
+   250K .......... .......... .......... .......... .......... 79% 5.45M 0s
+   300K .......... .......... .......... .......... .......... 92% 7.87M 0s
+   350K .......... .......... ........                        100% 7.11M=0.1s
+
+2026-03-31 19:47:39 (3.67 MB/s) - ‘libedgetpu.deb’ saved [387960/387960]
+
+Traceback (most recent call last):
+  File "/app/wsl_test.py", line 9, in <module>
+    delegate = tflite.load_delegate("libedgetpu.so.1")
+  File "/usr/local/lib/python3.9/site-packages/tflite_runtime/interpreter.py", line 166, in load_delegate
+    delegate = Delegate(library, options)
+  File "/usr/local/lib/python3.9/site-packages/tflite_runtime/interpreter.py", line 73, in __init__
+    self._library = ctypes.pydll.LoadLibrary(library)
+  File "/usr/local/lib/python3.9/ctypes/__init__.py", line 452, in LoadLibrary
+    return self._dlltype(name)
+  File "/usr/local/lib/python3.9/ctypes/__init__.py", line 374, in __init__
+    self._handle = _dlopen(self._name, mode)
+OSError: libedgetpu.so.1: cannot open shared object file: No such file or directory
+Exception ignored in: <function Delegate.__del__ at 0x7f4e33a50160>
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.9/site-packages/tflite_runtime/interpreter.py", line 109, in __del__
+    if self._library is not None:
+AttributeError: 'Delegate' object has no attribute '_library'

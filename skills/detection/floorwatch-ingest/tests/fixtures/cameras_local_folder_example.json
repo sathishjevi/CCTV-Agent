@@ -1,0 +1,13 @@
+{
+  "cameras": [
+    {
+      "camera_id": "test_cam",
+      "source_type": "local_folder",
+      "fps": 2,
+      "local_folder": {
+        "folder": "tests/fixtures/sample_footage",
+        "poll_interval_seconds": 2
+      }
+    }
+  ]
+}

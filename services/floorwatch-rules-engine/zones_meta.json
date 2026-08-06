@@ -1,0 +1,9 @@
+{
+  "_comment": "Display + camera-mapping metadata for zones, matching dashboard/floorwatch_demo.html's ZONES array ids. Used to draft human-readable nudge/supervisor-command messages (Part B) and to know which camera's motion signal (Part A) applies to a zone's open task.",
+  "concession": { "name": "Concession Counter", "role_tag": "concession", "camera_id": "lobby_cam_1" },
+  "boxoffice": { "name": "Box Office", "role_tag": "ticketing", "camera_id": "lobby_cam_1" },
+  "lobby": { "name": "Main Lobby", "role_tag": "usher", "camera_id": "lobby_cam_1" },
+  "restroomA": { "name": "Restroom — Hall A", "role_tag": "janitor", "camera_id": "hall_a_cam_1" },
+  "theatre3": { "name": "Theatre 3 (post-show)", "role_tag": "janitor", "camera_id": "theatre3_cam_1" },
+  "entrance": { "name": "Front Entrance", "role_tag": "security", "camera_id": "entrance_cam_1" }
+}

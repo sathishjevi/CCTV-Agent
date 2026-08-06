@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Floorwatch — Cineplex Ops</title>
+<style>
+  :root{
+    --bg:#F4F7FC; --panel:#FFFFFF; --panel-2:#F0F4FA; --line:#DCE6F2; --text:#101B2D;
+    --dim:#5B6B82; --dimmer:#8B98AC; --ok:#12875A; --ok-glow:rgba(18,135,90,0.10);
+    --amber:#B4790E; --amber-glow:rgba(180,121,14,0.10); --red:#D0374A; --red-glow:rgba(208,55,74,0.10);
+    --purple:#7452C8; --purple-glow:rgba(116,82,200,0.10);
+    --accent:#2F6FED; --mono:'IBM Plex Mono','SF Mono',Consolas,monospace; --sans:'Inter',-apple-system,'Segoe UI',sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--sans);}
+  body{padding:24px;min-height:100vh;}
+  .wrap{max-width:1320px;margin:0 auto;}
+
+  .topbar{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:14px;}
+  .brand{display:flex;align-items:center;gap:12px;}
+  .brand-mark{width:34px;height:34px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#3D63C9);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:700;font-size:15px;color:#fff;flex-shrink:0;}
+  .brand h1{font-size:17px;margin:0;letter-spacing:0.2px;font-weight:600;}
+  .brand .sub{font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:0.5px;text-transform:uppercase;margin-top:2px;}
+  .conn-badge{font-family:var(--mono);font-size:11px;padding:5px 10px;border-radius:20px;letter-spacing:0.4px;display:flex;align-items:center;gap:6px;}
+  .conn-badge.live{color:var(--ok);background:var(--ok-glow);border:1px solid rgba(18,135,90,0.4);}
+  .conn-badge.connecting{color:var(--amber);background:var(--amber-glow);border:1px solid rgba(180,121,14,0.4);}
+  .conn-badge.down{color:var(--red);background:var(--red-glow);border:1px solid rgba(208,55,74,0.4);}
+  .conn-badge .dot{width:6px;height:6px;border-radius:50%;background:currentColor;animation:pulse 1.6s infinite;}
+  .clock{font-family:var(--mono);font-size:12.5px;color:var(--dim);padding:8px 10px;border:1px solid var(--line);border-radius:7px;background:var(--panel);min-width:78px;text-align:center;}
+
+  .connbar{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin-bottom:18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+  .connbar label{font-family:var(--mono);font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:0.6px;}
+  .connbar input{font-family:var(--mono);font-size:12.5px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:8px 10px;min-width:280px;flex:1;}
+  .btn{font-family:var(--sans);font-size:12.5px;font-weight:600;padding:9px 16px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer;transition:.15s;white-space:nowrap;}
+  .btn:hover{border-color:var(--accent);background:#EAF1FE;}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .btn.primary:hover{background:#1D57D6;}
+  .btn:disabled{opacity:0.3;cursor:not-allowed;}
+
+  .tabs{display:flex;gap:8px;margin-bottom:16px;}
+  .tab{font-family:var(--mono);font-size:11.5px;padding:8px 14px;border-radius:20px;border:1px solid var(--line);color:var(--dim);letter-spacing:0.3px;}
+  .tab.b{background:rgba(47,111,237,0.12);border-color:rgba(47,111,237,0.4);color:var(--accent);}
+  .tab.a{background:rgba(116,82,200,0.12);border-color:rgba(116,82,200,0.4);color:var(--purple);}
+
+  .grid{display:grid;grid-template-columns:1.35fr 1fr;gap:18px;}
+  @media(max-width:980px){.grid{grid-template-columns:1fr;}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 18px 20px;}
+  .panel h2{font-size:12px;text-transform:uppercase;letter-spacing:0.8px;color:var(--dim);margin:0 0 14px;font-weight:700;display:flex;align-items:center;justify-content:space-between;}
+  .panel h2 .count{font-family:var(--mono);color:var(--dimmer);text-transform:none;letter-spacing:0;font-weight:400;}
+  .panel.partA{border-color:rgba(116,82,200,0.35);}
+
+  .floor{position:relative;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;height:340px;overflow:hidden;}
+  .zone{position:absolute;border-radius:9px;border:1.5px solid var(--line);padding:10px 12px;display:flex;flex-direction:column;justify-content:space-between;transition:box-shadow .3s,border-color .3s,background .3s;background:#FFFFFF;box-shadow:0 1px 2px rgba(16,27,45,0.06);}
+  .zone .zn{font-size:12px;font-weight:700;}
+  .zone .zr{font-family:var(--mono);font-size:9.5px;color:var(--dim);text-transform:uppercase;letter-spacing:0.4px;margin-top:1px;}
+  .zone .zs{font-family:var(--mono);font-size:10px;margin-top:auto;font-weight:600;letter-spacing:0.3px;display:flex;align-items:center;gap:5px;}
+  .zone .zs .sdot{width:6px;height:6px;border-radius:50%;}
+  .zone.state-covered{border-color:rgba(18,135,90,0.35);}
+  .zone.state-covered .sdot{background:var(--ok);} .zone.state-covered .zs{color:var(--ok);}
+  .zone.state-nudge{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber), 0 0 18px var(--amber-glow);}
+  .zone.state-nudge .sdot{background:var(--amber);animation:pulse 1s infinite;} .zone.state-nudge .zs{color:var(--amber);}
+  .zone.state-command{border-color:var(--red);box-shadow:0 0 0 1px var(--red), 0 0 22px var(--red-glow);}
+  .zone.state-command .sdot{background:var(--red);animation:pulse .7s infinite;} .zone.state-command .zs{color:var(--red);}
+  .zone.state-escalated{border-color:var(--red);background:#FCEEEF;}
+  .zone.state-escalated .sdot{background:var(--red);} .zone.state-escalated .zs{color:var(--red);}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.35;}}
+
+  .legend{display:flex;gap:16px;margin-top:12px;flex-wrap:wrap;}
+  .legend span{font-family:var(--mono);font-size:10.5px;color:var(--dim);display:flex;align-items:center;gap:6px;}
+  .legend .sw{width:8px;height:8px;border-radius:50%;}
+
+  .feed{height:340px;overflow-y:auto;display:flex;flex-direction:column-reverse;gap:8px;padding-right:2px;}
+  .feed::-webkit-scrollbar{width:6px;} .feed::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px;}
+  .ev{border-left:2px solid var(--line);padding:6px 0 6px 10px;font-size:12.5px;line-height:1.45;animation:slidein .25s ease;}
+  @keyframes slidein{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:translateY(0);}}
+  .ev .t{font-family:var(--mono);font-size:10px;color:var(--dimmer);margin-right:6px;}
+  .ev.ok{border-color:var(--ok);} .ev.warn{border-color:var(--amber);} .ev.crit{border-color:var(--red);} .ev.info{border-color:var(--dimmer);} .ev.eff{border-color:var(--purple);}
+
+  .cmdcard{background:var(--panel-2);border:1px solid rgba(208,55,74,0.35);border-radius:10px;padding:14px;margin-bottom:10px;}
+  .cmdcard.effort{border-color:rgba(116,82,200,0.4);}
+  .cmdcard .hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;}
+  .cmdcard .zn{font-weight:700;font-size:13px;}
+  .cmdcard .age{font-family:var(--mono);font-size:10.5px;color:var(--red);}
+  .cmdcard.effort .age{color:var(--purple);}
+  .cmdcard .msg{font-size:12.5px;color:var(--dim);margin-bottom:10px;line-height:1.5;}
+  .cmdcard .msg .draft{color:var(--text);font-family:var(--mono);font-size:11.5px;display:block;margin-top:6px;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:8px 10px;}
+  .cmdrow{display:flex;gap:8px;}
+  .cmdrow .btn{flex:1;font-size:11.5px;padding:7px 0;text-align:center;}
+  .cmdrow .approve{background:rgba(18,135,90,0.15);border-color:rgba(18,135,90,0.4);color:var(--ok);}
+  .cmdrow .approve:hover{background:rgba(18,135,90,0.25);}
+  .cmdrow .reassign{background:rgba(47,111,237,0.12);border-color:rgba(47,111,237,0.4);color:var(--accent);}
+  .cmdrow .dismiss{background:rgba(116,82,200,0.12);border-color:rgba(116,82,200,0.4);color:var(--purple);}
+  .empty{color:var(--dimmer);font-size:12.5px;font-family:var(--mono);text-align:center;padding:30px 10px;}
+
+  .taskcard{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:10px;}
+  .taskcard .hd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;}
+  .taskcard .tn{font-weight:700;font-size:12.5px;}
+  .taskcard .tz{font-family:var(--mono);font-size:10px;color:var(--dim);}
+  .taskcard .barwrap{background:#E7ECF3;border-radius:6px;height:10px;overflow:hidden;border:1px solid var(--line);margin:6px 0;}
+  .taskcard .bar{height:100%;border-radius:6px;transition:width .4s;}
+  .taskcard .bar.good{background:var(--ok);} .taskcard .bar.warn{background:var(--amber);} .taskcard .bar.bad{background:var(--red);}
+  .taskcard .stats{font-family:var(--mono);font-size:10.5px;color:var(--dim);display:flex;justify-content:space-between;}
+  .taskcard .status{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:0.3px;margin-top:4px;}
+  .taskcard .status.ok{color:var(--ok);} .taskcard .status.warn{color:var(--amber);} .taskcard .status.bad{color:var(--red);}
+
+  .assign-form{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--line);}
+  .assign-form .field{display:flex;flex-direction:column;gap:4px;}
+  .assign-form label{font-family:var(--mono);font-size:9.5px;color:var(--dim);text-transform:uppercase;letter-spacing:0.4px;}
+  .assign-form input, .assign-form select{font-family:var(--sans);font-size:12.5px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:7px 9px;}
+  .assign-form input[type="text"]{min-width:160px;}
+  .assign-form input[type="number"]{width:80px;}
+  .taskcard .complete-btn{font-size:10.5px;padding:5px 10px;margin-top:8px;width:100%;}
+
+  .stats-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0;}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;}
+  .stat .v{font-family:var(--mono);font-size:22px;font-weight:600;}
+  .stat .l{font-size:10.5px;color:var(--dim);margin-top:3px;text-transform:uppercase;letter-spacing:0.4px;}
+  .stat.ok .v{color:var(--ok);} .stat.amber .v{color:var(--amber);} .stat.red .v{color:var(--red);} .stat.purple .v{color:var(--purple);}
+
+  footer{margin-top:20px;font-family:var(--mono);font-size:10.5px;color:var(--dimmer);text-align:center;line-height:1.6;}
+
+  .login-overlay{position:fixed;inset:0;background:rgba(16,27,45,0.35);display:flex;align-items:center;justify-content:center;z-index:100;}
+  .login-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:28px 30px;width:340px;box-shadow:0 12px 32px rgba(16,27,45,0.18);}
+  .login-card .brand{margin-bottom:18px;}
+  .login-card h2{font-size:14px;margin:0 0 16px;color:var(--dim);font-weight:600;}
+  .login-card .field{margin-bottom:12px;}
+  .login-card label{display:block;font-family:var(--mono);font-size:9.5px;color:var(--dim);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px;}
+  .login-card input{width:100%;box-sizing:border-box;font-family:var(--sans);font-size:13px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:9px 10px;}
+  .login-card button{width:100%;margin-top:6px;}
+  .login-error{color:var(--red);font-size:12px;margin-top:10px;min-height:16px;}
+  .user-badge{font-family:var(--mono);font-size:11px;color:var(--dim);display:flex;align-items:center;gap:8px;}
+  .user-badge .who{color:var(--text);font-weight:600;}
+</style>
+</head>
+<body>
+
+<div class="login-overlay" id="loginOverlay" style="display:none;">
+  <div class="login-card">
+    <div class="brand">
+      <div class="brand-mark" style="display:inline-flex;">FW</div>
+      <strong style="margin-left:8px;font-size:15px;">Floorwatch</strong>
+    </div>
+    <h2>Supervisor sign-in</h2>
+    <form id="loginForm">
+      <div class="field"><label for="loginBackend">Rules engine URL</label><input id="loginBackend" value="http://localhost:8080" spellcheck="false"></div>
+      <div class="field"><label for="loginUsername">Username</label><input id="loginUsername" autocomplete="username" required></div>
+      <div class="field"><label for="loginPassword">Password</label><input id="loginPassword" type="password" autocomplete="current-password" required></div>
+      <button type="submit" class="btn primary">Sign in</button>
+      <div class="login-error" id="loginError"></div>
+    </form>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">FW</div>
+      <div><h1>Floorwatch</h1><div class="sub">Coverage + Task Effort Monitoring</div></div>
+    </div>
+    <div class="conn-badge connecting" id="connBadge"><span class="dot"></span> <span id="connText">Connecting…</span></div>
+    <div class="user-badge" id="userBadge" style="display:none;">
+      <span class="who" id="userWho"></span>
+      <button class="btn" id="logoutBtn" style="padding:4px 10px;font-size:11px;">Log out</button>
+    </div>
+    <div class="clock" id="clock">--:--:--</div>
+  </div>
+
+  <div class="tabs">
+    <span class="tab b">PART B — Coverage: is a zone staffed?</span>
+    <span class="tab a">PART A — Effort: is assigned work actually getting done?</span>
+  </div>
+
+  <div class="connbar">
+    <div style="flex:1;display:flex;align-items:center;gap:10px;">
+      <label for="wsUrl">Rules engine WebSocket</label>
+      <input id="wsUrl" value="ws://localhost:8080/events" spellcheck="false">
+    </div>
+    <button class="btn primary" id="connectBtn">Connect</button>
+    <button class="btn" id="resetLogBtn">Clear log</button>
+  </div>
+
+  <div class="stats-strip">
+    <div class="stat ok"><div class="v" id="statCovered">0</div><div class="l">Zones covered</div></div>
+    <div class="stat amber"><div class="v" id="statNudges">0</div><div class="l">Coverage nudges</div></div>
+    <div class="stat purple"><div class="v" id="statEffortFlags">0</div><div class="l">Effort flags raised</div></div>
+    <div class="stat red"><div class="v" id="statCmds">0</div><div class="l">Supervisor actions</div></div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Floor status — coverage (Part B) <span class="count" id="zoneCount">6 zones</span></h2>
+      <div class="floor" id="floor"></div>
+      <div class="legend">
+        <span><span class="sw" style="background:var(--ok)"></span>Covered</span>
+        <span><span class="sw" style="background:var(--amber)"></span>Nudge sent</span>
+        <span><span class="sw" style="background:var(--red)"></span>Escalated</span>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Event feed <span class="count" id="feedCount">0 events</span></h2>
+      <div class="feed" id="feed"></div>
+    </div>
+  </div>
+
+  <div class="grid" style="margin-top:18px;">
+    <div class="panel partA">
+      <h2>Assigned tasks — effort tracking (Part A) <span class="count" id="taskCount">0 active</span></h2>
+      <div class="assign-form">
+        <div class="field"><label for="taskName">Task</label><input type="text" id="taskName" placeholder="e.g. Clean Door — Zone 4"></div>
+        <div class="field"><label for="taskZone">Zone</label><select id="taskZone"></select></div>
+        <div class="field"><label for="taskType">Type</label>
+          <select id="taskType">
+            <option value="clean_door">clean_door</option>
+            <option value="restock_concession">restock_concession</option>
+            <option value="restroom_check">restroom_check</option>
+            <option value="lobby_sweep">lobby_sweep</option>
+            <option value="_default">other</option>
+          </select>
+        </div>
+        <div class="field"><label for="taskMinutes">Budget (min)</label><input type="number" id="taskMinutes" value="60" min="1"></div>
+        <button class="btn primary" id="assignTaskBtn">Assign task</button>
+      </div>
+      <div id="tasks"><div class="empty">No tasks assigned yet.</div></div>
+    </div>
+    <div class="panel">
+      <h2>Supervisor queue <span class="count" id="queueCount">0 pending</span></h2>
+      <div id="queue"><div class="empty">No pending items.</div></div>
+    </div>
+  </div>
+
+  <footer>
+    FLOORWATCH · Live event stream from the coverage rules engine · No video, no employee identity data processed by this dashboard<br>
+    Part B: Zone Covered → Gap → Nudge → Supervisor Command → Escalated &nbsp;|&nbsp; Part A: Task Assigned → Active-time tracked → Low-effort nudge → Completion vs. active-time flag → Supervisor review
+  </footer>
+</div>
+
+<script>
+(function(){
+  // Static layout metadata (positions on the floor plan). Zone identity,
+  // role, and live state all come from the rules engine over the WebSocket
+  // — this is display-only, matching zones_meta.json on the backend.
+  const ZONES = [
+    {id:'concession', name:'Concession Counter', role:'Snack Service', x:4, y:6, w:30, h:38},
+    {id:'boxoffice', name:'Box Office', role:'Ticketing', x:38, y:6, w:26, h:38},
+    {id:'lobby', name:'Main Lobby', role:'Customer Service', x:68, y:6, w:28, h:38},
+    {id:'restroomA', name:'Restroom — Hall A', role:'Janitorial', x:4, y:48, w:26, h:44},
+    {id:'theatre3', name:'Theatre 3 (post-show)', role:'Janitorial', x:36, y:48, w:26, h:44},
+    {id:'entrance', name:'Front Entrance', role:'Security', x:68, y:48, w:28, h:44},
+  ];
+
+  let counters = {nudges:0, cmds:0, effortFlags:0};
+  let zoneState = {};
+  ZONES.forEach(z=>{ zoneState[z.id] = {state:'covered'}; });
+  let tasks = {};
+  let pendingCommands = {}; // zone_id -> {message, ...}
+  let ws = null;
+  let reconnectTimer = null;
+
+  const floorEl = document.getElementById('floor');
+  const feedEl = document.getElementById('feed');
+  const queueEl = document.getElementById('queue');
+  const tasksEl = document.getElementById('tasks');
+  const clockEl = document.getElementById('clock');
+  const connBadge = document.getElementById('connBadge');
+  const connText = document.getElementById('connText');
+  const wsUrlInput = document.getElementById('wsUrl');
+  const taskZoneSelect = document.getElementById('taskZone');
+  ZONES.forEach(z=>{ const opt=document.createElement('option'); opt.value=z.id; opt.textContent=z.name; taskZoneSelect.appendChild(opt); });
+
+  // ── Auth (see SECURITY_REVIEW.md finding AUTH-1 — every endpoint now
+  // requires a logged-in supervisor/viewer token) ─────────────────────
+  const AUTH_STORAGE_KEY = 'floorwatch_auth';
+  function getStoredAuth(){ try { return JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY)); } catch(e){ return null; } }
+  function setStoredAuth(auth){ localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth)); }
+  function clearStoredAuth(){ localStorage.removeItem(AUTH_STORAGE_KEY); }
+  let currentAuth = getStoredAuth();
+
+  function showLoginOverlay(message){
+    document.getElementById('loginOverlay').style.display = 'flex';
+    document.getElementById('loginError').textContent = message || '';
+    document.getElementById('userBadge').style.display = 'none';
+  }
+  function hideLoginOverlay(){
+    document.getElementById('loginOverlay').style.display = 'none';
+  }
+  function updateUserBadge(){
+    if(!currentAuth) return;
+    document.getElementById('userWho').textContent = `${currentAuth.username} (${currentAuth.role})`;
+    document.getElementById('userBadge').style.display = 'flex';
+  }
+
+  // All fetches to the rules engine go through this — attaches the bearer
+  // token and, on a 401 (expired/revoked token), drops back to the login
+  // screen instead of silently failing or leaking a stack trace to the log.
+  async function authFetch(url, options){
+    options = options || {};
+    const headers = Object.assign({}, options.headers, currentAuth ? {'Authorization': `Bearer ${currentAuth.token}`} : {});
+    const res = await fetch(url, Object.assign({}, options, {headers}));
+    if(res.status === 401){
+      clearStoredAuth();
+      currentAuth = null;
+      if(ws) ws.close();
+      showLoginOverlay('Session expired — please log in again.');
+      throw new Error('401 Unauthorized');
+    }
+    return res;
+  }
+
+  function tickClock(){
+    clockEl.textContent = new Date().toLocaleTimeString('en-US',{hour12:false});
+    renderTasks(); // keep elapsed-time bars live between server updates
+  }
+  setInterval(tickClock, 1000); tickClock();
+
+  function restBase(wsUrl){
+    return wsUrl.replace(/^ws/, 'http').replace(/\/events\/?$/, '');
+  }
+
+  function renderZones(){
+    floorEl.innerHTML = '';
+    ZONES.forEach(z=>{
+      const st = zoneState[z.id] || {state:'covered'};
+      const div = document.createElement('div');
+      div.className = 'zone state-'+st.state;
+      div.style.left = z.x+'%'; div.style.top = z.y+'%'; div.style.width = z.w+'%'; div.style.height = z.h+'%';
+      let label = {covered:'Covered', gap:'Gap detected', nudge:'Nudge sent', command:'Command issued', escalated:'Escalated'}[st.state] || st.state;
+      div.innerHTML = `<div><div class="zn">${z.name}</div><div class="zr">${z.role}</div></div>
+        <div class="zs"><span class="sdot"></span>${label}</div>`;
+      floorEl.appendChild(div);
+    });
+    document.getElementById('statCovered').textContent = ZONES.filter(z=>(zoneState[z.id]||{}).state==='covered').length;
+    document.getElementById('zoneCount').textContent = ZONES.length + ' zones';
+  }
+
+  function logEvent(kind, text){
+    const div = document.createElement('div');
+    div.className = 'ev '+kind;
+    div.innerHTML = `<span class="t">${new Date().toLocaleTimeString('en-US',{hour12:false})}</span><span>${text}</span>`;
+    feedEl.prepend(div);
+    while(feedEl.children.length > 60) feedEl.removeChild(feedEl.lastChild);
+    document.getElementById('feedCount').textContent = feedEl.children.length + ' events';
+  }
+
+  function taskElapsedMin(t){
+    if(t.status !== 'ok' && t.status !== 'low') return t.elapsedMin || 0; // frozen once completed
+    if(!t.assignedAtMs) return t.elapsedMin || 0;
+    return (Date.now() - t.assignedAtMs) / 60000;
+  }
+
+  function renderTasks(){
+    const ids = Object.keys(tasks);
+    if(ids.length===0){ tasksEl.innerHTML = '<div class="empty">No tasks assigned yet.</div>'; document.getElementById('taskCount').textContent='0 active'; return; }
+    tasksEl.innerHTML = '';
+    ids.forEach(id=>{
+      const t = tasks[id];
+      const elapsedMin = taskElapsedMin(t);
+      const pct = Math.min(100, Math.round((t.activeMin/t.assignedMin)*100));
+      const expectedPct = Math.min(100, Math.round((elapsedMin/t.assignedMin)*100));
+      let barClass = 'good';
+      if(pct < expectedPct - 30) barClass = 'bad';
+      else if(pct < expectedPct - 10) barClass = 'warn';
+      let statusText, statusClass;
+      if(t.status==='ok'){ statusText='On track'; statusClass='ok'; }
+      else if(t.status==='low'){ statusText='Low active time — nudged'; statusClass='warn'; }
+      else if(t.status==='flagged'){ statusText='Flagged for supervisor review'; statusClass='bad'; }
+      else if(t.status==='resolved'){ statusText='Reviewed'; statusClass='ok'; }
+      const div = document.createElement('div');
+      div.className = 'taskcard';
+      div.innerHTML = `
+        <div class="hd"><div class="tn">${t.name}</div><div class="tz">${t.zone}</div></div>
+        <div class="barwrap"><div class="bar ${barClass}" style="width:${pct}%"></div></div>
+        <div class="stats"><span>Active: ${t.activeMin.toFixed(1)} / ${t.assignedMin} min</span><span>Elapsed: ${elapsedMin.toFixed(1)} / ${t.assignedMin} min</span></div>
+        <div class="status ${statusClass}">${statusText}</div>
+        ${(t.status==='ok'||t.status==='low') ? `<button class="btn complete-btn" data-task="${id}">Mark complete</button>` : ''}`;
+      tasksEl.appendChild(div);
+    });
+    tasksEl.querySelectorAll('button[data-task]').forEach(btn=>{
+      btn.onclick = ()=>{ completeTask(btn.dataset.task); };
+    });
+    document.getElementById('taskCount').textContent = ids.length + ' active';
+  }
+
+  async function completeTask(taskId){
+    const base = restBase(wsUrlInput.value.trim());
+    try {
+      const res = await authFetch(`${base}/api/tasks/${encodeURIComponent(taskId)}/complete`, {method:'POST'});
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch(err){
+      logEvent('crit', `Failed to complete task ${taskId}: ${err.message}`);
+    }
+  }
+
+  async function postAction(zoneId, action){
+    const base = restBase(wsUrlInput.value.trim());
+    try {
+      const res = await authFetch(`${base}/api/queue/zone/${encodeURIComponent(zoneId)}/${action}`, {method:'POST'});
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch(err){
+      logEvent('crit', `Failed to send ${action} for ${zoneId}: ${err.message}`);
+    }
+  }
+
+  async function postTaskAction(taskId, action){
+    const base = restBase(wsUrlInput.value.trim());
+    try {
+      const res = await authFetch(`${base}/api/queue/task/${encodeURIComponent(taskId)}/${action}`, {method:'POST'});
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch(err){
+      logEvent('crit', `Failed to send ${action} for task ${taskId}: ${err.message}`);
+    }
+  }
+
+  function renderQueue(){
+    const pendingZoneIds = Object.keys(pendingCommands);
+    const pendingTasks = Object.keys(tasks).filter(id=>tasks[id].status==='flagged');
+    if(pendingZoneIds.length===0 && pendingTasks.length===0){
+      queueEl.innerHTML = '<div class="empty">No pending items.</div>';
+    } else {
+      queueEl.innerHTML = '';
+      pendingZoneIds.forEach(zoneId=>{
+        const cmd = pendingCommands[zoneId];
+        const card = document.createElement('div');
+        card.className = 'cmdcard';
+        card.innerHTML = `
+          <div class="hd"><div class="zn">${cmd.zone_name || zoneId}</div><div class="age">coverage gap unresolved</div></div>
+          <div class="msg">Auto-drafted directive ready for your approval:
+            <span class="draft">"${cmd.message || ''}"</span></div>
+          <div class="cmdrow">
+            <button class="btn approve" data-zone="${zoneId}" data-a="approve">Approve &amp; send</button>
+            <button class="btn reassign" data-zone="${zoneId}" data-a="reassign">Reassign coverage</button>
+          </div>`;
+        queueEl.appendChild(card);
+      });
+      pendingTasks.forEach(id=>{
+        const t = tasks[id];
+        const card = document.createElement('div');
+        card.className = 'cmdcard effort';
+        card.innerHTML = `
+          <div class="hd"><div class="zn">${t.name}</div><div class="age">marked complete, low active time</div></div>
+          <div class="msg">Employee marked this task complete. Active time detected: <b>${t.activeMin.toFixed(1)} of ${t.assignedMin} min</b> assigned.
+            <span class="draft">This is a flag, not a conclusion — worth a quick check before assuming anything.</span></div>
+          <div class="cmdrow">
+            <button class="btn approve" data-type="task" data-id="${id}" data-a="confirm">Confirm — follow up with employee</button>
+            <button class="btn dismiss" data-type="task" data-id="${id}" data-a="dismiss">Dismiss — looks fine</button>
+          </div>`;
+        queueEl.appendChild(card);
+      });
+      queueEl.querySelectorAll('button[data-zone]').forEach(btn=>{
+        btn.onclick = ()=>{ postAction(btn.dataset.zone, btn.dataset.a); };
+      });
+      queueEl.querySelectorAll('button[data-type="task"]').forEach(btn=>{
+        btn.onclick = ()=>{ postTaskAction(btn.dataset.id, btn.dataset.a); };
+      });
+    }
+    document.getElementById('queueCount').textContent = (pendingZoneIds.length+pendingTasks.length) + ' pending';
+  }
+
+  function updateStats(){
+    document.getElementById('statNudges').textContent = counters.nudges;
+    document.getElementById('statCmds').textContent = counters.cmds;
+    document.getElementById('statEffortFlags').textContent = counters.effortFlags;
+  }
+
+  function zoneLabel(evt){
+    const z = ZONES.find(z=>z.id===evt.zone_id);
+    return evt.zone_name || (z && z.name) || evt.zone_id;
+  }
+
+  // applyEvent() takes over the role the demo's scripted steps used to
+  // play — reading event_type/action_type off a real rules-engine event
+  // and updating zoneState/tasks accordingly. renderZones/renderQueue/
+  // renderTasks are unchanged from the original prototype.
+  function applyEvent(evt){
+    if(!evt || !evt.zone_id) return;
+    if(!zoneState[evt.zone_id]) zoneState[evt.zone_id] = {state:'covered'};
+
+    switch(evt.event_type){
+      case 'zone_gap':
+        zoneState[evt.zone_id].state = 'gap';
+        logEvent('warn', `Coverage gap detected — ${zoneLabel(evt)} unattended (confidence ${evt.confidence}).`);
+        break;
+      case 'zone_nudge_sent':
+        zoneState[evt.zone_id].state = 'nudge';
+        counters.nudges++;
+        logEvent('warn', `Nudge sent for ${zoneLabel(evt)}${evt.shadow_mode_suppressed ? ' (shadow mode — not actually delivered)' : ''}.`);
+        break;
+      case 'zone_supervisor_command':
+        zoneState[evt.zone_id].state = 'command';
+        pendingCommands[evt.zone_id] = evt;
+        logEvent('crit', `Supervisor directive drafted for ${zoneLabel(evt)} — awaiting approval.`);
+        break;
+      case 'zone_escalated':
+        zoneState[evt.zone_id].state = 'escalated';
+        logEvent('crit', `<b>${zoneLabel(evt)} escalated</b> — logged to shift digest, unresolved after supervisor command timeout.`);
+        break;
+      case 'zone_resolved':
+        zoneState[evt.zone_id].state = 'covered';
+        delete pendingCommands[evt.zone_id];
+        counters.cmds += (evt.resolved_by && evt.resolved_by.startsWith('supervisor:')) ? 1 : 0;
+        logEvent(evt.resolved_by === 'auto' ? 'ok' : 'info',
+          evt.resolved_by === 'auto'
+            ? `${zoneLabel(evt)} self-resolved.`
+            : `${zoneLabel(evt)} resolved by ${evt.resolved_by}.`);
+        break;
+      case 'task_assigned':
+        tasks[evt.task_id] = {
+          name: evt.task_name, zone: zoneLabel(evt),
+          assignedMin: evt.assigned_minutes, activeMin: 0, elapsedMin: 0,
+          assignedAtMs: Date.now(), status: 'ok',
+        };
+        logEvent('eff', `Task assigned: "${evt.task_name}", ${zoneLabel(evt)}, ${evt.assigned_minutes} min budget.`);
+        break;
+      case 'task_active_time_update':
+        if(tasks[evt.task_id]) tasks[evt.task_id].activeMin = evt.active_minutes;
+        break;
+      case 'task_low_effort_nudge':
+        if(tasks[evt.task_id]){ tasks[evt.task_id].status = 'low'; tasks[evt.task_id].activeMin = evt.active_minutes; }
+        counters.nudges++;
+        logEvent('eff', `Low active-time nudge for "${evt.task_name}"${evt.shadow_mode_suppressed ? ' (shadow mode — not actually delivered)' : ''}.`);
+        break;
+      case 'task_flag':
+        if(tasks[evt.task_id]){ tasks[evt.task_id].status = 'flagged'; tasks[evt.task_id].activeMin = evt.active_minutes; tasks[evt.task_id].elapsedMin = tasks[evt.task_id].assignedMin; }
+        counters.effortFlags++;
+        logEvent('eff', `<b>"${evt.task_name}" flagged</b> — ${evt.message || 'active time below expected for this task type.'}`);
+        break;
+      case 'task_resolved':
+        if(tasks[evt.task_id]){ tasks[evt.task_id].status = 'resolved'; tasks[evt.task_id].activeMin = evt.active_minutes; }
+        logEvent('eff', evt.resolved_by === 'auto'
+          ? `"${evt.task_name}" completed — active time met expectations.`
+          : `"${evt.task_name}" reviewed by ${evt.resolved_by}${evt.action_type ? ' ('+evt.action_type+')' : ''}.`);
+        break;
+      default:
+        return;
+    }
+    renderZones(); renderQueue(); renderTasks(); updateStats();
+  }
+
+  async function hydrateFromRest(wsUrl){
+    const base = restBase(wsUrl);
+    try {
+      const [stateRes, queueRes, tasksRes, taskQueueRes] = await Promise.all([
+        authFetch(`${base}/api/state`), authFetch(`${base}/api/queue`),
+        authFetch(`${base}/api/tasks`), authFetch(`${base}/api/queue/tasks`),
+      ]);
+      const state = await stateRes.json();
+      const queue = await queueRes.json();
+      const serverTasks = await tasksRes.json();
+      await taskQueueRes.json(); // consumed for parity with /api/queue; task status already carries flagged state
+
+      Object.keys(state).forEach(zoneId=>{
+        zoneState[zoneId] = { state: state[zoneId].status === 'gap' ? 'gap' : state[zoneId].status };
+      });
+      pendingCommands = {};
+      queue.forEach(item=>{ pendingCommands[item.zone_id] = item; });
+
+      tasks = {};
+      Object.entries(serverTasks).forEach(([taskId, t])=>{
+        const status = t.status === 'flagged' ? 'flagged' : (t.status === 'resolved' ? 'resolved' : 'ok');
+        tasks[taskId] = {
+          name: t.task_name, zone: t.zone_name || t.zone_id,
+          assignedMin: t.assigned_minutes, activeMin: t.active_minutes, elapsedMin: t.elapsed_minutes,
+          assignedAtMs: Date.now() - t.elapsed_minutes * 60000, status,
+        };
+      });
+
+      renderZones(); renderQueue(); renderTasks();
+      logEvent('info', 'Loaded current zone and task state from rules engine.');
+    } catch(err){
+      logEvent('crit', `Could not load initial state: ${err.message}`);
+    }
+  }
+
+  function setConnBadge(mode, text){
+    connBadge.className = 'conn-badge ' + mode;
+    connText.textContent = text;
+  }
+
+  function connect(){
+    if(!currentAuth){ showLoginOverlay(); return; }
+    if(ws){ ws.onclose = null; ws.close(); }
+    if(reconnectTimer){ clearTimeout(reconnectTimer); reconnectTimer = null; }
+
+    const baseUrl = wsUrlInput.value.trim();
+    const url = baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(currentAuth.token);
+    setConnBadge('connecting', 'Connecting…');
+    ws = new WebSocket(url);
+
+    ws.onopen = () => {
+      setConnBadge('live', 'Live');
+      hydrateFromRest(url);
+    };
+    ws.onmessage = (msg) => {
+      try { applyEvent(JSON.parse(msg.data)); }
+      catch(err){ logEvent('crit', `Bad event from server: ${err.message}`); }
+    };
+    ws.onclose = () => {
+      setConnBadge('down', 'Disconnected — retrying in 5s');
+      reconnectTimer = setTimeout(connect, 5000);
+    };
+    ws.onerror = () => { ws.close(); };
+  }
+
+  document.getElementById('connectBtn').onclick = connect;
+  document.getElementById('resetLogBtn').onclick = () => {
+    feedEl.innerHTML = '';
+    document.getElementById('feedCount').textContent = '0 events';
+  };
+
+  document.getElementById('assignTaskBtn').onclick = async () => {
+    const taskName = document.getElementById('taskName').value.trim();
+    const zoneId = document.getElementById('taskZone').value;
+    const taskType = document.getElementById('taskType').value;
+    const assignedMinutes = Number(document.getElementById('taskMinutes').value);
+    if(!taskName || !assignedMinutes || assignedMinutes <= 0){
+      logEvent('crit', 'Task name and a positive minute budget are required.');
+      return;
+    }
+    const base = restBase(wsUrlInput.value.trim());
+    try {
+      const res = await authFetch(`${base}/api/tasks`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({task_name: taskName, zone_id: zoneId, assigned_minutes: assignedMinutes, task_type: taskType}),
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      document.getElementById('taskName').value = '';
+    } catch(err){
+      logEvent('crit', `Failed to assign task: ${err.message}`);
+    }
+  };
+
+  document.getElementById('loginForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const backend = document.getElementById('loginBackend').value.trim().replace(/\/$/, '');
+    const username = document.getElementById('loginUsername').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    document.getElementById('loginError').textContent = '';
+    try {
+      const res = await fetch(`${backend}/api/login`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username, password}),
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      currentAuth = {token: data.token, username: data.username, role: data.role, backendBase: backend};
+      setStoredAuth(currentAuth);
+      wsUrlInput.value = backend.replace(/^http/, 'ws') + '/events';
+      document.getElementById('loginPassword').value = '';
+      hideLoginOverlay();
+      updateUserBadge();
+      connect();
+    } catch(err){
+      document.getElementById('loginError').textContent = err.message;
+    }
+  };
+
+  document.getElementById('logoutBtn').onclick = () => {
+    clearStoredAuth();
+    currentAuth = null;
+    if(ws) ws.close();
+    showLoginOverlay();
+  };
+
+  renderZones(); renderTasks(); renderQueue();
+  if(currentAuth){
+    wsUrlInput.value = currentAuth.backendBase.replace(/^http/, 'ws') + '/events';
+    document.getElementById('loginBackend').value = currentAuth.backendBase;
+    updateUserBadge();
+    connect();
+  } else {
+    showLoginOverlay();
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Floorwatch — Supervisor Assistant</title>
+<style>
+  :root{
+    --bg:#F4F7FC; --panel:#FFFFFF; --panel-2:#F0F4FA; --line:#DCE6F2; --text:#101B2D;
+    --dim:#5B6B82; --dimmer:#8B98AC; --ok:#12875A; --ok-glow:rgba(18,135,90,0.10);
+    --amber:#B4790E; --purple:#7452C8;
+    --accent:#2F6FED; --mono:'IBM Plex Mono','SF Mono',Consolas,monospace; --sans:'Inter',-apple-system,'Segoe UI',sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--sans);}
+  body{padding:24px;min-height:100vh;}
+  .wrap{max-width:900px;margin:0 auto;}
+
+  .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+  .brand{display:flex;align-items:center;gap:12px;}
+  .brand-mark{width:34px;height:34px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#1D57D6);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-weight:700;font-size:14px;color:#fff;flex-shrink:0;}
+  .brand h1{font-size:17px;margin:0;font-weight:600;}
+  .brand .sub{font-family:var(--mono);font-size:11px;color:var(--dim);letter-spacing:0.5px;text-transform:uppercase;margin-top:2px;}
+
+  .readonly-badge{font-family:var(--mono);font-size:11px;color:var(--ok);background:var(--ok-glow);border:1px solid rgba(18,135,90,0.4);padding:5px 10px;border-radius:20px;}
+
+  .connbar{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 16px;margin:16px 0;display:flex;align-items:center;gap:10px;}
+  .connbar input{flex:1;font-family:var(--mono);font-size:12.5px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:7px 9px;}
+  .btn{font-family:var(--sans);font-size:12.5px;font-weight:600;padding:9px 16px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer;}
+  .btn:hover{border-color:var(--accent);background:#EAF1FE;}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .btn:disabled{opacity:0.4;cursor:not-allowed;}
+
+  .chat-panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;height:480px;display:flex;flex-direction:column;}
+  .messages{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:14px;padding-right:4px;}
+  .msg{max-width:85%;padding:10px 14px;border-radius:10px;font-size:13.5px;line-height:1.55;}
+  .msg.user{align-self:flex-end;background:var(--accent);color:#fff;}
+  .msg.assistant{align-self:flex-start;background:var(--panel-2);border:1px solid var(--line);}
+  .msg.system{align-self:center;font-family:var(--mono);font-size:11px;color:var(--dim);background:none;}
+  .msg .tools{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);}
+  .msg .tools .tool-tag{display:inline-block;background:rgba(47,111,237,0.12);border:1px solid rgba(47,111,237,0.35);color:var(--accent);border-radius:12px;padding:2px 8px;margin:2px 4px 2px 0;}
+  .citation{font-family:var(--mono);font-size:11px;color:var(--purple);}
+
+  .input-row{display:flex;gap:8px;margin-top:14px;}
+  .input-row input{flex:1;font-family:var(--sans);font-size:13.5px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:10px 14px;}
+
+  .notes-panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:18px;}
+  .notes-panel h2{font-size:12px;text-transform:uppercase;letter-spacing:0.8px;color:var(--dim);margin:0 0 12px;}
+  .note-form{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;}
+  .note-form .field{display:flex;flex-direction:column;gap:4px;}
+  .note-form label{font-family:var(--mono);font-size:9.5px;color:var(--dim);text-transform:uppercase;}
+  .note-form input,.note-form textarea{font-family:var(--sans);font-size:12.5px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:7px 9px;}
+  .note-form textarea{min-width:280px;min-height:38px;resize:vertical;}
+
+  .tools-panel{margin-top:18px;font-family:var(--mono);font-size:11px;color:var(--dim);}
+  .tools-panel .tool{display:inline-block;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 10px;margin:4px 6px 0 0;}
+  .tools-panel .tool .ro{color:var(--ok);}
+
+  .login-overlay{position:fixed;inset:0;background:rgba(16,27,45,0.35);display:flex;align-items:center;justify-content:center;z-index:100;}
+  .login-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:28px 30px;width:340px;box-shadow:0 12px 32px rgba(16,27,45,0.18);}
+  .login-card h2{font-size:14px;margin:12px 0 16px;color:var(--dim);font-weight:600;}
+  .login-card .field{margin-bottom:12px;}
+  .login-card label{display:block;font-family:var(--mono);font-size:9.5px;color:var(--dim);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px;}
+  .login-card input{width:100%;box-sizing:border-box;font-family:var(--sans);font-size:13px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:9px 10px;}
+  .login-card button{width:100%;margin-top:6px;}
+  .login-error{color:#D0374A;font-size:12px;margin-top:10px;min-height:16px;}
+  .user-badge{font-family:var(--mono);font-size:11px;color:var(--dim);display:flex;align-items:center;gap:8px;}
+  .user-badge .who{color:var(--text);font-weight:600;}
+
+  footer{margin-top:20px;font-family:var(--mono);font-size:10.5px;color:var(--dimmer);text-align:center;line-height:1.6;}
+</style>
+</head>
+<body>
+
+<div class="login-overlay" id="loginOverlay" style="display:none;">
+  <div class="login-card">
+    <div class="brand"><div class="brand-mark">FW</div><strong style="margin-left:8px;font-size:15px;">Floorwatch</strong></div>
+    <h2>Supervisor sign-in</h2>
+    <form id="loginForm">
+      <div class="field"><label for="loginBackend">Rules engine URL (issues login)</label><input id="loginBackend" value="http://localhost:8080" spellcheck="false"></div>
+      <div class="field"><label for="loginUsername">Username</label><input id="loginUsername" autocomplete="username" required></div>
+      <div class="field"><label for="loginPassword">Password</label><input id="loginPassword" type="password" autocomplete="current-password" required></div>
+      <button type="submit" class="btn primary">Sign in</button>
+      <div class="login-error" id="loginError"></div>
+    </form>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">FW</div>
+      <div><h1>Supervisor Assistant</h1><div class="sub">Historical + live status Q&amp;A</div></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="readonly-badge">🔒 Read-only — cannot change zone, task, or notification state</div>
+      <div class="user-badge" id="userBadge" style="display:none;">
+        <span class="who" id="userWho"></span>
+        <button class="btn" id="logoutBtn" style="padding:4px 10px;font-size:11px;">Log out</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="connbar">
+    <label for="baseUrl" style="font-family:var(--mono);font-size:10px;color:var(--dim);">SERVICE URL</label>
+    <input id="baseUrl" value="http://localhost:8090">
+    <button class="btn" id="reloadToolsBtn">Refresh tools</button>
+  </div>
+
+  <div class="chat-panel">
+    <div class="messages" id="messages">
+      <div class="msg system">Ask about historical patterns, live zone/task status, or both. Every answer cites its source.</div>
+    </div>
+    <div class="input-row">
+      <input id="questionInput" placeholder="e.g. Has the concession counter had recurring coverage gaps, and is it covered right now?" autocomplete="off">
+      <button class="btn primary" id="askBtn">Ask</button>
+    </div>
+  </div>
+
+  <div class="tools-panel" id="toolsPanel">Loading available tools…</div>
+
+  <div class="notes-panel">
+    <h2>Add a supervisor note <span style="font-weight:400;color:var(--dimmer);">(indexed for future search — does not affect live coverage/effort tracking)</span></h2>
+    <div class="note-form">
+      <div class="field"><label for="noteZone">Zone (optional)</label><input id="noteZone" placeholder="e.g. concession"></div>
+      <div class="field" style="flex:1;"><label for="noteText">Note</label><textarea id="noteText" placeholder="What happened, for future reference..."></textarea></div>
+      <button class="btn primary" id="addNoteBtn">Add note</button>
+    </div>
+  </div>
+
+  <footer>
+    FLOORWATCH SUPERVISOR ASSISTANT · Read-only over historical + live data · No button anywhere on this page can send a nudge, approve a directive, resolve a zone, or complete a task
+  </footer>
+</div>
+
+<script>
+(function(){
+  const messagesEl = document.getElementById('messages');
+  const baseUrlInput = document.getElementById('baseUrl');
+  const questionInput = document.getElementById('questionInput');
+  const askBtn = document.getElementById('askBtn');
+  const toolsPanel = document.getElementById('toolsPanel');
+
+  function base(){ return baseUrlInput.value.trim().replace(/\/$/, ''); }
+
+  // ── Auth (see SECURITY_REVIEW.md finding AUTH-1) — tokens are issued by
+  // floorwatch-rules-engine's /api/login but valid here too (shared secret,
+  // same as the coverage dashboard) ───────────────────────────────────
+  const AUTH_STORAGE_KEY = 'floorwatch_auth';
+  function getStoredAuth(){ try { return JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY)); } catch(e){ return null; } }
+  function setStoredAuth(auth){ localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth)); }
+  function clearStoredAuth(){ localStorage.removeItem(AUTH_STORAGE_KEY); }
+  let currentAuth = getStoredAuth();
+
+  function showLoginOverlay(message){
+    document.getElementById('loginOverlay').style.display = 'flex';
+    document.getElementById('loginError').textContent = message || '';
+    document.getElementById('userBadge').style.display = 'none';
+  }
+  function hideLoginOverlay(){ document.getElementById('loginOverlay').style.display = 'none'; }
+  function updateUserBadge(){
+    if(!currentAuth) return;
+    document.getElementById('userWho').textContent = `${currentAuth.username} (${currentAuth.role})`;
+    document.getElementById('userBadge').style.display = 'flex';
+  }
+
+  async function authFetch(url, options){
+    options = options || {};
+    const headers = Object.assign({}, options.headers, currentAuth ? {'Authorization': `Bearer ${currentAuth.token}`} : {});
+    const res = await fetch(url, Object.assign({}, options, {headers}));
+    if(res.status === 401){
+      clearStoredAuth();
+      currentAuth = null;
+      showLoginOverlay('Session expired — please log in again.');
+      throw new Error('401 Unauthorized');
+    }
+    return res;
+  }
+
+  function addMessage(role, html){
+    const div = document.createElement('div');
+    div.className = 'msg ' + role;
+    div.innerHTML = html;
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function escapeHtml(s){
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  async function loadTools(){
+    try{
+      const res = await authFetch(`${base()}/api/tools`);
+      const tools = await res.json();
+      toolsPanel.innerHTML = 'Available tools (all read-only): ' +
+        tools.map(t => `<span class="tool">${t.name} <span class="ro">${t.read_only ? '🔒 read-only' : ''}</span></span>`).join('');
+    } catch(err){
+      toolsPanel.textContent = `Could not load tools: ${err.message}`;
+    }
+  }
+
+  async function ask(){
+    const question = questionInput.value.trim();
+    if(!question) return;
+    addMessage('user', escapeHtml(question));
+    questionInput.value = '';
+    askBtn.disabled = true;
+    addMessage('system', 'Thinking…');
+    const thinkingEl = messagesEl.lastChild;
+
+    try {
+      const res = await authFetch(`${base()}/api/chat`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({question}),
+      });
+      const data = await res.json();
+      messagesEl.removeChild(thinkingEl);
+      if(!res.ok){
+        addMessage('system', `Error: ${data.error || res.status}`);
+      } else {
+        const toolsHtml = (data.tool_calls && data.tool_calls.length)
+          ? `<div class="tools">Tools used: ${data.tool_calls.map(t=>`<span class="tool-tag">${t.name}</span>`).join('')}</div>`
+          : '';
+        addMessage('assistant', escapeHtml(data.answer).replace(/\n/g,'<br>') + toolsHtml);
+      }
+    } catch(err){
+      messagesEl.removeChild(thinkingEl);
+      addMessage('system', `Request failed: ${err.message}`);
+    } finally {
+      askBtn.disabled = false;
+    }
+  }
+
+  askBtn.onclick = ask;
+  questionInput.addEventListener('keydown', (e) => { if(e.key === 'Enter') ask(); });
+  document.getElementById('reloadToolsBtn').onclick = loadTools;
+
+  document.getElementById('addNoteBtn').onclick = async () => {
+    const text = document.getElementById('noteText').value.trim();
+    const zone_id = document.getElementById('noteZone').value.trim() || null;
+    if(!text) return;
+    try {
+      const res = await authFetch(`${base()}/api/incident-notes`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({text, zone_id}),
+      });
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+      document.getElementById('noteText').value = '';
+      addMessage('system', 'Note added and indexed for future search.');
+    } catch(err){
+      addMessage('system', `Failed to add note: ${err.message}`);
+    }
+  };
+
+  document.getElementById('loginForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const backend = document.getElementById('loginBackend').value.trim().replace(/\/$/, '');
+    const username = document.getElementById('loginUsername').value.trim();
+    const password = document.getElementById('loginPassword').value;
+    document.getElementById('loginError').textContent = '';
+    try {
+      const res = await fetch(`${backend}/api/login`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username, password}),
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      currentAuth = {token: data.token, username: data.username, role: data.role, backendBase: backend};
+      setStoredAuth(currentAuth);
+      document.getElementById('loginPassword').value = '';
+      hideLoginOverlay();
+      updateUserBadge();
+      loadTools();
+    } catch(err){
+      document.getElementById('loginError').textContent = err.message;
+    }
+  };
+
+  document.getElementById('logoutBtn').onclick = () => {
+    clearStoredAuth();
+    currentAuth = null;
+    showLoginOverlay();
+  };
+
+  if(currentAuth){
+    document.getElementById('loginBackend').value = currentAuth.backendBase;
+    updateUserBadge();
+    loadTools();
+  } else {
+    showLoginOverlay();
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+# Floorwatch Ingest Skill — Configuration Schema
+# Parsed by Aegis skill-registry-service.cjs → parseConfigYaml()
+
+params:
+  - key: auto_start
+    label: Auto Start
+    type: boolean
+    default: false
+    description: "Start this skill automatically when Aegis launches"
+
+  - key: cameras_config_path
+    label: Cameras Manifest Path
+    type: string
+    default: "cameras.json"
+    description: "Path to the multi-camera source manifest — one entry per camera, each with its own source type"

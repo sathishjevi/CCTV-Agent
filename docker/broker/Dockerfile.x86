@@ -1,0 +1,3 @@
+FROM emqx/emqx:latest
+
+ADD brokerConfig.js /data/brokerConfig.js

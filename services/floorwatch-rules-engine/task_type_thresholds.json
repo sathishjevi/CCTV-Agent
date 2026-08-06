@@ -1,0 +1,8 @@
+{
+  "_comment": "Per-brief Phase 3 task 6: 'Calibrate what normal active-time ratios look like per task type ... avoid a single hardcoded percentage across very different task types.' expected_active_ratio = active_minutes/assigned_minutes below which a completed task gets flagged. These are PLACEHOLDER pilot defaults, not calibrated from real shadow-mode data yet — see PHASE_3_NOTES.md. Unlisted task types fall back to \"_default\".",
+  "_default": { "expected_active_ratio": 0.5 },
+  "clean_door": { "expected_active_ratio": 0.5 },
+  "restock_concession": { "expected_active_ratio": 0.6 },
+  "restroom_check": { "expected_active_ratio": 0.4 },
+  "lobby_sweep": { "expected_active_ratio": 0.55 }
+}

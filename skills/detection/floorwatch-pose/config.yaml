@@ -1,0 +1,45 @@
+# Floorwatch Pose Skill — Configuration Schema
+# Parsed by Aegis skill-registry-service.cjs → parseConfigYaml()
+
+params:
+  - key: auto_start
+    label: Auto Start
+    type: boolean
+    default: false
+    description: "Start this skill automatically when Aegis launches"
+
+  - key: model_path
+    label: Pose Model Path
+    type: string
+    default: "models/pose_landmarker_lite.task"
+    description: "Path to the MediaPipe PoseLandmarker .task bundle. Falls back to a frame-differencing motion proxy if missing."
+
+  - key: active_threshold
+    label: Active Motion Threshold
+    type: number
+    default: 0.15
+    description: "Normalized motion score above which a frame counts as active rather than idle"
+
+  - key: fps
+    label: Frame Rate
+    type: select
+    default: 1
+    description: "Pose/motion sampling rate"
+    options:
+      - { value: 0.2, label: "Ultra Low (0.2 FPS)" }
+      - { value: 0.5, label: "Low (0.5 FPS)" }
+      - { value: 1, label: "Normal (1 FPS)" }
+      - { value: 3, label: "Active (3 FPS)" }
+      - { value: 5, label: "High (5 FPS)" }
+
+  - key: redis_url
+    label: Redis URL
+    type: string
+    default: ""
+    description: "If set, motion events are published onto a Redis Stream in addition to stdout"
+
+  - key: redis_stream
+    label: Redis Stream Name
+    type: string
+    default: "floorwatch:motion"
+    description: "Redis Stream key motion events are XADD'd onto"

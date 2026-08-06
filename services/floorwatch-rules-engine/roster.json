@@ -1,0 +1,9 @@
+{
+  "_comment": "Pilot roster — manually maintained per Global Constraint 5. zone_id -> is this zone staffed this shift. A zone_gap for any zone not listed here (or listed false) is logged only and never escalates to a nudge/command.",
+  "concession": true,
+  "boxoffice": true,
+  "lobby": true,
+  "restroomA": true,
+  "theatre3": true,
+  "entrance": true
+}

@@ -1,0 +1,10 @@
+# Core — always needed regardless of which source type(s) a deployment uses.
+opencv-python>=4.8
+numpy>=1.24
+httpx>=0.27
+
+# Optional — only needed for the cloud storage provider(s) actually
+# configured in cameras.json. Install just what you need:
+#   pip install boto3                    # S3
+#   pip install azure-storage-blob       # Azure Blob Storage
+#   pip install google-cloud-storage     # Google Cloud Storage
