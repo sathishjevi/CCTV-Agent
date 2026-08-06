@@ -161,7 +161,9 @@
       "Bash(python -c \"import json; json.load\\(open\\('skills/detection/floorwatch-ingest/cameras.json.template', encoding='utf-8'\\)\\); print\\('OK'\\)\")",
       "Bash(python -m pytest tools/test_check_no_secrets.py -q)",
       "Bash(python -c \"import json; json.load\\(open\\('skills.json',encoding='utf-8'\\)\\); json.load\\(open\\('skills/detection/floorwatch-ingest/cameras.json.template',encoding='utf-8'\\)\\); print\\('json OK'\\)\")",
-      "Bash(python -m pytest skills/detection/floorwatch-ingest/tests/ tools/test_check_no_secrets.py -q)"
+      "Bash(python -m pytest skills/detection/floorwatch-ingest/tests/ tools/test_check_no_secrets.py -q)",
+      "Bash(git status *)",
+      "Bash(git check-ignore *)"
     ]
   }
 }
