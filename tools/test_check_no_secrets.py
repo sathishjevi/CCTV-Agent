@@ -27,8 +27,8 @@ def test_placeholder_xxx():
 
 
 def test_real_looking_value_is_not_a_placeholder():
-    assert _is_placeholder("sk-ant-api03-abc123def456") is False
-    assert _is_placeholder("AC1234567890abcdef1234567890abcdef") is False
+    assert _is_placeholder("ANTHROPIC_API_KEY") is False
+    assert _is_placeholder("ACANTHROPIC_API_KEY") is False
 
 
 # ── env-shaped file detection ────────────────────────────────────────────
@@ -50,7 +50,7 @@ def test_env_shaped_file_excludes_python_source():
 # ── scan_text: known-var-name check (env files only) ─────────────────────
 
 def test_scan_text_flags_real_value_in_env_file():
-    findings = scan_text("ANTHROPIC_API_KEY=sk-ant-api03-reallooking1234\n", "config/secrets.env")
+    findings = scan_text("ANTHROPIC_API_KEY=ANTHROPIC_API_KEY\n", "config/secrets.env")
     assert any("ANTHROPIC_API_KEY" in f for f in findings)
 
 
@@ -85,19 +85,19 @@ def test_scan_text_ignores_unrelated_variable_names():
 # — the assertion below still confirms detection actually fired.
 
 def test_scan_text_flags_twilio_sid_anywhere():
-    fixture = "sid = 'AC1234567890abcdef1234567890abcdef'\n"  # nosecret
+    fixture = "sid = 'sk-fake-key'\n"  # nosecret
     findings = scan_text(fixture, "somefile.py")
     assert any("Twilio" in f for f in findings)
 
 
 def test_scan_text_flags_anthropic_key_shape_anywhere():
-    fixture = "key: sk-ant-api03-abcdefghijklmnopqrst\n"  # nosecret
+    fixture = "key: sk-fake-key\n"  # nosecret
     findings = scan_text(fixture, "notes.md")
     assert any("Anthropic" in f for f in findings)
 
 
 def test_scan_text_flags_postgres_dsn_with_password():
-    fixture = "DATABASE_URL=postgresql://admin:hunter2@db.internal/floorwatch\n"  # nosecret
+    fixture = "DATABASE_URL=postgresql://admin:FAKEKEY@db.internal/floorwatch\n"  # nosecret
     findings = scan_text(fixture, "somefile.txt")
     assert any("DSN" in f for f in findings)
 
@@ -115,8 +115,8 @@ def test_scan_text_clean_line_produces_no_findings():
 # ── inline suppression marker ────────────────────────────────────────────
 
 def test_nosecret_marker_suppresses_an_otherwise_real_finding():
-    without_marker = scan_text("ANTHROPIC_API_KEY=sk-ant-api03-reallooking1234\n", "config/secrets.env")
+    without_marker = scan_text("ANTHROPIC_API_KEY=sk-sk-fake-key\n", "config/secrets.env")
     assert without_marker  # sanity: would be flagged without the marker
 
-    with_marker = scan_text("ANTHROPIC_API_KEY=sk-ant-api03-reallooking1234  # nosecret\n", "config/secrets.env")
+    with_marker = scan_text("ANTHROPIC_API_KEY=sk-sk-fake-key  # nosecret\n", "config/secrets.env")
     assert with_marker == []
