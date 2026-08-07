@@ -69,6 +69,9 @@ Each skill is a self-contained module with its own model, parameters, and [commu
 | **Training** | [`model-training`](skills/training/model-training/) | Agent-driven YOLO fine-tuning — annotate, train, export, deploy | 📐 |
 | **Automation** | [`mqtt`](skills/automation/mqtt/) · [`webhook`](skills/automation/webhook/) · [`ha-trigger`](skills/automation/ha-trigger/) | Event-driven automation triggers | 📐 |
 | **Integrations** | [`homeassistant-bridge`](skills/integrations/homeassistant-bridge/) | HA cameras in ↔ detection results out | 📐 |
+| **Floorwatch** | [`floorwatch-ingest`](skills/detection/floorwatch-ingest/) | Multi-source CCTV ingestion — RTSP/NVR, local folder, cloud storage (S3/Azure/GCS), or a third-party provider's API, per camera | 🧪 |
+| | [`floorwatch-coverage`](skills/detection/floorwatch-coverage/) | Maps person detections into calibrated work-zone polygons, emits zone presence/gap events | 🧪 |
+| | [`floorwatch-pose`](skills/detection/floorwatch-pose/) | Per-frame motion/activity signal distinguishing active work from standing-still | 🧪 |
 
 > ✅ Ready · 🧪 Testing · 📐 Planned
 
@@ -185,6 +188,68 @@ Camera → Frame Governor → detect.py (JSONL) → Aegis IPC → Live Overlay
 - ⚡ **Auto start** — set `auto_start: true` to begin detecting when Aegis launches
 
 📖 [Full Skill Documentation →](skills/detection/yolo-detection-2026/SKILL.md)
+
+## 🎬 Floorwatch — Employee Coverage & Effort Monitoring
+
+**Floorwatch** is a cineplex/retail employee-coverage monitoring system built on top of this platform's detection pipeline: it turns raw person detections into zone-coverage tracking, effort/motion signals, tiered supervisor escalation, and a natural-language shift assistant — entirely from CCTV, with no new video storage (only structured events are persisted; see [`SECURITY_REVIEW.md`](SECURITY_REVIEW.md)).
+
+```mermaid
+graph LR
+    SRC["CCTV source\n(RTSP · folder · S3/Azure/GCS · 3rd-party API)"] -->|"floorwatch-ingest"| DET["yolo-detection-2026"]
+    DET -->|"detections"| COV["floorwatch-coverage\n(zone presence)"]
+    DET -->|"frames"| POSE["floorwatch-pose\n(motion signal)"]
+    COV --> BUS[("Redis Streams")]
+    POSE --> BUS
+    BUS --> RULES["floorwatch-rules-engine\n(3-tier escalation + effort tracking)"]
+    RULES --> DASH["Supervisor dashboard\n(live coverage + task cards)"]
+    RULES --> INTEL["floorwatch-intelligence\n(RAG chat over shift history)"]
+```
+
+- **Coverage tracking (Part B)** — calibrated work-zone polygons, `zone_covered`/`zone_gap` events, 3-tier nudge → command → escalate flow with configurable timers and throttling
+- **Effort tracking (Part A)** — per-task motion/activity signal distinguishing active work from standing-still, task assignment/completion/flagging
+- **Supervisor chat (Phase 5)** — grounded, cited natural-language Q&A over shift digests and incident notes via a read-only MCP server + Claude, with adversarial guardrail testing
+- **Per-supervisor authentication** — JWT sessions, PBKDF2 password hashing, role-based access, both dashboards behind login
+- **Security-hardened by default** — CORS restricted to real origins, rate limiting, PII redaction in logs, secret-value redaction, `/docs` locked down, 90-day retention with archive-before-delete, pre-commit secret scanner (`tools/check_no_secrets.py`)
+- **Any CCTV storage shape** — `floorwatch-ingest` is a pluggable `FrameSource` per camera, so a deployment can mix RTSP cameras, a local recordings folder, cloud storage, and a third-party provider's API in the same `cameras.json`, with zero changes to detection/coverage/pose
+
+### Quick start
+
+```powershell
+# 1. Configure — see SETUP_AUTH_AND_CONFIG.md
+Copy-Item config\deployment.env.template config\deployment.env
+Copy-Item config\secrets.env.template config\secrets.env
+
+# 2. Point at this client's CCTV footage — see CCTV_INTEGRATION_SETUP.md
+Copy-Item skills\detection\floorwatch-ingest\cameras.json.template skills\detection\floorwatch-ingest\cameras.json
+# edit cameras.json for this deployment's RTSP/folder/cloud/API sources
+
+# 3. Run the full pipeline (ingestion → detection → coverage/pose → Redis)
+python tools\run_pipeline.py --cameras "skills\detection\floorwatch-ingest\cameras.json"
+
+# 4. Run the services + open the dashboards
+uvicorn main:app --app-dir services\floorwatch-rules-engine --host 127.0.0.1 --port 8080
+uvicorn main:app --app-dir services\floorwatch-intelligence --host 127.0.0.1 --port 8090
+```
+
+Floorwatch ships in **shadow mode** by default (tracks and logs, never notifies) — see `go_live_checklist.py` in `services/floorwatch-rules-engine/` before disabling it.
+
+### Docs
+
+| Doc | Covers |
+|---|---|
+| [`REQUIREMENTS_STATUS.md`](REQUIREMENTS_STATUS.md) | What's built, what's planned, what's missing, before any new phase |
+| [`SECURITY_REVIEW.md`](SECURITY_REVIEW.md) | Auth/access-control and data-leak review, findings and fixes |
+| [`SETUP_AUTH_AND_CONFIG.md`](SETUP_AUTH_AND_CONFIG.md) | Auth secret, deployment/secrets config, per-supervisor accounts |
+| [`CCTV_INTEGRATION_SETUP.md`](CCTV_INTEGRATION_SETUP.md) | Wiring up a client's actual CCTV storage (RTSP/folder/cloud/API), connection testing |
+| [`PHASE_1_NOTES.md`](PHASE_1_NOTES.md) → [`PHASE_5_NOTES.md`](PHASE_5_NOTES.md) | Build log per phase — coverage, escalation, effort tracking, go-live, intelligence/chat |
+
+### Future scope (planned, not built)
+
+From a competitive analysis against [usemarty.com](https://usemarty.com/) — directionally scoped, not fully speced, and gated on real decisions (which POS system, whether to build dollar-figure loss claims at all) before any of it starts. See [`REQUIREMENTS_STATUS.md`](REQUIREMENTS_STATUS.md#5-future-phases--planned-not-started) for full detail.
+
+- **Phase 6 — POS Integration & Cash-Leak Detection** — POS adapter, `pos_event`/`cash_leak_flag` schema types, a correlation engine matching POS transactions to camera/motion events
+- **Phase 7 — Closed-Loop SMS-First GM Workflow** — per-flag verification state machine (alert → SMS → timer → re-check → confirm/escalate)
+- **Phase 8 — Scheduled Recap + Multi-Location Rollup** — auto-sent daily recap, a portfolio-level service aggregating across multiple site deployments, a `$ recovered`/`$ at risk` estimate model
 
 ## 🔒 Privacy — Depth Map Anonymization
 
