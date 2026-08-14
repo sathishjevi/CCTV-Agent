@@ -37,9 +37,30 @@ INCIDENT_NOTES_PATH = Path(os.environ.get(
 # ── Rules engine — the only place live status is read from (read-only HTTP) ──
 RULES_ENGINE_BASE_URL = os.environ.get("FLOORWATCH_RULES_ENGINE_URL", "http://localhost:8080")
 
-# ── LLM (Claude) ──
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-ANTHROPIC_MODEL = os.environ.get("FLOORWATCH_ANTHROPIC_MODEL", "claude-sonnet-4-5")
+# ── LLM (provider-agnostic — see llm.py's module docstring) ──
+# LLM_PROVIDER picks which vendor's wire format to speak:
+#   "anthropic" (default) — Claude, via ANTHROPIC_API_KEY (unchanged, for
+#       backward compatibility with any deployment already using this)
+#   "openai"    — anything that speaks the OpenAI chat-completions +
+#       function-calling wire format: ChatGPT itself, or an
+#       OpenAI-compatible endpoint via LLM_BASE_URL — this covers Kimi/
+#       Moonshot, DeepSeek, Groq/Together/Fireworks/Ollama-hosted Llama,
+#       Mistral's OpenAI-compat mode, and most other model hosts
+#   "gemini"    — Google Gemini, via its own function-calling API shape
+LLM_PROVIDER = os.environ.get("FLOORWATCH_LLM_PROVIDER", "anthropic").strip().lower()
+LLM_API_KEY = os.environ.get("FLOORWATCH_LLM_API_KEY", "")
+LLM_MODEL = os.environ.get("FLOORWATCH_LLM_MODEL", "")
+# Only meaningful for provider="openai" — point at a non-OpenAI endpoint
+# that speaks the same wire format (e.g. https://api.moonshot.ai/v1 for
+# Kimi, or a self-hosted Ollama/vLLM server). Leave unset for real ChatGPT.
+LLM_BASE_URL = os.environ.get("FLOORWATCH_LLM_BASE_URL", "")
+
+# Legacy names — still read directly when LLM_PROVIDER="anthropic" so an
+# existing deployment's ANTHROPIC_API_KEY/FLOORWATCH_ANTHROPIC_MODEL keep
+# working unchanged; new deployments on any provider can use the generic
+# LLM_API_KEY/LLM_MODEL above instead.
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "") or LLM_API_KEY
+ANTHROPIC_MODEL = os.environ.get("FLOORWATCH_ANTHROPIC_MODEL", "") or LLM_MODEL or "claude-sonnet-4-5"
 MAX_TOOL_ITERATIONS = int(os.environ.get("FLOORWATCH_MAX_TOOL_ITERATIONS", 5))
 
 RETRIEVAL_TOP_K = int(os.environ.get("FLOORWATCH_RETRIEVAL_TOP_K", 5))
@@ -91,4 +112,4 @@ from floorwatch_secrets_guard import check_file_permissions, install_stderr_reda
 
 check_file_permissions(REPO_ROOT / "config" / "secrets.env")
 check_file_permissions(Path(os.environ.get("FLOORWATCH_AUTH_SECRET_PATH", REPO_ROOT / "services" / ".floorwatch_auth_secret")))
-install_stderr_redaction([VOYAGE_API_KEY, ANTHROPIC_API_KEY, POSTGRES_DSN, AUTH_SECRET])
+install_stderr_redaction([VOYAGE_API_KEY, ANTHROPIC_API_KEY, LLM_API_KEY, POSTGRES_DSN, AUTH_SECRET])

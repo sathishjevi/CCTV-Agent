@@ -12,7 +12,7 @@ that, verified at the API layer.
 shift_digest.jsonl ─┐
 incident_notes.jsonl ┴─> ingest.py ─> embeddings.py ─> vector_store.py
                                                               │
-supervisor question ─> llm.py (Claude) <──tool calls──> mcp_server.py ──> tools.py ──GET──> floorwatch-rules-engine
+supervisor question ─> llm.py (any provider) <──tool calls──> mcp_server.py ──> tools.py ──GET──> floorwatch-rules-engine
                           │                                    │
                      grounded, cited                  historical_semantic_search
                        answer                          (reads vector_store directly)
@@ -22,7 +22,8 @@ supervisor question ─> llm.py (Claude) <──tool calls──> mcp_server.py 
 
 ```bash
 pip install -r requirements.txt
-export ANTHROPIC_API_KEY=sk-...          # required for /api/chat to work at all
+export ANTHROPIC_API_KEY=sk-...          # required for /api/chat (default provider = anthropic)
+# or: export FLOORWATCH_LLM_PROVIDER=openai; export FLOORWATCH_LLM_API_KEY=...; export FLOORWATCH_LLM_MODEL=gpt-4o
 export FLOORWATCH_RULES_ENGINE_URL=http://localhost:8080
 cd app
 uvicorn main:app --port 8090
@@ -61,8 +62,14 @@ short:
 | `FLOORWATCH_DIGEST_PATH` | `../floorwatch-rules-engine/shift_digest.jsonl` | Source of shift-digest events to embed |
 | `FLOORWATCH_INCIDENT_NOTES_PATH` | `incident_notes.jsonl` | This service's own supervisor-note store |
 | `FLOORWATCH_RULES_ENGINE_URL` | `http://localhost:8080` | Base URL for the two read-only status GETs |
-| `ANTHROPIC_API_KEY` | *(empty)* | Required for `/api/chat` — returns 503 with a clear message if unset |
-| `FLOORWATCH_ANTHROPIC_MODEL` | `claude-sonnet-4-5` | Model used for the chat assistant |
+| `FLOORWATCH_LLM_PROVIDER` | `anthropic` | `anthropic` \| `openai` \| `gemini` — see `app/llm.py`'s module docstring |
+| `ANTHROPIC_API_KEY` | *(empty)* | Required for `/api/chat` when provider is `anthropic` (the default) |
+| `FLOORWATCH_LLM_API_KEY` | *(empty)* | Required for `/api/chat` when provider is `openai` or `gemini` |
+| `FLOORWATCH_LLM_MODEL` | *(empty)* | Required for `openai`/`gemini` — no safe default exists across vendors |
+| `FLOORWATCH_LLM_BASE_URL` | *(empty)* | Only for provider `openai` — point at an OpenAI-compatible host (Kimi/Moonshot, DeepSeek, Groq/Together/Ollama-hosted Llama) instead of real ChatGPT |
+| `FLOORWATCH_ANTHROPIC_MODEL` | `claude-sonnet-4-5` | Legacy name for `FLOORWATCH_LLM_MODEL` when provider is `anthropic` |
+
+**Any AI model/vendor works, not just Claude.** `FLOORWATCH_LLM_PROVIDER=openai` covers real ChatGPT *and* anything that speaks the same OpenAI-compatible wire format behind `FLOORWATCH_LLM_BASE_URL` — that includes Kimi/Moonshot, DeepSeek, and Llama hosted via Groq/Together/Fireworks/Ollama. `FLOORWATCH_LLM_PROVIDER=gemini` covers Google Gemini via its own API. Install the matching SDK (`pip install openai` or `pip install google-genai`, see `requirements.txt`) — only the SDK for the provider you actually use is required.
 
 ## Endpoints
 

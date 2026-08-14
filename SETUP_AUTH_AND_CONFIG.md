@@ -52,10 +52,23 @@ Open `config/secrets.env` and fill in only what you actually need right now — 
 | `FLOORWATCH_TWILIO_FROM_NUMBER` | SMS notifications | A phone number you've purchased in Twilio |
 | `FLOORWATCH_FCM_CREDENTIALS_PATH` | Push notifications (alternative to Twilio) | Firebase Console → Project Settings → Service Accounts → Generate new private key (path to the downloaded JSON file, store it outside version control) |
 | `VOYAGE_API_KEY` | Real semantic search | https://dash.voyageai.com |
-| `ANTHROPIC_API_KEY` | Chat assistant (`/api/chat`) | https://console.anthropic.com |
+| `ANTHROPIC_API_KEY` | Chat assistant (`/api/chat`) — only if `FLOORWATCH_LLM_PROVIDER=anthropic` (the default) | https://console.anthropic.com |
+| `FLOORWATCH_LLM_API_KEY` | Chat assistant — only if `FLOORWATCH_LLM_PROVIDER=openai` or `=gemini` | Whichever vendor's console you're using — see below |
 | `FLOORWATCH_POSTGRES_DSN` | Real vector store instead of sqlite fallback | Your Postgres instance, format `postgresql://user:password@host/dbname` |
 
 If you leave a value blank, that feature falls back gracefully (e.g. no Twilio → notifications stay in shadow-mode-style log-only via `NoOpSender`; no Voyage key → TF-IDF lexical search instead of real embeddings; no Postgres DSN → sqlite).
+
+**Using a different AI model for the chat assistant?** The default is Claude via `ANTHROPIC_API_KEY`, but any vendor works — set these three in `deployment.env` (not secrets — see `config/deployment.env.template`):
+
+| `FLOORWATCH_LLM_PROVIDER` | `FLOORWATCH_LLM_MODEL` example | `FLOORWATCH_LLM_BASE_URL` |
+|---|---|---|
+| `anthropic` (default) | *(uses `FLOORWATCH_ANTHROPIC_MODEL`)* | — |
+| `openai` | `gpt-4o` | leave unset — real ChatGPT |
+| `openai` | `moonshot-v1-8k` | `https://api.moonshot.ai/v1` (Kimi) |
+| `openai` | whatever your host calls it | your Groq/Together/Ollama/vLLM endpoint (Llama, DeepSeek, etc.) |
+| `gemini` | `gemini-2.0-flash` | — |
+
+Then set `FLOORWATCH_LLM_API_KEY` in `secrets.env` instead of `ANTHROPIC_API_KEY`, and install the matching SDK (`pip install openai` or `pip install google-genai` — see `services/floorwatch-intelligence/requirements.txt`). See that service's `app/llm.py` module docstring for why one `openai` adapter covers ChatGPT and several other vendors.
 
 ---
 
