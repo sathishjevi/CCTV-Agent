@@ -130,7 +130,8 @@ async def chat(body: ChatRequest, user=Depends(require_auth)):
         )
     if assistant is None:
         return JSONResponse(status_code=503, content={
-            "error": "Chat assistant unavailable — no ANTHROPIC_API_KEY configured for this service."})
+            "error": "Chat assistant unavailable — no LLM API key configured for this service "
+                     "(FLOORWATCH_LLM_PROVIDER/FLOORWATCH_LLM_API_KEY, or ANTHROPIC_API_KEY for the default provider)."})
     result = await assistant.answer(body.question)
     return result
 

@@ -1,0 +1,89 @@
+# Root .dockerignore — applies to any image built with the repo root as
+# build context (both Floorwatch service Dockerfiles use this context;
+# see services/floorwatch-rules-engine/Dockerfile and
+# services/floorwatch-intelligence/Dockerfile).
+#
+# IMPORTANT: do NOT add skills/lib/ or config/ here — both Floorwatch
+# Dockerfiles COPY them explicitly and need them present at build time
+# (see RAILWAY_DEPLOYMENT.md for why).
+
+# ─── Version control ────────────────────────────────────
+.git/
+.gitignore
+
+# ─── Python ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.coverage
+htmlcov/
+
+# ─── Node ────────────────────────────────────────────────
+node_modules/
+
+# ─── Local secrets / env files — never bake real values into an image;
+#    Railway env vars are the source of truth at runtime instead ───────
+config/*.env
+!config/*.env.template
+services/.floorwatch_auth_secret
+skills/detection/floorwatch-ingest/cameras.json
+*.env
+!*.env.template
+
+# ─── Runtime-local state files these services write on disk — never
+#    meaningful to bake into a fresh image, and excluding them avoids
+#    accidentally shipping a stale local users.json/shift_digest.jsonl
+#    from whoever's machine built the image ─────────────────────────
+services/floorwatch-rules-engine/users.json
+services/floorwatch-rules-engine/shift_digest.jsonl
+services/floorwatch-rules-engine/shift_digests/
+services/floorwatch-intelligence/incident_notes.jsonl
+services/floorwatch-intelligence/vectors.sqlite3
+
+# ─── Docs, assets, and everything unrelated to these two Python
+#    services — not needed at runtime, only bloats the image ──────────
+docs/
+screenshots/
+*.md
+!services/floorwatch-rules-engine/README.md
+!services/floorwatch-intelligence/README.md
+
+# ─── Unrelated parts of this monorepo — the DeepCamera/Aegis camera
+#    pipeline, skills catalog (other than skills/lib/, needed above),
+#    and legacy docker/ stack aren't part of either Floorwatch image ──
+src/
+skills/detection/
+skills/analysis/
+skills/annotation/
+skills/automation/
+skills/integrations/
+skills/segmentation/
+skills/training/
+skills/transformation/
+docker/
+build/
+
+# ─── IDE / OS ────────────────────────────────────────────
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── ML model artifacts — irrelevant to these two services ─────────────
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.pb
+*.h5
+*.safetensors
