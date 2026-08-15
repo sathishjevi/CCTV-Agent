@@ -55,12 +55,24 @@ screenshots/
 *.md
 !services/floorwatch-rules-engine/README.md
 !services/floorwatch-intelligence/README.md
+!services/floorwatch-pipeline/README.md
 
 # ─── Unrelated parts of this monorepo — the DeepCamera/Aegis camera
-#    pipeline, skills catalog (other than skills/lib/, needed above),
-#    and legacy docker/ stack aren't part of either Floorwatch image ──
+#    pipeline and legacy docker/ stack aren't part of any Floorwatch
+#    image. NOTE: skills/detection/ is deliberately NOT excluded here —
+#    services/floorwatch-pipeline/Dockerfile COPYs 4 of its subfolders
+#    (floorwatch-ingest, yolo-detection-2026, floorwatch-coverage,
+#    floorwatch-pose). Excluding the whole skills/detection/ directory
+#    and trying to "!"-negate those 4 back in does NOT reliably work —
+#    Docker's ignore matching (like .gitignore's) won't descend into an
+#    already-excluded parent directory to find negation patterns for its
+#    children, so don't reintroduce a blanket exclusion here. This isn't
+#    a real cost anyway: .dockerignore controls the build CONTEXT sent to
+#    the daemon, not the final image size — only what's explicitly
+#    COPY'd by a given Dockerfile ends up in that image, so unrelated
+#    skills/detection/* subfolders being present in the context doesn't
+#    bloat any image ──────────────────────────────────────────────────
 src/
-skills/detection/
 skills/analysis/
 skills/annotation/
 skills/automation/

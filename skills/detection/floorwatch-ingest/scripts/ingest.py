@@ -35,6 +35,7 @@ from sources.local_folder import LocalFolderFrameSource
 from sources.rtsp import RtspFrameSource
 from sources.cloud_storage import build_cloud_storage_source
 from sources.http_api import HttpApiFrameSource
+from sources.ezviz import EzvizFrameSource
 
 try:
     from floorwatch_secrets_guard import load_deployment_config
@@ -118,9 +119,17 @@ def build_source(cam):
             **cfg,
         )
 
+    if source_type == "ezviz":
+        cfg = cam.get("ezviz", {})
+        return EzvizFrameSource(
+            camera_id=camera_id,
+            fps=fps,
+            **cfg,
+        )
+
     raise ValueError(
         f"Unknown source_type '{source_type}' for camera '{camera_id}' "
-        f"(expected one of: rtsp, local_folder, s3, azure_blob, gcs, http_api)"
+        f"(expected one of: rtsp, local_folder, s3, azure_blob, gcs, http_api, ezviz)"
     )
 
 

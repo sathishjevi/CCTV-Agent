@@ -79,6 +79,22 @@
         "auth_header_value": "Bearer ${THIRD_PARTY_PROVIDER_API_TOKEN}",
         "poll_interval_seconds": 15
       }
+    },
+
+    {
+      "_comment": "Scenario 5 — EZVIZ cloud-only cameras (no local storage, no official partner API). READ skills/detection/floorwatch-ingest/scripts/sources/ezviz.py's module docstring before using this — it logs in with the customer's REAL EZVIZ account password against an unofficial, reverse-engineered API (not EZVIZ's official Open Platform), which carries real Terms-of-Service and API-stability risk, explicitly accepted for this deployment. device_serial is the camera's serial shown in the EZVIZ app's device settings. region depends on which EZVIZ account region this camera is registered in (apiieu.ezvizlife.com=EU default shown here, apiius.ezvizlife.com=US, apicn.ezvizlife.com=China, etc. — check the EZVIZ app or ask the client which region their account uses).",
+      "camera_id": "warehouse_cam",
+      "source_type": "ezviz",
+      "fps": 0.5,
+      "ezviz": {
+        "device_serial": "D01234567",
+        "channel": 1,
+        "username": "${FLOORWATCH_EZVIZ_USERNAME}",
+        "password": "${FLOORWATCH_EZVIZ_PASSWORD}",
+        "region": "apiieu.ezvizlife.com",
+        "poll_interval_seconds": 15,
+        "state_file": "state/warehouse_cam_processed.json"
+      }
     }
 
   ]

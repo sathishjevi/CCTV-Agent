@@ -51,6 +51,11 @@ if exist "%CAMERAS_FILE%" (
         echo {"event":"progress","stage":"deps","message":"Installing google-cloud-storage (GCS configured)..."}
         !PYTHON_CMD! -m pip install -q google-cloud-storage
     )
+    findstr /C:"\"source_type\": \"ezviz\"" "%CAMERAS_FILE%" >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo {"event":"progress","stage":"deps","message":"Installing pyezvizapi (EZVIZ configured)..."}
+        !PYTHON_CMD! -m pip install -q pyezvizapi
+    )
 ) else (
     echo %LOG_PREFIX% No cameras.json found yet — copy cameras.json.template and re-run once configured.>&2
 )
