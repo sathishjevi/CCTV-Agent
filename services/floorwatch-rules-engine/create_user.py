@@ -8,10 +8,17 @@ of adding authentication (see SECURITY_REVIEW.md, finding AUTH-1). Run
 this once before starting the rules engine to create the first account.
 
 Usage:
-  python create_user.py alice --role supervisor
-  python create_user.py bob --role viewer
+  python create_user.py alice --role admin        # bootstrap the first account — see note below
+  python create_user.py bob --role supervisor
+  python create_user.py carol --role viewer
   python create_user.py --list
   python create_user.py svc --role viewer --password "..."   # non-interactive, e.g. container entrypoints
+
+Once at least one admin account exists, prefer creating further accounts
+from the dashboard's "Manage Users" screen (admin-only) instead of this
+script — this CLI still exists for the initial bootstrap (nobody can grant
+themselves admin access from the UI before an admin account exists) and
+for direct server access if the UI is ever unreachable.
 """
 
 import argparse
@@ -23,21 +30,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "app"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "skills" / "lib"))
 
 import config  # noqa: E402
-from floorwatch_auth import UserStore, VALID_ROLES  # noqa: E402
+from floorwatch_auth import VALID_ROLES, build_user_store  # noqa: E402
 
 
 def main():
     parser = argparse.ArgumentParser(description="Manage Floorwatch user accounts")
     parser.add_argument("username", nargs="?", help="Username to create/update")
     parser.add_argument("--role", choices=sorted(VALID_ROLES - {"service"}), default="supervisor",
-                        help="supervisor (full read/write) or viewer (read-only)")
+                        help="admin (manages accounts + full access), supervisor (full read/write), "
+                             "or viewer (read-only)")
     parser.add_argument("--list", action="store_true", help="List existing usernames and exit")
     parser.add_argument("--password", default=None,
                         help="Non-interactive password (e.g. for container entrypoints/CI). "
                              "Prompts interactively via getpass if omitted (recommended for humans).")
     args = parser.parse_args()
 
-    store = UserStore(config.USERS_PATH)
+    # Uses the SAME store the running service uses (Postgres if
+    # FLOORWATCH_POSTGRES_DSN is set) — critical for bootstrap: creating
+    # the first admin in the local JSON fallback while the service itself
+    # is configured for Postgres would create an account the service never
+    # actually sees.
+    store = build_user_store(config.POSTGRES_DSN, config.USERS_PATH)
 
     if args.list:
         usernames = store.list_usernames()

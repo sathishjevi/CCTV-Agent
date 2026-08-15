@@ -140,6 +140,16 @@
   const askBtn = document.getElementById('askBtn');
   const toolsPanel = document.getElementById('toolsPanel');
 
+  // This page's own service URL (baseUrl) can safely default to wherever
+  // it's actually being served from — unlike loginBackend (rules-engine,
+  // a genuinely different host that can't be inferred from this page's
+  // own origin). Only applies when actually hosted (not opened as a
+  // local file, and not localhost, where the manual default still makes
+  // sense) — avoids retyping this service's own URL on every visit.
+  if(location.protocol !== 'file:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1'){
+    baseUrlInput.value = location.origin;
+  }
+
   function base(){ return baseUrlInput.value.trim().replace(/\/$/, ''); }
 
   // ── Auth (see SECURITY_REVIEW.md finding AUTH-1) — tokens are issued by

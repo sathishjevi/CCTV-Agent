@@ -20,7 +20,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -31,12 +31,15 @@ from engine import RulesEngine  # noqa: E402
 from notifications import ContactBook, NotificationDispatcher, build_sender  # noqa: E402
 from roster import Roster  # noqa: E402
 
-from floorwatch_auth import UserStore, issue_token, make_auth_dependency, verify_ws_token  # noqa: E402
+from floorwatch_auth import (  # noqa: E402
+    VALID_ROLES, build_user_store, issue_token, make_auth_dependency, verify_ws_token,
+)
 from floorwatch_schema import validate_event  # noqa: E402
 
-users = UserStore(config.USERS_PATH)
+users = build_user_store(config.POSTGRES_DSN, config.USERS_PATH)
 require_auth = make_auth_dependency(config.AUTH_SECRET)                    # any valid role
-require_supervisor = make_auth_dependency(config.AUTH_SECRET, required_role="supervisor")
+require_supervisor = make_auth_dependency(config.AUTH_SECRET, required_role="supervisor")  # supervisor or admin
+require_admin = make_auth_dependency(config.AUTH_SECRET, required_role="admin")
 
 
 def log(msg: str):
@@ -234,6 +237,16 @@ app.add_middleware(
 )
 
 
+COVERAGE_UI_PATH = config.REPO_ROOT / "dashboard" / "floorwatch_demo.html"
+
+
+@app.get("/")
+async def coverage_ui():
+    if COVERAGE_UI_PATH.exists():
+        return FileResponse(str(COVERAGE_UI_PATH))
+    return JSONResponse(status_code=404, content={"error": "coverage dashboard not found"})
+
+
 @app.get("/healthz")
 async def healthz():
     return {"ok": True, "shadow_mode": config.SHADOW_MODE, "connections": len(manager.active)}
@@ -246,11 +259,99 @@ class LoginRequest(BaseModel):
 
 @app.post("/api/login")
 async def login(body: LoginRequest):
-    role = users.authenticate(body.username, body.password)
-    if role is None:
+    auth_result = users.authenticate(body.username, body.password)
+    if auth_result is None:
         return JSONResponse(status_code=401, content={"error": "invalid username or password"})
+    role = auth_result["role"]
+    users.record_login(body.username)
     token = issue_token(config.AUTH_SECRET, body.username, role, ttl_seconds=config.TOKEN_TTL_SECONDS)
-    return {"token": token, "username": body.username, "role": role, "expires_in": config.TOKEN_TTL_SECONDS}
+    return {
+        "token": token, "username": body.username, "role": role,
+        "expires_in": config.TOKEN_TTL_SECONDS,
+        "must_change_password": auth_result["must_change_password"],
+    }
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@app.post("/api/change-password")
+async def change_password(body: ChangePasswordRequest, user=Depends(require_auth)):
+    """Self-service — any authenticated user changes their own password.
+    Requires the current password (not just a valid token) so a
+    briefly-unattended logged-in session can't be used to lock the real
+    owner out by someone else changing it."""
+    username = user["sub"]
+    auth_result = users.authenticate(username, body.current_password)
+    if auth_result is None:
+        return JSONResponse(status_code=401, content={"error": "current password is incorrect"})
+    if len(body.new_password) < 8:
+        return JSONResponse(status_code=400, content={"error": "new password must be at least 8 characters"})
+    users.set_password(username, body.new_password, must_change_password=False)
+    return {"ok": True}
+
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "supervisor"
+
+
+@app.get("/api/admin/users")
+async def list_users(user=Depends(require_admin)):
+    return {"users": users.list_users()}
+
+
+@app.post("/api/admin/users")
+async def create_user_endpoint(body: CreateUserRequest, user=Depends(require_admin)):
+    if body.role not in VALID_ROLES - {"service"}:
+        return JSONResponse(status_code=400, content={
+            "error": f"role must be one of: {sorted(VALID_ROLES - {'service'})}"})
+    if len(body.password) < 8:
+        return JSONResponse(status_code=400, content={"error": "password must be at least 8 characters"})
+    if users.user_exists(body.username):
+        return JSONResponse(status_code=409, content={"error": f"user '{body.username}' already exists"})
+    users.create_user(body.username, body.password, role=body.role, created_by=user["sub"])
+    log(f"Admin '{user['sub']}' created account '{body.username}' with role '{body.role}'")
+    return {"ok": True}
+
+
+@app.post("/api/admin/users/{username}/deactivate")
+async def deactivate_user(username: str, user=Depends(require_admin)):
+    if username == user["sub"]:
+        return JSONResponse(status_code=400, content={"error": "cannot deactivate your own account"})
+    if not users.set_active(username, False):
+        return JSONResponse(status_code=404, content={"error": f"user '{username}' not found"})
+    log(f"Admin '{user['sub']}' deactivated account '{username}'")
+    return {"ok": True}
+
+
+@app.post("/api/admin/users/{username}/reactivate")
+async def reactivate_user(username: str, user=Depends(require_admin)):
+    if not users.set_active(username, True):
+        return JSONResponse(status_code=404, content={"error": f"user '{username}' not found"})
+    log(f"Admin '{user['sub']}' reactivated account '{username}'")
+    return {"ok": True}
+
+
+class ResetPasswordRequest(BaseModel):
+    new_password: str
+
+
+@app.post("/api/admin/users/{username}/reset-password")
+async def reset_password(username: str, body: ResetPasswordRequest, user=Depends(require_admin)):
+    """Admin sets a temporary password and shares it with the user
+    out-of-band (Slack, in person, etc.) — no email system in this
+    codebase. must_change_password is forced true so the temp password
+    can't quietly become permanent."""
+    if len(body.new_password) < 8:
+        return JSONResponse(status_code=400, content={"error": "password must be at least 8 characters"})
+    if not users.set_password(username, body.new_password, must_change_password=True):
+        return JSONResponse(status_code=404, content={"error": f"user '{username}' not found"})
+    log(f"Admin '{user['sub']}' reset the password for account '{username}'")
+    return {"ok": True}
 
 
 @app.get("/api/state")

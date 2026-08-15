@@ -107,17 +107,34 @@ chmod 600 config/secrets.env services/.floorwatch_auth_secret
 
 Authentication requires at least one real account — nothing ships pre-created (a checked-in default credential would be a checked-in secret).
 
+Accounts are admin-managed now, not one-CLI-command-per-person — see the "Manage Users" screen on the dashboard (admin role only). But that screen needs an admin to already exist to use it, so the very first account still has to be bootstrapped outside the UI, one of two ways:
+
 ```bash
 cd services/floorwatch-rules-engine
-python create_user.py alice --role supervisor
-python create_user.py bob --role viewer          # optional: read-only account
-python create_user.py --list                     # confirm accounts exist
+
+# Option A — run against the app directly (writes to whichever store
+# config.py is set up for: Postgres if FLOORWATCH_POSTGRES_DSN is set,
+# else the local users.json)
+python create_user.py alice --role admin
+python create_user.py --list                     # confirm the account exists
+
+# Option B — managing Postgres directly instead? Generate the SQL locally
+# (the password is hashed on your machine, never printed in plaintext)
+# and paste the output into your Postgres client / Railway's query console:
+python generate_admin_sql.py alice --role admin
 ```
 
+Either way you'll be prompted for a password interactively (recommended). For non-interactive setups (e.g. a container entrypoint), use `--password "..."` instead.
+
+Once `alice` exists, log in as her, open **Manage Users** in the dashboard's top bar, and create everyone else from there:
+
+- **`admin`** — everything supervisor can do, plus create/deactivate accounts and reset passwords.
 - **`supervisor`** — full access: approve/reassign zones, assign/complete tasks, confirm/dismiss flags.
 - **`viewer`** — read-only: can see the dashboard live but can't act on anything.
 
-You'll be prompted for a password interactively (recommended). For non-interactive setups (e.g. a container entrypoint), use `--password "..."` instead.
+Admin-created accounts get a temporary password the admin sets (or generates) and shares with the new person directly — no email system exists in this codebase — and that person is required to set their own password on first login.
+
+By default accounts are stored in a local `users.json` file, which does **not** survive a Railway redeploy without a mounted volume — set `FLOORWATCH_POSTGRES_DSN` (§4 above) to store accounts in Postgres instead, reusing the same instance `floorwatch-intelligence` uses if you have one. See `RAILWAY_DEPLOYMENT.md` §3a for the full writeup, including `migrate_users_to_postgres.py` if you already have accounts in `users.json` from before switching.
 
 ---
 

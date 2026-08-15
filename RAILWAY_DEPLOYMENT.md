@@ -66,15 +66,35 @@ Railway's container filesystem is ephemeral on redeploy. Beyond the sqlite vecto
 
 | Service | File | What's lost on redeploy without a volume |
 |---|---|---|
-| `floorwatch-rules-engine` | `users.json` | Every supervisor/viewer account — you'd have to re-run `create_user.py` after every redeploy |
+| `floorwatch-rules-engine` | `users.json` | **Solved if `FLOORWATCH_POSTGRES_DSN` is set** — accounts then live in Postgres instead (see §3a below), same instance `floorwatch-intelligence` already uses. Only applies if you're still on the JSON fallback: every supervisor/viewer/admin account, and you'd have to re-run `create_user.py` after every redeploy. |
 | `floorwatch-rules-engine` | `shift_digest.jsonl` | Escalation history (also the cross-service gap above) |
 | `floorwatch-rules-engine` | `roster.json`, `zones_meta.json`, `contacts.json`, `task_type_thresholds.json` | Whatever's been edited at runtime past what's checked into the repo — if these are only ever edited via the repo, this doesn't apply |
-| `floorwatch-intelligence` | `vectors.sqlite3` | The embedded/searchable shift-digest and incident-note index |
+| `floorwatch-intelligence` | `vectors.sqlite3` | The embedded/searchable shift-digest and incident-note index — same Postgres fix applies here too |
 | Both | `.floorwatch_auth_secret` (only if `FLOORWATCH_AUTH_SECRET` env var is left unset) | Every existing login session invalidates on redeploy |
 
-For a real pilot beyond a quick demo, attach a Railway volume to `floorwatch-rules-engine` for `users.json` at minimum, and set `FLOORWATCH_AUTH_SECRET` explicitly (see §4) so logins survive redeploys regardless of volumes.
+For a real pilot beyond a quick demo: set `FLOORWATCH_POSTGRES_DSN` on `floorwatch-rules-engine` (fixes `users.json`), and set `FLOORWATCH_AUTH_SECRET` explicitly (see §4) so logins survive redeploys regardless. A volume is still the only fix for `shift_digest.jsonl` and the runtime-edited JSON files, since those don't have a Postgres-backed store yet.
 
-**Bootstrapping the first user account**: since `users.json` won't exist on first deploy, run `create_user.py` once against the running container — Railway's shell/one-off-command feature (`railway run`, or the equivalent in the dashboard) is the way to do this without a persistent interactive shell. Re-run it after every redeploy unless you've attached a volume.
+### 3a. Accounts and the admin role — no more manual `create_user.py` per account
+
+`floorwatch-rules-engine` now has an admin-managed account system (three roles: `admin` > `supervisor` > `viewer`, hierarchical — an admin token passes any supervisor-only check too) instead of every account needing a CLI run. Once at least one admin account exists, further accounts are created from the dashboard's "Manage Users" screen (admin-only), not the CLI.
+
+**Bootstrapping the first admin account** — nobody can grant themselves admin access from the UI before an admin account exists, so this one account has to be created before the dashboard's Manage Users screen is usable at all. Two ways to do it, pick whichever fits your workflow:
+
+- **Via CLI against the running container** (needs `railway run`/shell access):
+  ```bash
+  railway run --service floorwatch-rules-engine python create_user.py alice --role admin
+  ```
+  Uses whichever store the service itself is configured for (`build_user_store()` — Postgres if `FLOORWATCH_POSTGRES_DSN` is set, else `users.json`).
+
+- **Directly in Postgres, no container access needed** — generates the SQL locally (computes the password hash on your own machine — the plaintext never leaves it) and you paste the output into Railway's Postgres query console yourself:
+  ```bash
+  python generate_admin_sql.py alice --role admin
+  ```
+  This is the better fit if you're managing the database directly rather than shelling into the service, and works even before the service has started (it creates the table too, `CREATE TABLE IF NOT EXISTS`, harmless if the service already has).
+
+If you already have accounts in `users.json` from before Postgres was configured, run `python migrate_users_to_postgres.py` once to copy them over (`--dry-run` first to preview).
+
+Admin-created accounts get a temporary password the admin sets and shares out-of-band (Slack, in person — no email system exists in this codebase) and are forced to set their own password on first login.
 
 ---
 
@@ -90,7 +110,8 @@ For a real pilot beyond a quick demo, attach a Railway volume to `floorwatch-rul
 
 | Variable | Required? | Notes |
 |---|---|---|
-| `FLOORWATCH_REDIS_URL` | Yes | Point at a real Redis instance — Railway's Redis plugin, or external. This is the **only** external datastore this service uses; there is no Postgres/database variable anywhere in this service (verified — no `psycopg`/`sqlalchemy`/DSN references or dependency exist in this service's code or `requirements.txt`; Postgres only applies to `floorwatch-intelligence`, below). |
+| `FLOORWATCH_REDIS_URL` | Yes | Point at a real Redis instance — Railway's Redis plugin, or external. |
+| `FLOORWATCH_POSTGRES_DSN` | Recommended | Empty falls back to the local `users.json` (doesn't survive a redeploy — see §3/§3a). Point at the same Postgres instance `floorwatch-intelligence` uses if you have one — accounts get their own table, no second database needed. |
 | `FLOORWATCH_CORS_ALLOWED_ORIGINS` | Recommended | Set to your real deployed dashboard origin(s) — see §5. |
 | `FLOORWATCH_DOCS_ENABLED` | Recommended | See §5. |
 | Everything else in `config/deployment.env.template` | Optional | Timers, thresholds, retention, notify channel — all have working code-level defaults; see §6 for why the template file itself doesn't travel with the image. |
@@ -148,7 +169,8 @@ Practical effect: `config/deployment.env.template` and `config/secrets.env.templ
 - [ ] `floorwatch-intelligence`: `FLOORWATCH_RULES_ENGINE_URL` set to rules-engine's real Railway public URL
 - [ ] `FLOORWATCH_CORS_ALLOWED_ORIGINS` set to your real dashboard origin(s) on rules-engine and intelligence
 - [ ] `FLOORWATCH_DOCS_ENABLED` left `false` on rules-engine and intelligence (or explicitly reviewed)
-- [ ] First supervisor account created via `create_user.py` against the deployed rules-engine container
+- [ ] First **admin** account created via `create_user.py --role admin` against the deployed rules-engine container (§3a) — further accounts created from the dashboard's Manage Users screen afterward
+- [ ] If switching an existing deployment's accounts from `users.json` to Postgres, ran `migrate_users_to_postgres.py` once
 - [ ] Aware of and have made a decision on the `shift_digest.jsonl` cross-service gap (§2) — even if the decision is "acceptable for now, revisit before a real pilot"
 - [ ] Aware of the sqlite/local-file persistence limitations (§3) if not attaching a Railway volume
 - [ ] `floorwatch-pipeline`: `FLOORWATCH_CAMERAS_JSON` set (or a volume with `cameras.json` mounted), pointed at `floorwatch-rules-engine`'s same `FLOORWATCH_REDIS_URL`

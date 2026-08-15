@@ -37,6 +37,14 @@ RUN pip install --no-cache-dir -r services/floorwatch-rules-engine/requirements.
 COPY skills/lib/ ./skills/lib/
 COPY config/ ./config/
 
+# main.py serves the coverage dashboard at "/" from
+# REPO_ROOT/dashboard/floorwatch_demo.html (see app/main.py's
+# COVERAGE_UI_PATH) — that folder lives at the repo root, not inside this
+# service's own folder, so it needs its own explicit COPY or "/" 404s in
+# the deployed container even though everything else works (same fix
+# applied to floorwatch-intelligence's Dockerfile for its own chat UI).
+COPY dashboard/ ./dashboard/
+
 # Copy this service itself. The rest of services/ (floorwatch-intelligence,
 # any other sibling) is deliberately NOT copied — this image only needs
 # its own service directory plus the two shared folders above.

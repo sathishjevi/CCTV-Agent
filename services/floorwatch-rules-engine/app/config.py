@@ -90,6 +90,14 @@ AUTH_SECRET = os.environ.get("FLOORWATCH_AUTH_SECRET") or get_or_create_secret(
 USERS_PATH = Path(os.environ.get("FLOORWATCH_USERS_PATH", SERVICE_DIR / "users.json"))
 TOKEN_TTL_SECONDS = int(os.environ.get("FLOORWATCH_TOKEN_TTL_SECONDS", 12 * 3600))
 
+# Account storage — see skills/lib/floorwatch_auth.py's build_user_store().
+# Empty falls back to the local users.json (dev/pilot only — doesn't
+# survive a Railway redeploy without a volume). Point this at the SAME
+# Postgres instance floorwatch-intelligence already uses for its vector
+# store if one exists — this just adds one more table to it, no second
+# database needed.
+POSTGRES_DSN = os.environ.get("FLOORWATCH_POSTGRES_DSN", "")
+
 # ── CORS (SECURITY_REVIEW.md H1) ────────────────────────────────────────
 # No wildcard default. An open CORS policy is a direct amplifier of any
 # auth weakness — it turns "reachable on the network" into "reachable by
@@ -128,4 +136,4 @@ from floorwatch_secrets_guard import check_file_permissions, install_stderr_reda
 
 check_file_permissions(REPO_ROOT / "config" / "secrets.env")
 check_file_permissions(Path(os.environ.get("FLOORWATCH_AUTH_SECRET_PATH", REPO_ROOT / "services" / ".floorwatch_auth_secret")))
-install_stderr_redaction([TWILIO_AUTH_TOKEN, TWILIO_ACCOUNT_SID, AUTH_SECRET])
+install_stderr_redaction([TWILIO_AUTH_TOKEN, TWILIO_ACCOUNT_SID, AUTH_SECRET, POSTGRES_DSN])

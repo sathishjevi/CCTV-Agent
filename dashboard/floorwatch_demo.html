@@ -151,6 +151,69 @@
   </div>
 </div>
 
+<div class="login-overlay" id="changePasswordOverlay" style="display:none;">
+  <div class="login-card">
+    <div class="brand">
+      <div class="brand-mark" style="display:inline-flex;">FW</div>
+      <strong style="margin-left:8px;font-size:15px;">Floorwatch</strong>
+    </div>
+    <h2 id="changePasswordTitle">Set a new password</h2>
+    <div id="changePasswordForced" style="display:none;font-size:11.5px;color:var(--dim);margin:-8px 0 14px;line-height:1.5;">This account was just created or reset with a temporary password — set your own before continuing.</div>
+    <form id="changePasswordForm">
+      <div class="field"><label for="currentPasswordInput">Current password</label><input id="currentPasswordInput" type="password" autocomplete="current-password" required></div>
+      <div class="field"><label for="newPasswordInput">New password</label><input id="newPasswordInput" type="password" autocomplete="new-password" required minlength="8"></div>
+      <div class="field"><label for="newPasswordConfirmInput">Confirm new password</label><input id="newPasswordConfirmInput" type="password" autocomplete="new-password" required minlength="8"></div>
+      <button type="submit" class="btn primary">Update password</button>
+      <button type="button" class="btn" id="cancelChangePasswordBtn" style="margin-top:8px;">Cancel</button>
+      <div class="login-error" id="changePasswordError"></div>
+    </form>
+  </div>
+</div>
+
+<div class="login-overlay" id="manageUsersOverlay" style="display:none;align-items:flex-start;padding:40px 20px;overflow-y:auto;">
+  <div class="login-card" style="width:min(760px,100%);">
+    <div class="brand" style="justify-content:space-between;display:flex;">
+      <div style="display:flex;align-items:center;">
+        <div class="brand-mark" style="display:inline-flex;">FW</div>
+        <strong style="margin-left:8px;font-size:15px;">Manage Users</strong>
+      </div>
+      <button class="btn" id="closeManageUsersBtn" style="width:auto;padding:6px 12px;">Close</button>
+    </div>
+
+    <div id="manageUsersError" class="login-error" style="min-height:0;"></div>
+
+    <table id="usersTable" style="width:100%;border-collapse:collapse;margin:12px 0 20px;font-size:12.5px;">
+      <thead>
+        <tr style="text-align:left;color:var(--dim);font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:0.4px;">
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Username</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Role</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Status</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Last login</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="usersTableBody"></tbody>
+    </table>
+
+    <h2 style="margin-top:0;">Add a new account</h2>
+    <form id="addUserForm" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+      <div class="field" style="margin-bottom:0;flex:1;min-width:120px;"><label for="newUserUsername">Username</label><input id="newUserUsername" required></div>
+      <div class="field" style="margin-bottom:0;min-width:110px;">
+        <label for="newUserRole">Role</label>
+        <select id="newUserRole" style="width:100%;box-sizing:border-box;font-family:var(--sans);font-size:13px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:9px 10px;">
+          <option value="viewer">viewer</option>
+          <option value="supervisor" selected>supervisor</option>
+          <option value="admin">admin</option>
+        </select>
+      </div>
+      <div class="field" style="margin-bottom:0;flex:1;min-width:140px;"><label for="newUserPassword">Temp password</label><input id="newUserPassword" required minlength="8"></div>
+      <button type="button" class="btn" id="generatePasswordBtn" style="width:auto;">Generate</button>
+      <button type="submit" class="btn primary" style="width:auto;">Add user</button>
+    </form>
+    <div style="font-family:var(--mono);font-size:10.5px;color:var(--dimmer);margin-top:8px;line-height:1.5;">Share this temp password with the new user out-of-band (Slack, in person, etc.) — they'll be required to set their own on first login.</div>
+  </div>
+</div>
+
 <div class="wrap">
 
   <div class="topbar">
@@ -161,6 +224,8 @@
     <div class="conn-badge connecting" id="connBadge"><span class="dot"></span> <span id="connText">Connecting…</span></div>
     <div class="user-badge" id="userBadge" style="display:none;">
       <span class="who" id="userWho"></span>
+      <button class="btn" id="manageUsersBtn" style="padding:4px 10px;font-size:11px;display:none;">Manage Users</button>
+      <button class="btn" id="changePasswordBtn" style="padding:4px 10px;font-size:11px;">Change password</button>
       <button class="btn" id="logoutBtn" style="padding:4px 10px;font-size:11px;">Log out</button>
     </div>
     <div class="clock" id="clock">--:--:--</div>
@@ -268,6 +333,21 @@
   const taskZoneSelect = document.getElementById('taskZone');
   ZONES.forEach(z=>{ const opt=document.createElement('option'); opt.value=z.id; opt.textContent=z.name; taskZoneSelect.appendChild(opt); });
 
+  // If this page is being served BY the rules engine itself (e.g. hosted
+  // on Railway, not opened as a local file), default the login/WS fields
+  // to this page's own origin instead of localhost:8080 — avoids having
+  // to manually retype the real URL on every visit. Opening this file
+  // locally (file://) or from any other host leaves the localhost
+  // defaults untouched, since there's nothing sensible to infer then.
+  (function autofillBackendFromOrigin(){
+    if(location.protocol === 'file:') return;
+    if(location.hostname === 'localhost' || location.hostname === '127.0.0.1') return;
+    const httpOrigin = location.origin;
+    const wsOrigin = httpOrigin.replace(/^http/, 'ws');
+    document.getElementById('loginBackend').value = httpOrigin;
+    wsUrlInput.value = `${wsOrigin}/events`;
+  })();
+
   // ── Auth (see SECURITY_REVIEW.md finding AUTH-1 — every endpoint now
   // requires a logged-in supervisor/viewer token) ─────────────────────
   const AUTH_STORAGE_KEY = 'floorwatch_auth';
@@ -288,6 +368,7 @@
     if(!currentAuth) return;
     document.getElementById('userWho').textContent = `${currentAuth.username} (${currentAuth.role})`;
     document.getElementById('userBadge').style.display = 'flex';
+    document.getElementById('manageUsersBtn').style.display = currentAuth.role === 'admin' ? 'inline-block' : 'none';
   }
 
   // All fetches to the rules engine go through this — attaches the bearer
@@ -649,7 +730,11 @@
       document.getElementById('loginPassword').value = '';
       hideLoginOverlay();
       updateUserBadge();
-      connect();
+      if(data.must_change_password){
+        showChangePasswordOverlay({forced: true});
+      } else {
+        connect();
+      }
     } catch(err){
       document.getElementById('loginError').textContent = err.message;
     }
@@ -661,6 +746,153 @@
     if(ws) ws.close();
     showLoginOverlay();
   };
+
+  // ── Self-service password change — also shown FORCED (no cancel) right
+  // after a login where must_change_password is true (new/reset account). ──
+  let changePasswordForced = false;
+  function showChangePasswordOverlay(opts){
+    changePasswordForced = !!(opts && opts.forced);
+    document.getElementById('changePasswordForced').style.display = changePasswordForced ? 'block' : 'none';
+    document.getElementById('cancelChangePasswordBtn').style.display = changePasswordForced ? 'none' : 'block';
+    document.getElementById('changePasswordError').textContent = '';
+    document.getElementById('changePasswordForm').reset();
+    document.getElementById('changePasswordOverlay').style.display = 'flex';
+  }
+  function hideChangePasswordOverlay(){
+    document.getElementById('changePasswordOverlay').style.display = 'none';
+  }
+
+  document.getElementById('changePasswordBtn').onclick = () => showChangePasswordOverlay({forced: false});
+  document.getElementById('cancelChangePasswordBtn').onclick = () => hideChangePasswordOverlay();
+
+  document.getElementById('changePasswordForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('changePasswordError');
+    errEl.textContent = '';
+    const current_password = document.getElementById('currentPasswordInput').value;
+    const new_password = document.getElementById('newPasswordInput').value;
+    const confirm = document.getElementById('newPasswordConfirmInput').value;
+    if(new_password !== confirm){ errEl.textContent = 'New passwords do not match.'; return; }
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/change-password`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({current_password, new_password}),
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      hideChangePasswordOverlay();
+      if(changePasswordForced) connect();
+    } catch(err){
+      errEl.textContent = err.message;
+    }
+  };
+
+  // ── Manage Users (admin-only — button itself is hidden for non-admins
+  // by updateUserBadge(), but every action here also re-checks server-side
+  // via require_admin, so hiding the button is UX only, not the real gate). ──
+  function randomTempPassword(){
+    const bytes = new Uint8Array(9);
+    crypto.getRandomValues(bytes);
+    return btoa(String.fromCharCode(...bytes)).replace(/[+/=]/g, c => ({'+':'A','/':'B','=':''}[c]));
+  }
+  document.getElementById('generatePasswordBtn').onclick = () => {
+    document.getElementById('newUserPassword').value = randomTempPassword();
+  };
+
+  function renderUsersTable(userList){
+    const tbody = document.getElementById('usersTableBody');
+    if(!userList.length){
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">No accounts yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = userList.map(u => `
+      <tr style="border-bottom:1px solid var(--line);">
+        <td style="padding:8px;">${u.username}${u.username === currentAuth.username ? ' <span style="color:var(--dimmer);">(you)</span>' : ''}</td>
+        <td style="padding:8px;font-family:var(--mono);">${u.role}</td>
+        <td style="padding:8px;color:${u.active ? 'var(--ok)' : 'var(--red)'};">${u.active ? 'active' : 'deactivated'}</td>
+        <td style="padding:8px;font-family:var(--mono);font-size:11px;color:var(--dim);">${u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'never'}</td>
+        <td style="padding:8px;white-space:nowrap;">
+          <button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reset" data-username="${u.username}">Reset pw</button>
+          ${u.username === currentAuth.username ? '' : (u.active
+            ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="deactivate" data-username="${u.username}">Deactivate</button>`
+            : `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reactivate" data-username="${u.username}">Reactivate</button>`)}
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  async function loadUsers(){
+    const errEl = document.getElementById('manageUsersError');
+    errEl.textContent = '';
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/users`);
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      renderUsersTable(data.users);
+    } catch(err){
+      errEl.textContent = `Failed to load users: ${err.message}`;
+    }
+  }
+
+  document.getElementById('manageUsersBtn').onclick = () => {
+    document.getElementById('manageUsersOverlay').style.display = 'flex';
+    loadUsers();
+  };
+  document.getElementById('closeManageUsersBtn').onclick = () => {
+    document.getElementById('manageUsersOverlay').style.display = 'none';
+  };
+
+  document.getElementById('addUserForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('manageUsersError');
+    errEl.textContent = '';
+    const username = document.getElementById('newUserUsername').value.trim();
+    const role = document.getElementById('newUserRole').value;
+    const password = document.getElementById('newUserPassword').value;
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/users`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({username, password, role}),
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      document.getElementById('addUserForm').reset();
+      document.getElementById('newUserRole').value = 'supervisor';
+      loadUsers();
+    } catch(err){
+      errEl.textContent = err.message;
+    }
+  };
+
+  document.getElementById('usersTableBody').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if(!btn) return;
+    const username = btn.dataset.username;
+    const action = btn.dataset.action;
+    const errEl = document.getElementById('manageUsersError');
+    errEl.textContent = '';
+    try {
+      if(action === 'deactivate'){
+        if(!confirm(`Deactivate '${username}'? They will not be able to log in until reactivated.`)) return;
+        const res = await authFetch(`${currentAuth.backendBase}/api/admin/users/${encodeURIComponent(username)}/deactivate`, {method: 'POST'});
+        if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+      } else if(action === 'reactivate'){
+        const res = await authFetch(`${currentAuth.backendBase}/api/admin/users/${encodeURIComponent(username)}/reactivate`, {method: 'POST'});
+        if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+      } else if(action === 'reset'){
+        const newPassword = randomTempPassword();
+        if(!confirm(`Reset password for '${username}'? New temp password:\n\n${newPassword}\n\nShare this with them directly — it will not be shown again.`)) return;
+        const res = await authFetch(`${currentAuth.backendBase}/api/admin/users/${encodeURIComponent(username)}/reset-password`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({new_password: newPassword}),
+        });
+        if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+      }
+      loadUsers();
+    } catch(err){
+      errEl.textContent = err.message;
+    }
+  });
 
   renderZones(); renderTasks(); renderQueue();
   if(currentAuth){

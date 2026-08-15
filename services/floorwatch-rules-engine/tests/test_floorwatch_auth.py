@@ -3,6 +3,7 @@
 import sys
 import time
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "skills" / "lib"))
 
@@ -10,8 +11,8 @@ import jwt as pyjwt  # noqa: E402
 import pytest  # noqa: E402
 
 from floorwatch_auth import (  # noqa: E402
-    UserStore, hash_password, verify_password, issue_token, verify_token,
-    get_or_create_secret,
+    ROLE_RANK, UserStore, PostgresUserStore, build_user_store, hash_password, verify_password,
+    issue_token, verify_token, get_or_create_secret, make_auth_dependency,
 )
 
 SECRET = "test-secret-do-not-use-in-prod-needs-32-bytes-minimum"
@@ -71,6 +72,11 @@ def test_issue_token_rejects_invalid_role():
         issue_token(SECRET, "alice", "root")
 
 
+def test_issue_token_accepts_admin_role():
+    token = issue_token(SECRET, "alice", "admin")
+    assert verify_token(SECRET, token)["role"] == "admin"
+
+
 def test_token_cannot_be_forged_with_alg_none():
     # classic JWT attack: an attacker crafts a token with alg=none and no
     # signature, hoping a lax verifier accepts it. verify_token must not.
@@ -95,12 +101,58 @@ def test_get_or_create_secret_generates_nonempty_random_value(tmp_path):
     assert len(secret) >= 32
 
 
+# ── role hierarchy (make_auth_dependency) ──────────────────────────────────
+
+def test_role_rank_ordering():
+    assert ROLE_RANK["viewer"] < ROLE_RANK["supervisor"] < ROLE_RANK["admin"]
+    assert ROLE_RANK["service"] == ROLE_RANK["viewer"]
+
+
+@pytest.mark.asyncio
+async def test_require_supervisor_accepts_admin_token():
+    """Hierarchical check: an admin token satisfies a supervisor-required
+    dependency — the whole point of admin being a superset, not a sibling."""
+    dep = make_auth_dependency(SECRET, required_role="supervisor")
+    token = issue_token(SECRET, "alice", "admin")
+    payload = await dep(authorization=f"Bearer {token}")
+    assert payload["role"] == "admin"
+
+
+@pytest.mark.asyncio
+async def test_require_supervisor_rejects_viewer_token():
+    from fastapi import HTTPException
+    dep = make_auth_dependency(SECRET, required_role="supervisor")
+    token = issue_token(SECRET, "bob", "viewer")
+    with pytest.raises(HTTPException) as exc_info:
+        await dep(authorization=f"Bearer {token}")
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_require_admin_rejects_supervisor_token():
+    from fastapi import HTTPException
+    dep = make_auth_dependency(SECRET, required_role="admin")
+    token = issue_token(SECRET, "bob", "supervisor")
+    with pytest.raises(HTTPException) as exc_info:
+        await dep(authorization=f"Bearer {token}")
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_require_admin_accepts_admin_token():
+    dep = make_auth_dependency(SECRET, required_role="admin")
+    token = issue_token(SECRET, "alice", "admin")
+    payload = await dep(authorization=f"Bearer {token}")
+    assert payload["role"] == "admin"
+
+
 # ── UserStore ─────────────────────────────────────────────────────────────
 
 def test_user_store_create_and_authenticate(tmp_path):
     store = UserStore(tmp_path / "users.json")
     store.create_user("alice", "s3cr3t-password", role="supervisor")
-    assert store.authenticate("alice", "s3cr3t-password") == "supervisor"
+    result = store.authenticate("alice", "s3cr3t-password")
+    assert result["role"] == "supervisor"
 
 
 def test_user_store_authenticate_rejects_wrong_password(tmp_path):
@@ -119,7 +171,7 @@ def test_user_store_persists_to_disk(tmp_path):
     store1 = UserStore(path)
     store1.create_user("bob", "hunter22", role="viewer")
     store2 = UserStore(path)  # fresh instance, same file
-    assert store2.authenticate("bob", "hunter22") == "viewer"
+    assert store2.authenticate("bob", "hunter22")["role"] == "viewer"
 
 
 def test_user_store_never_stores_plaintext_password(tmp_path):
@@ -131,7 +183,183 @@ def test_user_store_never_stores_plaintext_password(tmp_path):
 
 def test_user_store_list_and_exists(tmp_path):
     store = UserStore(tmp_path / "users.json")
-    store.create_user("alice", "pw", role="supervisor")
+    store.create_user("alice", "pw12345", role="supervisor")
     assert store.user_exists("alice") is True
     assert store.user_exists("bob") is False
     assert store.list_usernames() == ["alice"]
+
+
+def test_user_store_backward_compat_with_old_format_entry(tmp_path):
+    """An account created before active/must_change_password/etc existed
+    only ever had password_hash + role — must still authenticate and list
+    correctly, defaulting the new fields sensibly."""
+    import json
+    path = tmp_path / "users.json"
+    path.write_text(json.dumps({
+        "old_user": {"password_hash": hash_password("oldpass123"), "role": "viewer"}
+    }))
+    store = UserStore(path)
+    result = store.authenticate("old_user", "oldpass123")
+    assert result == {"role": "viewer", "must_change_password": False}
+    listed = store.list_users()
+    assert listed[0]["active"] is True
+    assert listed[0]["must_change_password"] is False
+
+
+def test_user_store_new_account_defaults_must_change_password_true(tmp_path):
+    store = UserStore(tmp_path / "users.json")
+    store.create_user("alice", "pw12345", role="supervisor", created_by="admin_bob")
+    result = store.authenticate("alice", "pw12345")
+    assert result["must_change_password"] is True
+    listed = store.list_users()
+    assert listed[0]["created_by"] == "admin_bob"
+
+
+def test_user_store_deactivated_account_cannot_authenticate(tmp_path):
+    store = UserStore(tmp_path / "users.json")
+    store.create_user("alice", "pw12345", role="supervisor")
+    assert store.set_active("alice", False) is True
+    assert store.authenticate("alice", "pw12345") is None
+
+
+def test_user_store_reactivate_restores_login(tmp_path):
+    store = UserStore(tmp_path / "users.json")
+    store.create_user("alice", "pw12345", role="supervisor")
+    store.set_active("alice", False)
+    store.set_active("alice", True)
+    assert store.authenticate("alice", "pw12345") is not None
+
+
+def test_user_store_set_active_unknown_user_returns_false(tmp_path):
+    store = UserStore(tmp_path / "users.json")
+    assert store.set_active("nobody", False) is False
+
+
+def test_user_store_set_password_changes_credential_and_flag(tmp_path):
+    store = UserStore(tmp_path / "users.json")
+    store.create_user("alice", "oldpass123", role="supervisor", must_change_password=False)
+    store.set_password("alice", "newpass456", must_change_password=True)
+    assert store.authenticate("alice", "oldpass123") is None
+    result = store.authenticate("alice", "newpass456")
+    assert result["must_change_password"] is True
+
+
+def test_user_store_mark_password_changed_clears_flag(tmp_path):
+    store = UserStore(tmp_path / "users.json")
+    store.create_user("alice", "pw12345", role="supervisor")
+    store.mark_password_changed("alice")
+    result = store.authenticate("alice", "pw12345")
+    assert result["must_change_password"] is False
+
+
+def test_user_store_record_login_sets_timestamp(tmp_path):
+    store = UserStore(tmp_path / "users.json")
+    store.create_user("alice", "pw12345", role="supervisor")
+    assert store.list_users()[0]["last_login_at"] is None
+    store.record_login("alice")
+    assert store.list_users()[0]["last_login_at"] is not None
+
+
+def test_user_store_create_user_rejects_invalid_role(tmp_path):
+    store = UserStore(tmp_path / "users.json")
+    with pytest.raises(ValueError):
+        store.create_user("alice", "pw12345", role="root")
+
+
+def test_user_store_list_users_never_includes_password_hash(tmp_path):
+    store = UserStore(tmp_path / "users.json")
+    store.create_user("alice", "super-secret-pw", role="admin")
+    listed = store.list_users()
+    assert "password_hash" not in listed[0]
+
+
+# ── PostgresUserStore (mocked — no real Postgres in this sandbox) ─────────
+
+def _fake_psycopg_module(fake_conn):
+    fake_psycopg = MagicMock()
+    fake_psycopg.connect.return_value.__enter__ = MagicMock(return_value=fake_conn)
+    fake_psycopg.connect.return_value.__exit__ = MagicMock(return_value=False)
+    return fake_psycopg
+
+
+def test_postgres_user_store_authenticate_success():
+    password_hash = hash_password("pw12345")
+    fake_conn = MagicMock()
+    fake_conn.execute.return_value.fetchone.return_value = (password_hash, "supervisor", True, False)
+
+    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+        store = PostgresUserStore("postgresql://fake/dsn")
+        result = store.authenticate("alice", "pw12345")
+
+    assert result == {"role": "supervisor", "must_change_password": False}
+
+
+def test_postgres_user_store_authenticate_rejects_inactive_account():
+    password_hash = hash_password("pw12345")
+    fake_conn = MagicMock()
+    fake_conn.execute.return_value.fetchone.return_value = (password_hash, "supervisor", False, False)
+
+    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+        store = PostgresUserStore("postgresql://fake/dsn")
+        result = store.authenticate("alice", "pw12345")
+
+    assert result is None
+
+
+def test_postgres_user_store_authenticate_unknown_user_returns_none():
+    fake_conn = MagicMock()
+    fake_conn.execute.return_value.fetchone.return_value = None
+
+    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+        store = PostgresUserStore("postgresql://fake/dsn")
+        result = store.authenticate("nobody", "whatever")
+
+    assert result is None
+
+
+def test_postgres_user_store_create_user_runs_upsert():
+    fake_conn = MagicMock()
+    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+        store = PostgresUserStore("postgresql://fake/dsn")
+        store.create_user("alice", "pw12345", role="admin", created_by="bob")
+
+    call_args = fake_conn.execute.call_args_list[-1]
+    assert "INSERT INTO floorwatch_users" in call_args[0][0]
+    assert call_args[0][1][0] == "alice"
+
+
+def test_postgres_user_store_create_user_rejects_invalid_role():
+    fake_conn = MagicMock()
+    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+        store = PostgresUserStore("postgresql://fake/dsn")
+        with pytest.raises(ValueError):
+            store.create_user("alice", "pw12345", role="root")
+
+
+def test_postgres_user_store_schema_created_on_init():
+    fake_conn = MagicMock()
+    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+        PostgresUserStore("postgresql://fake/dsn")
+
+    schema_call = fake_conn.execute.call_args_list[0]
+    assert "CREATE TABLE IF NOT EXISTS floorwatch_users" in schema_call[0][0]
+
+
+# ── build_user_store dispatch ───────────────────────────────────────────
+
+def test_build_user_store_uses_json_fallback_when_no_dsn(tmp_path):
+    store = build_user_store(None, tmp_path / "users.json")
+    assert isinstance(store, UserStore)
+
+
+def test_build_user_store_falls_back_to_json_on_postgres_connection_failure(tmp_path):
+    with patch("floorwatch_auth.PostgresUserStore", side_effect=Exception("connection refused")):
+        store = build_user_store("postgresql://unreachable/dsn", tmp_path / "users.json")
+    assert isinstance(store, UserStore)
+
+
+def test_build_user_store_uses_postgres_when_reachable(tmp_path):
+    fake_store = MagicMock()
+    with patch("floorwatch_auth.PostgresUserStore", return_value=fake_store):
+        store = build_user_store("postgresql://fake/dsn", tmp_path / "users.json")
+    assert store is fake_store

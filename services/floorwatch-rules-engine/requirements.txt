@@ -8,3 +8,9 @@ firebase-admin>=6.0
 pyjwt>=2.8
 httpx>=0.27
 python-dotenv>=1.0
+
+# Only needed if FLOORWATCH_POSTGRES_DSN is set (accounts stored in
+# Postgres instead of the local users.json fallback — see
+# skills/lib/floorwatch_auth.py's build_user_store()). Lazily imported,
+# so a deployment on the JSON fallback doesn't need this installed.
+psycopg[binary]>=3.1
