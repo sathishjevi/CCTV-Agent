@@ -1,6 +1,6 @@
 ---
 name: floorwatch-ingest
-description: "Floorwatch Ingest — pulls frames from wherever a client's CCTV footage actually lives (RTSP camera, local folder, cloud storage, or a third-party provider's API) and feeds them into the standard detection pipeline"
+description: "Floorwatch Ingest — pulls frames from wherever a client's CCTV footage actually lives (RTSP camera, local folder, cloud storage, a third-party provider's API, or EZVIZ) and feeds them into the standard detection pipeline"
 version: 0.1.0
 icon: assets/icon.png
 entry: scripts/ingest.py
@@ -42,8 +42,9 @@ Every detection skill in this repo (`yolo-detection-2026`, `floorwatch-coverage`
 2. **A local folder** an existing NVR/DVR already writes recordings into
 3. **Cloud storage** (AWS S3, Azure Blob Storage, or Google Cloud Storage)
 4. **A third-party surveillance platform's own API**
+5. **EZVIZ** — a specific, real vendor with cloud-only cameras and no official partner API path taken. **Read `sources/ezviz.py`'s module docstring before using this one** — it's meaningfully different from scenarios 3/4: it authenticates with the customer's real EZVIZ account password against an unofficial API, not a scoped credential. That was an explicit, informed decision for this project, not an oversight — see `CCTV_INTEGRATION_SETUP.md`'s EZVIZ section for the full tradeoff.
 
-Different clients will have different ones — this skill supports all four behind one config choice per camera, so the detection pipeline downstream never needs to know or care which one is in play.
+Different clients will have different ones — this skill supports all five behind one config choice per camera, so the detection pipeline downstream never needs to know or care which one is in play.
 
 ## Architecture
 
@@ -56,7 +57,8 @@ skills/detection/floorwatch-ingest/scripts/
     rtsp.py                # scenario 1
     cloud_storage.py       # scenario 3 (S3 / Azure Blob / GCS, one shared base + one subclass each)
     http_api.py             # scenario 4 (generic template — see its docstring for what's genuinely vendor-specific)
-    media_sampling.py        # shared "turn a video/image file into Frame objects" logic, used by folder/cloud/http
+    ezviz.py                # scenario 5 (EZVIZ specifically — unofficial API, real account password, see its docstring)
+    media_sampling.py        # shared "turn a video/image file into Frame objects" logic, used by folder/cloud/http/ezviz
 ```
 
 Every source implementation honors **Global Constraint 3** ("no new video storage"): each writes to a single reusable per-camera temp frame path (overwritten every sample, matching Aegis's own `/tmp/aegis_detection/frame_{camera_id}.jpg` convention), and cloud/HTTP sources delete their temporary downloaded copy immediately after sampling it — nothing here ever accumulates a second video archive. None of the source implementations delete, move, or modify anything in the client's own storage (local folder or cloud bucket) — read-only with respect to their data, always.

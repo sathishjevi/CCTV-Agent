@@ -1,6 +1,6 @@
 # Floorwatch — CCTV Integration Setup Guide
 
-How to point Floorwatch at a specific client's actual CCTV footage, and how to test that connection before going live. Covers all four ingestion shapes Floorwatch supports — pick whichever matches this client, or mix them per-camera:
+How to point Floorwatch at a specific client's actual CCTV footage, and how to test that connection before going live. Covers all five ingestion shapes Floorwatch supports — pick whichever matches this client, or mix them per-camera:
 
 | # | Client's footage lives in... | `source_type` |
 |---|---|---|
@@ -8,8 +8,9 @@ How to point Floorwatch at a specific client's actual CCTV footage, and how to t
 | 2 | A local folder an existing NVR/DVR already writes recordings into | `local_folder` |
 | 3 | Cloud storage — AWS S3, Azure Blob Storage, or Google Cloud Storage | `s3`, `azure_blob`, or `gcs` |
 | 4 | A third-party surveillance platform's own API | `http_api` |
+| 5 | EZVIZ specifically (no official partner API used — see §3, this one's different) | `ezviz` |
 
-None of this requires touching the detection pipeline (`yolo-detection-2026`, `floorwatch-coverage`, `floorwatch-pose`) — they only ever consume the standard `frame` JSONL event (see `docs/detection-protocol.md`), regardless of which of the four shapes above produced it. That's the whole point of the `floorwatch-ingest` skill.
+None of this requires touching the detection pipeline (`yolo-detection-2026`, `floorwatch-coverage`, `floorwatch-pose`) — they only ever consume the standard `frame` JSONL event (see `docs/detection-protocol.md`), regardless of which of the five shapes above produced it. That's the whole point of the `floorwatch-ingest` skill.
 
 ---
 
@@ -109,6 +110,25 @@ This is the one genuinely vendor-specific case — `http_api.py` is a **template
 
 If their API response shape doesn't match what `http_api.py` expects out of the box (a JSON array, or an object with a `results`/`items`/`clips`/`data` key), you'll need a small adapter — see the docstring in `skills/detection/floorwatch-ingest/scripts/sources/http_api.py` for exactly what to change and why. This is the one integration point in the whole pluggable-source design that can't be fully generic, because "any third-party CCTV vendor's API" isn't a fixed protocol the way RTSP or S3 are.
 
+### Scenario 5 — EZVIZ (read this in full before using — it's not like the others)
+
+EZVIZ cameras with cloud-only storage don't fit any of the above cleanly. Two integration paths exist, and this project uses the riskier one deliberately, with the tradeoff written down here for anyone revisiting this decision later:
+
+**Path A — EZVIZ's official Open Platform (safer, not what's built).** EZVIZ has a real developer platform (register at `open.ys7.com`) that issues a scoped, revocable `AccessToken` via an OAuth-style consent flow — the customer authorizes your registered app on EZVIZ's own login page; you never see their raw password. This is the recommended pattern for any future vendor integration of this shape, but wasn't pursued here — building it needs the exact current API reference, which requires a registered developer account to access in full.
+
+**Path B — credential replay against an unofficial API (what `source_type: "ezviz"` actually does).** `sources/ezviz.py` logs in with the customer's **real EZVIZ username and password** against EZVIZ's private, undocumented consumer-app API, via the community-maintained `pyezvizapi` package. This was an explicit, informed choice, not an oversight — made after being told directly that Path A wasn't the direction to take. Before using this for a new client, make sure whoever owns that decision understands:
+
+- **Real Terms-of-Service risk.** Automating a private consumer API is not the same as using a documented partner API. EZVIZ can detect and restrict accounts doing this.
+- **Fragility.** No compatibility promise exists for this API — it can change without notice on any EZVIZ app update. `pyezvizapi`'s own predecessor (`pyEzviz`) is already deprecated for exactly this reason.
+- **A bigger secret than usual.** `FLOORWATCH_EZVIZ_PASSWORD` is the client's actual account password, not a scoped key — treat it with more care than any other credential in `config/secrets.env.template`, not the same care.
+- **Two download paths, not guaranteed to cover everything.** Some EZVIZ cloud clips expose a direct HTTP URL (simple download); most instead need a native-SDK-stream decrypt sequence that `sources/ezviz.py` shells out to `pyezvizapi`'s own CLI for (never passing the password on the command line — a session token is exported and reused instead). Neither path has been exercised against a real EZVIZ account in this codebase — every request shape was verified against the installed library's actual source and its CLI's reference implementation, not guessed, but **test this against one real camera before relying on it for a client**, same as the "test with no real camera access yet" section below recommends for every other source type.
+
+Setup: get the client's EZVIZ **username, password, device serial** (visible in the EZVIZ app's device settings), and **account region** (which regional API host their account uses — `apiieu.ezvizlife.com` for EU, `apiius.ezvizlife.com` for US, etc.; check the app or ask EZVIZ support if unsure). Set username/password in `config/secrets.env` (see `secrets.env.template`), everything else directly in `cameras.json` per `cameras.json.template`'s `ezviz` example.
+
+```bash
+pip install pyezvizapi
+```
+
 ---
 
 ## 4. Test the connection before wiring up the full pipeline
@@ -176,3 +196,6 @@ Each client gets its own `cameras.json` (and, if they use cloud/API sources, its
 - **Local folder: file never gets processed** — confirm the extension is one of the supported video (`.mp4`, `.avi`, `.mov`, `.mkv`) or image (`.jpg`, `.jpeg`, `.png`) types; anything else is silently skipped.
 - **Cloud storage: "not found" / permission denied** — double check the credential is scoped to read the specific bucket/container/prefix, and that the prefix in `cameras.json` actually matches where footage lands (a trailing slash matters).
 - **Third-party API: `ValueError` about response shape** — the provider's JSON doesn't match the `results`/`items`/`clips`/`data`/raw-array shapes `http_api.py` recognizes out of the box; you'll need the small vendor-specific adapter described in section 3.
+- **EZVIZ: login fails** — double-check `region` matches the client's actual account region (wrong region is the most common cause), and confirm the username/password are correct by logging into the EZVIZ app directly first. A login that works in the app but fails here after a recent EZVIZ app update is the fragility risk flagged in section 3 — the unofficial API may have changed.
+- **EZVIZ: clips list empty but the app shows recordings** — confirm `device_serial` and `channel` match exactly what the EZVIZ app shows for that camera, and that cloud storage (not just local SD card) is actually enabled for it.
+- **EZVIZ: "Could not download cloud video ... via either path"** — both the simple and native-stream-fallback download attempts failed for that clip; check stderr for the specific subprocess error from the fallback path before assuming the clip is unrecoverable.

@@ -32,6 +32,12 @@ RUN pip install --no-cache-dir -r services/floorwatch-intelligence/requirements.
 COPY skills/lib/ ./skills/lib/
 COPY config/ ./config/
 
+# main.py serves the chat UI at "/" from REPO_ROOT/dashboard/floorwatch_chat.html
+# (see app/main.py's CHAT_UI_PATH) — that folder lives at the repo root,
+# not inside this service's own folder, so it needs its own explicit COPY
+# or "/" 404s in the deployed container even though everything else works.
+COPY dashboard/ ./dashboard/
+
 # Copy this service itself. floorwatch-rules-engine's own folder is
 # deliberately NOT copied here — the two services communicate over HTTP
 # (FLOORWATCH_RULES_ENGINE_URL), not via a shared filesystem, except for

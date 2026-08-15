@@ -8,3 +8,7 @@ httpx>=0.27
 #   pip install boto3                    # S3
 #   pip install azure-storage-blob       # Azure Blob Storage
 #   pip install google-cloud-storage     # Google Cloud Storage
+#   pip install pyezvizapi                # EZVIZ (source_type "ezviz") — READ
+#                                         #   sources/ezviz.py's module docstring
+#                                         #   first: unofficial API, real account
+#                                         #   password required, ToS risk accepted

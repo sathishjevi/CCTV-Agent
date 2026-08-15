@@ -56,6 +56,10 @@ if [ -f "$CAMERAS_FILE" ]; then
         emit '{"event":"progress","stage":"deps","message":"Installing google-cloud-storage (GCS configured)..."}'
         "$PYTHON_BIN" -m pip install -q google-cloud-storage
     fi
+    if grep -qE '"source_type"[[:space:]]*:[[:space:]]*"ezviz"' "$CAMERAS_FILE"; then
+        emit '{"event":"progress","stage":"deps","message":"Installing pyezvizapi (EZVIZ configured — see sources/ezviz.py's module docstring for the ToS/security tradeoffs of this integration)..."}'
+        "$PYTHON_BIN" -m pip install -q pyezvizapi
+    fi
 else
     log "No cameras.json found yet — skipping optional cloud SDK install. Copy cameras.json.template and re-run once configured."
 fi

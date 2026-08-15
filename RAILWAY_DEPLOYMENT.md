@@ -1,10 +1,12 @@
 # Floorwatch — Railway Deployment Guide
 
-How to deploy `floorwatch-rules-engine` and `floorwatch-intelligence` as two separate Railway services from this one GitHub repo. Read the whole thing before your first deploy — several defaults that are correct for local dev (`localhost` URLs, file-based fallbacks) are actively wrong on Railway and won't fail loudly.
+How to deploy `floorwatch-rules-engine`, `floorwatch-intelligence`, and `floorwatch-pipeline` as three separate Railway services from this one GitHub repo. Read the whole thing before your first deploy — several defaults that are correct for local dev (`localhost` URLs, file-based fallbacks) are actively wrong on Railway and won't fail loudly.
+
+**`floorwatch-pipeline` is the odd one out**, and has its own dedicated README at `services/floorwatch-pipeline/README.md` — it's the CCTV ingestion→detection→coverage/pose pipeline (`tools/run_pipeline.py`), containerized so it can run as an always-on Railway service instead of a manually-launched local script. It only works for cloud-reachable CCTV sources (S3/Azure/GCS/EZVIZ/a third-party HTTP API) — RTSP and local-folder cameras need a machine that can actually reach that camera network or filesystem, which Railway isn't. Everything below through §6 applies to all three services unless a section says otherwise; §4 has a dedicated `floorwatch-pipeline` subsection.
 
 ---
 
-## 1. Why "Root Directory" scoping breaks both services
+## 1. Why "Root Directory" scoping breaks all three services
 
 Both services' `app/config.py` resolve `REPO_ROOT` by walking up from their own file location, then do:
 
@@ -19,11 +21,27 @@ Railway's normal per-service **Root Directory** setting scopes the build to only
 
 **Fix**: build from the repo root using each service's own `Dockerfile`, which `COPY`s `skills/lib/`, `config/`, and the service folder together — reproducing the same relative layout `config.py` already assumes locally. This means:
 
-- **Root Directory**: leave **blank** (repo root) for both services in Railway.
+- **Root Directory**: leave **blank** (repo root) for all three services in Railway.
+- **Builder**: must be set to **`Dockerfile`** explicitly — Railway defaults new services to its own auto-detecting builder (Railpack, formerly Nixpacks), and **having a `Dockerfile` in the repo does not switch this automatically.** This is the single most common way this deployment breaks — see §1a below for exactly what it looks like when this setting is wrong.
 - **Dockerfile Path**: set explicitly per service —
   - `services/floorwatch-rules-engine/Dockerfile`
   - `services/floorwatch-intelligence/Dockerfile`
-- Do **not** use Railway's default "detect and build from Root Directory" path — both services need the Dockerfile-based build with root context.
+  - `services/floorwatch-pipeline/Dockerfile`
+- **Config File Path** (a separate setting from Dockerfile Path — see §1b): point each service at its own `railway.json` (checked into this repo) so the Dockerfile builder is pinned in code, not just a dashboard toggle that can be missed or silently reset:
+  - `services/floorwatch-rules-engine/railway.json`
+  - `services/floorwatch-intelligence/railway.json`
+  - `services/floorwatch-pipeline/railway.json`
+
+### 1a. How to recognize "Railway used the wrong builder" from the logs
+
+If deploy fails with `ModuleNotFoundError: No module named 'floorwatch_auth'` (or `floorwatch_secrets_guard`) **and** the traceback paths look like `/app/app/main.py` / `/app/app/config.py` (instead of `/app/services/floorwatch-rules-engine/app/main.py`) **and** you see `/app/.venv/...` or `/mise/installs/python/...` anywhere in the traceback — that's not a code bug, it's Railpack having built the image instead of the Dockerfile. A `python:3.13-slim`-based Docker build (what these Dockerfiles actually produce) never has a `.venv` or `mise` — those only appear from Railway's own auto-builder. The build log may still *show* Dockerfile-looking steps (`COPY`, `apt-get`) if a Dockerfile build ran at some point and got cached — that doesn't mean it's the image that's actually running. Fix: Settings → Build → confirm **Builder = Dockerfile** (not Railpack/Nixpacks), redeploy, and check the *next* build log's first line is `FROM python:3.13-slim`, not a Railpack banner.
+
+### 1b. Dockerfile Path vs. Config File Path — these are two different settings
+
+- **Dockerfile Path** tells Railway which Dockerfile to build, once Builder is already set to `Dockerfile`.
+- **Config File Path** tells Railway where to find a `railway.json`/`railway.toml` that can *set* the Builder (among other things) declaratively. Because Root Directory is blank here, Railway looks for a config file at the **repo root** by default — it will **not** auto-discover `services/floorwatch-rules-engine/railway.json` on its own. You must explicitly set each service's Config File Path to its own `railway.json` in that service's Settings for the pinned-builder file to actually take effect.
+
+Do **not** use Railway's default "detect and build from Root Directory" path for any of the three services.
 
 ---
 
@@ -87,6 +105,19 @@ For a real pilot beyond a quick demo, attach a Railway volume to `floorwatch-rul
 | `FLOORWATCH_CORS_ALLOWED_ORIGINS` | Recommended | See §5. |
 | `FLOORWATCH_DOCS_ENABLED` | Recommended | See §5. |
 
+### `floorwatch-pipeline` — service-specific
+
+Full reference in `services/floorwatch-pipeline/README.md`; summary here:
+
+| Variable | Required? | Notes |
+|---|---|---|
+| `FLOORWATCH_CAMERAS_JSON` | Yes (unless using a mounted volume) | Raw JSON content of `cameras.json`, as one variable — see `cameras.json.template`. Only `s3`/`azure_blob`/`gcs`/`http_api`/`ezviz` cameras work from this container. |
+| `FLOORWATCH_REDIS_URL` | Yes | Same instance `floorwatch-rules-engine` uses. |
+| `FLOORWATCH_EZVIZ_USERNAME` / `FLOORWATCH_EZVIZ_PASSWORD` | If any `ezviz` camera | Real account password — see `sources/ezviz.py`'s module docstring. |
+| `FLOORWATCH_AWS_ACCESS_KEY_ID` / `FLOORWATCH_AWS_SECRET_ACCESS_KEY` | If any `s3` camera without an IAM role | |
+| `FLOORWATCH_AZURE_STORAGE_CONNECTION_STRING` | If any `azure_blob` camera | |
+| `FLOORWATCH_GCS_CREDENTIALS_PATH` | If any `gcs` camera without ADC | Needs the actual key file present in the container — not provisioned by this Dockerfile as written; use ADC instead unless a volume is added. |
+
 ---
 
 ## 5. Review before going beyond a quick demo
@@ -108,13 +139,18 @@ Practical effect: `config/deployment.env.template` and `config/secrets.env.templ
 
 ## 7. Quick checklist
 
-- [ ] Both services: Root Directory blank, Dockerfile Path set to the correct per-service path
-- [ ] `FLOORWATCH_AUTH_SECRET` generated once, set identically on both services
+- [ ] All three services: Root Directory blank, **Builder explicitly set to `Dockerfile`** (not left on Railpack/Nixpacks default), Dockerfile Path set to the correct per-service path
+- [ ] All three services: Config File Path set to their own `railway.json` (§1b) so the Dockerfile builder is pinned in code
+- [ ] After first deploy, confirmed each build log's first line is `FROM python:3.13-slim`, not a Railpack/Nixpacks banner (§1a)
+- [ ] `FLOORWATCH_AUTH_SECRET` generated once, set identically on `floorwatch-rules-engine` and `floorwatch-intelligence` (not needed on `floorwatch-pipeline` — it doesn't issue or validate login tokens)
 - [ ] `floorwatch-rules-engine`: `FLOORWATCH_REDIS_URL` set to a real Redis instance
 - [ ] `floorwatch-intelligence`: `ANTHROPIC_API_KEY` (or equivalent) set
 - [ ] `floorwatch-intelligence`: `FLOORWATCH_RULES_ENGINE_URL` set to rules-engine's real Railway public URL
-- [ ] `FLOORWATCH_CORS_ALLOWED_ORIGINS` set to your real dashboard origin(s) on both services
-- [ ] `FLOORWATCH_DOCS_ENABLED` left `false` on both (or explicitly reviewed)
+- [ ] `FLOORWATCH_CORS_ALLOWED_ORIGINS` set to your real dashboard origin(s) on rules-engine and intelligence
+- [ ] `FLOORWATCH_DOCS_ENABLED` left `false` on rules-engine and intelligence (or explicitly reviewed)
 - [ ] First supervisor account created via `create_user.py` against the deployed rules-engine container
 - [ ] Aware of and have made a decision on the `shift_digest.jsonl` cross-service gap (§2) — even if the decision is "acceptable for now, revisit before a real pilot"
 - [ ] Aware of the sqlite/local-file persistence limitations (§3) if not attaching a Railway volume
+- [ ] `floorwatch-pipeline`: `FLOORWATCH_CAMERAS_JSON` set (or a volume with `cameras.json` mounted), pointed at `floorwatch-rules-engine`'s same `FLOORWATCH_REDIS_URL`
+- [ ] `floorwatch-pipeline`: confirmed every camera in `cameras.json` actually uses a cloud-reachable `source_type` (`s3`/`azure_blob`/`gcs`/`http_api`/`ezviz`) — `rtsp`/`local_folder` cameras need a separate on-prem process, not this service
+- [ ] `floorwatch-pipeline` not build-tested against a real Docker daemon in this codebase — verify with a real deploy before relying on it (see its own README's "Known limitations")
