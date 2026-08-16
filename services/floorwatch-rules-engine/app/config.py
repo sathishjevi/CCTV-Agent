@@ -98,6 +98,18 @@ TOKEN_TTL_SECONDS = int(os.environ.get("FLOORWATCH_TOKEN_TTL_SECONDS", 12 * 3600
 # database needed.
 POSTGRES_DSN = os.environ.get("FLOORWATCH_POSTGRES_DSN", "")
 
+# Optional env-var-seeded bootstrap admin (see main.py's seed step, right
+# after `users` is built) — an alternative to running create_user.py or
+# generate_admin_sql.py by hand. If both are set AND no account with this
+# username exists yet, one is created with role="admin" on startup. Only
+# ever CREATES — never overwrites an existing account's password on a
+# later restart, so changing the real password afterward (forced on first
+# login, same as every other admin-created account) is never silently
+# reverted by redeploying with these still set. Safe to leave set
+# permanently; harmless once the account already exists.
+ADMIN_USERNAME = os.environ.get("FLOORWATCH_ADMIN_USERNAME", "")
+ADMIN_PASSWORD = os.environ.get("FLOORWATCH_ADMIN_PASSWORD", "")
+
 # ── CORS (SECURITY_REVIEW.md H1) ────────────────────────────────────────
 # No wildcard default. An open CORS policy is a direct amplifier of any
 # auth weakness — it turns "reachable on the network" into "reachable by
@@ -136,4 +148,4 @@ from floorwatch_secrets_guard import check_file_permissions, install_stderr_reda
 
 check_file_permissions(REPO_ROOT / "config" / "secrets.env")
 check_file_permissions(Path(os.environ.get("FLOORWATCH_AUTH_SECRET_PATH", REPO_ROOT / "services" / ".floorwatch_auth_secret")))
-install_stderr_redaction([TWILIO_AUTH_TOKEN, TWILIO_ACCOUNT_SID, AUTH_SECRET, POSTGRES_DSN])
+install_stderr_redaction([TWILIO_AUTH_TOKEN, TWILIO_ACCOUNT_SID, AUTH_SECRET, POSTGRES_DSN, ADMIN_PASSWORD])

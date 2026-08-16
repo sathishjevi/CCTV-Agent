@@ -78,7 +78,9 @@ For a real pilot beyond a quick demo: set `FLOORWATCH_POSTGRES_DSN` on `floorwat
 
 `floorwatch-rules-engine` now has an admin-managed account system (three roles: `admin` > `supervisor` > `viewer`, hierarchical — an admin token passes any supervisor-only check too) instead of every account needing a CLI run. Once at least one admin account exists, further accounts are created from the dashboard's "Manage Users" screen (admin-only), not the CLI.
 
-**Bootstrapping the first admin account** — nobody can grant themselves admin access from the UI before an admin account exists, so this one account has to be created before the dashboard's Manage Users screen is usable at all. Two ways to do it, pick whichever fits your workflow:
+**Bootstrapping the first admin account** — nobody can grant themselves admin access from the UI before an admin account exists, so this one account has to be created before the dashboard's Manage Users screen is usable at all. Three ways to do it, pick whichever fits your workflow:
+
+- **Via Railway environment variables** (no CLI/container access needed at all — the recommended default for a Railway deployment): set `FLOORWATCH_ADMIN_USERNAME` and `FLOORWATCH_ADMIN_PASSWORD` on `floorwatch-rules-engine`. On startup, if that username doesn't already exist, it's created automatically with `role="admin"` (see `app/main.py`'s `_seed_admin_from_env()`). **Idempotent by design** — it only ever creates, never overwrites, so once the admin logs in and sets their real password (forced on first login, same as any admin-created account), a later redeploy with these same variables still set does **not** revert it back to the seed value. Safe to leave both set permanently.
 
 - **Via CLI against the running container** (needs `railway run`/shell access):
   ```bash
@@ -112,6 +114,7 @@ Admin-created accounts get a temporary password the admin sets and shares out-of
 |---|---|---|
 | `FLOORWATCH_REDIS_URL` | Yes | Point at a real Redis instance — Railway's Redis plugin, or external. |
 | `FLOORWATCH_POSTGRES_DSN` | Recommended | Empty falls back to the local `users.json` (doesn't survive a redeploy — see §3/§3a). Point at the same Postgres instance `floorwatch-intelligence` uses if you have one — accounts get their own table, no second database needed. |
+| `FLOORWATCH_ADMIN_USERNAME` / `FLOORWATCH_ADMIN_PASSWORD` | Optional | Bootstraps the first admin account automatically on startup — see §3a. Safe to leave set permanently; only ever creates, never overwrites. |
 | `FLOORWATCH_CORS_ALLOWED_ORIGINS` | Recommended | Set to your real deployed dashboard origin(s) — see §5. |
 | `FLOORWATCH_DOCS_ENABLED` | Recommended | See §5. |
 | Everything else in `config/deployment.env.template` | Optional | Timers, thresholds, retention, notify channel — all have working code-level defaults; see §6 for why the template file itself doesn't travel with the image. |
@@ -169,7 +172,7 @@ Practical effect: `config/deployment.env.template` and `config/secrets.env.templ
 - [ ] `floorwatch-intelligence`: `FLOORWATCH_RULES_ENGINE_URL` set to rules-engine's real Railway public URL
 - [ ] `FLOORWATCH_CORS_ALLOWED_ORIGINS` set to your real dashboard origin(s) on rules-engine and intelligence
 - [ ] `FLOORWATCH_DOCS_ENABLED` left `false` on rules-engine and intelligence (or explicitly reviewed)
-- [ ] First **admin** account created via `create_user.py --role admin` against the deployed rules-engine container (§3a) — further accounts created from the dashboard's Manage Users screen afterward
+- [ ] First **admin** account bootstrapped — either `FLOORWATCH_ADMIN_USERNAME`/`FLOORWATCH_ADMIN_PASSWORD` set on the service, or `create_user.py --role admin` / `generate_admin_sql.py` run manually (§3a) — further accounts created from the dashboard's Manage Users screen afterward
 - [ ] If switching an existing deployment's accounts from `users.json` to Postgres, ran `migrate_users_to_postgres.py` once
 - [ ] Aware of and have made a decision on the `shift_digest.jsonl` cross-service gap (§2) — even if the decision is "acceptable for now, revisit before a real pilot"
 - [ ] Aware of the sqlite/local-file persistence limitations (§3) if not attaching a Railway volume

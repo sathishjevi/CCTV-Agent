@@ -36,6 +36,8 @@ def app_client(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "TICK_INTERVAL_SECONDS", 0.1)
     monkeypatch.setattr(config, "USERS_PATH", tmp_path / "users.json")
     monkeypatch.setattr(config, "POSTGRES_DSN", "")
+    monkeypatch.setattr(config, "ADMIN_USERNAME", "")  # isolate from any real env var set on this machine
+    monkeypatch.setattr(config, "ADMIN_PASSWORD", "")
     monkeypatch.setattr(config, "AUTH_SECRET", "test-fixture-secret-needs-32-bytes-minimum")
 
     sys.modules.pop("main", None)
@@ -59,6 +61,108 @@ def app_client(monkeypatch, tmp_path):
 
 def _auth_headers(token):
     return {"Authorization": f"Bearer {token}"}
+
+
+# ── env-var admin seeding (FLOORWATCH_ADMIN_USERNAME/PASSWORD) ──────────
+
+@pytest.fixture
+def seeded_env(monkeypatch, tmp_path):
+    """Separate from app_client — this exercises _seed_admin_from_env(),
+    which runs at import time, so ADMIN_USERNAME/PASSWORD must be set
+    BEFORE `import main` for each variant below."""
+    import threading
+    import time
+    import fakeredis as fr
+    server = fr.TcpFakeServer(("127.0.0.1", 0), server_type="redis")
+    port = server.socket.getsockname()[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    time.sleep(0.1)
+
+    import config
+    monkeypatch.setattr(config, "REDIS_URL", f"redis://127.0.0.1:{port}/0")
+    monkeypatch.setattr(config, "DIGEST_PATH", tmp_path / "digest.jsonl")
+    monkeypatch.setattr(config, "TICK_INTERVAL_SECONDS", 0.1)
+    monkeypatch.setattr(config, "USERS_PATH", tmp_path / "users.json")
+    monkeypatch.setattr(config, "POSTGRES_DSN", "")
+    monkeypatch.setattr(config, "AUTH_SECRET", "test-fixture-secret-needs-32-bytes-minimum")
+    yield config, monkeypatch
+    server.shutdown()
+
+
+def _import_fresh_main():
+    sys.modules.pop("main", None)
+    sys.modules.pop("engine", None)
+    sys.modules.pop("effort_engine", None)
+    import main as main_module
+    return main_module
+
+
+def test_seed_creates_admin_when_both_env_vars_set_and_no_account_exists(seeded_env):
+    config, monkeypatch = seeded_env
+    monkeypatch.setattr(config, "ADMIN_USERNAME", "seeded_admin")
+    monkeypatch.setattr(config, "ADMIN_PASSWORD", "SeedPassword123")
+
+    main_module = _import_fresh_main()
+
+    assert main_module.users.user_exists("seeded_admin") is True
+    result = main_module.users.authenticate("seeded_admin", "SeedPassword123")
+    assert result == {"role": "admin", "must_change_password": True}
+
+
+def test_seed_does_nothing_when_env_vars_unset(seeded_env):
+    config, monkeypatch = seeded_env
+    monkeypatch.setattr(config, "ADMIN_USERNAME", "")
+    monkeypatch.setattr(config, "ADMIN_PASSWORD", "")
+
+    main_module = _import_fresh_main()
+
+    assert main_module.users.list_usernames() == []
+
+
+def test_seed_does_not_overwrite_existing_account_on_redeploy(seeded_env):
+    """The critical idempotency guarantee: if the admin already changed
+    their real password via the UI, a later restart with the SAME env
+    vars still set must NOT silently revert it back to the seed value."""
+    config, monkeypatch = seeded_env
+    monkeypatch.setattr(config, "ADMIN_USERNAME", "seeded_admin")
+    monkeypatch.setattr(config, "ADMIN_PASSWORD", "OriginalSeedPass1")
+
+    main_module = _import_fresh_main()
+    # Simulate the admin having changed their password after first login.
+    main_module.users.set_password("seeded_admin", "MyRealChosenPass1", must_change_password=False)
+
+    # "Redeploy" — re-import main with the SAME env vars still set.
+    main_module2 = _import_fresh_main()
+
+    assert main_module2.users.authenticate("seeded_admin", "OriginalSeedPass1") is None
+    result = main_module2.users.authenticate("seeded_admin", "MyRealChosenPass1")
+    assert result == {"role": "admin", "must_change_password": False}
+
+
+def test_seed_refuses_short_password(seeded_env):
+    config, monkeypatch = seeded_env
+    monkeypatch.setattr(config, "ADMIN_USERNAME", "seeded_admin")
+    monkeypatch.setattr(config, "ADMIN_PASSWORD", "short")
+
+    main_module = _import_fresh_main()
+
+    assert main_module.users.user_exists("seeded_admin") is False
+
+
+def test_seeded_admin_can_actually_log_in_via_the_api(seeded_env):
+    config, monkeypatch = seeded_env
+    monkeypatch.setattr(config, "ADMIN_USERNAME", "seeded_admin")
+    monkeypatch.setattr(config, "ADMIN_PASSWORD", "SeedPassword123")
+
+    main_module = _import_fresh_main()
+    from fastapi.testclient import TestClient
+    with TestClient(main_module.app) as client:
+        resp = client.post("/api/login", json={"username": "seeded_admin", "password": "SeedPassword123"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["role"] == "admin"
+        assert body["must_change_password"] is True
 
 
 # ── login response shape ────────────────────────────────────────────────

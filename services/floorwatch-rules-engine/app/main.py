@@ -46,6 +46,34 @@ def log(msg: str):
     print(f"[rules-engine] {msg}", file=sys.stderr, flush=True)
 
 
+def _seed_admin_from_env():
+    """FLOORWATCH_ADMIN_USERNAME/FLOORWATCH_ADMIN_PASSWORD — an alternative
+    bootstrap to running create_user.py/generate_admin_sql.py by hand (see
+    config.py's ADMIN_USERNAME docstring for the full contract). Only ever
+    CREATES the account if it's missing — never touches an existing one, so
+    changing the real password later (forced on first login, like any other
+    admin-created account) survives every future redeploy even with these
+    same env vars still set."""
+    if not (config.ADMIN_USERNAME and config.ADMIN_PASSWORD):
+        return
+    if users.user_exists(config.ADMIN_USERNAME):
+        log(f"FLOORWATCH_ADMIN_USERNAME='{config.ADMIN_USERNAME}' is set but that account already "
+            f"exists — not touching its password/role. Unset these env vars once you no longer need "
+            f"them, or leave them — they're harmless from here on.")
+        return
+    if len(config.ADMIN_PASSWORD) < 8:
+        log(f"WARNING: FLOORWATCH_ADMIN_PASSWORD is set but shorter than 8 characters — "
+            f"refusing to seed account '{config.ADMIN_USERNAME}'.")
+        return
+    users.create_user(config.ADMIN_USERNAME, config.ADMIN_PASSWORD, role="admin",
+                       created_by="env:FLOORWATCH_ADMIN_USERNAME", must_change_password=True)
+    log(f"Seeded initial admin account '{config.ADMIN_USERNAME}' from "
+        f"FLOORWATCH_ADMIN_USERNAME/FLOORWATCH_ADMIN_PASSWORD — forced to set a real password on first login.")
+
+
+_seed_admin_from_env()
+
+
 class ConnectionManager:
     def __init__(self):
         self.active: set[WebSocket] = set()
