@@ -182,7 +182,11 @@
 
     <div id="manageUsersError" class="login-error" style="min-height:0;"></div>
 
-    <table id="usersTable" style="width:100%;border-collapse:collapse;margin:12px 0 20px;font-size:12.5px;">
+    <div style="overflow-x:auto;margin:12px 0 20px;">
+    <table id="usersTable" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12.5px;">
+      <colgroup>
+        <col style="width:24%;"><col style="width:14%;"><col style="width:14%;"><col style="width:20%;"><col style="width:28%;">
+      </colgroup>
       <thead>
         <tr style="text-align:left;color:var(--dim);font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:0.4px;">
           <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Username</th>
@@ -194,6 +198,7 @@
       </thead>
       <tbody id="usersTableBody"></tbody>
     </table>
+    </div>
 
     <h2 style="margin-top:0;">Add a new account</h2>
     <form id="addUserForm" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
@@ -807,15 +812,17 @@
     }
     tbody.innerHTML = userList.map(u => `
       <tr style="border-bottom:1px solid var(--line);">
-        <td style="padding:8px;">${u.username}${u.username === currentAuth.username ? ' <span style="color:var(--dimmer);">(you)</span>' : ''}</td>
+        <td style="padding:8px;overflow-wrap:anywhere;">${u.username}${u.username === currentAuth.username ? ' <span style="color:var(--dimmer);">(you)</span>' : ''}</td>
         <td style="padding:8px;font-family:var(--mono);">${u.role}</td>
         <td style="padding:8px;color:${u.active ? 'var(--ok)' : 'var(--red)'};">${u.active ? 'active' : 'deactivated'}</td>
         <td style="padding:8px;font-family:var(--mono);font-size:11px;color:var(--dim);">${u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'never'}</td>
-        <td style="padding:8px;white-space:nowrap;">
-          <button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reset" data-username="${u.username}">Reset pw</button>
-          ${u.username === currentAuth.username ? '' : (u.active
-            ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="deactivate" data-username="${u.username}">Deactivate</button>`
-            : `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reactivate" data-username="${u.username}">Reactivate</button>`)}
+        <td style="padding:8px;">
+          <div style="display:flex;flex-wrap:wrap;gap:6px;">
+            <button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reset" data-username="${u.username}">Reset pw</button>
+            ${u.username === currentAuth.username ? '' : (u.active
+              ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="deactivate" data-username="${u.username}">Deactivate</button>`
+              : `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reactivate" data-username="${u.username}">Reactivate</button>`)}
+          </div>
         </td>
       </tr>
     `).join('');
