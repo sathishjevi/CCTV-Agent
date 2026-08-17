@@ -1,0 +1,91 @@
+# Dependency vulnerability scanning — DATA_PROTECTION_SECURITY_ANALYSIS.md
+# DP-M6: "Both requirements.txt files use >= ranges exclusively... no
+# .github/dependabot.yml or pip-audit/safety step anywhere in CI." A
+# `pip install` with no lockfile can silently pull a newly-vulnerable
+# transitive dependency; this at least surfaces known CVEs as PRs.
+#
+# Scope: the Python packages actually deployed for the three live
+# Floorwatch Railway services (floorwatch-rules-engine,
+# floorwatch-intelligence, floorwatch-pipeline — see each service's
+# Dockerfile for exactly which skill directories it pip-installs from),
+# plus their Docker base images and this repo's GitHub Actions. Deliberately
+# NOT every requirements.txt in this monorepo — most of the other
+# skills/src directories are pre-existing, not-currently-deployed pieces
+# of the broader Aegis CCTV platform, unrelated to what Floorwatch ships;
+# scanning them here would just be PR noise against code nothing runs.
+
+version: 2
+updates:
+  # ── floorwatch-rules-engine (Python / pip) ───────────────────────────
+  - package-ecosystem: "pip"
+    directory: "/services/floorwatch-rules-engine"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "pip"
+    directory: "/services/floorwatch-rules-engine/tests"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # ── floorwatch-intelligence (Python / pip) ───────────────────────────
+  - package-ecosystem: "pip"
+    directory: "/services/floorwatch-intelligence"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "pip"
+    directory: "/services/floorwatch-intelligence/tests"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # ── floorwatch-pipeline's direct skill dependencies (pip) — see
+  #    services/floorwatch-pipeline/Dockerfile for why these four ─────
+  - package-ecosystem: "pip"
+    directory: "/skills/detection/floorwatch-ingest"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "pip"
+    directory: "/skills/detection/floorwatch-coverage"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "pip"
+    directory: "/skills/detection/floorwatch-pose"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "pip"
+    directory: "/skills/detection/yolo-detection-2026"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # ── Docker base images for the three deployed Floorwatch services ───
+  - package-ecosystem: "docker"
+    directory: "/services/floorwatch-rules-engine"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/services/floorwatch-intelligence"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/services/floorwatch-pipeline"
+    schedule:
+      interval: "weekly"
+
+  # ── GitHub Actions workflows ─────────────────────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

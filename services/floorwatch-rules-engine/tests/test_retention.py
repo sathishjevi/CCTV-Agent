@@ -9,9 +9,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import pytest  # noqa: E402
 import retention  # noqa: E402
 
 NOW = datetime.now(timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def isolate_user_store(tmp_path, monkeypatch):
+    """Every test below drives retention.main(), which (DP-M4) now also
+    purges stale accounts — point it at an isolated, empty JSON store so
+    no test ever reads/writes a real local users.json on the machine
+    running these tests."""
+    monkeypatch.setattr(retention.config, "USERS_PATH", tmp_path / "users.json")
+    monkeypatch.setattr(retention.config, "POSTGRES_DSN", "")
 
 
 def test_retention_main_prunes_old_digest_entries(tmp_path, monkeypatch, capsys):
@@ -80,3 +91,103 @@ def test_retention_main_respects_cli_override(tmp_path, monkeypatch, capsys):
     retention.main()
 
     assert digest_path.read_text() == ""  # pruned because --retention-days 30 overrode the 90-day default
+
+
+# ── DP-M4: account purging, wired through the same CLI ─────────────────
+
+def test_retention_main_purges_stale_deactivated_accounts(tmp_path, monkeypatch, capsys):
+    from floorwatch_auth import UserStore
+
+    users_path = tmp_path / "users.json"
+    store = UserStore(users_path)
+    store.create_user("still_active", "pw1234567890", role="viewer")
+    store.create_user("long_gone", "pw1234567890", role="viewer")
+    store.set_active("long_gone", False)
+    raw = json.loads(users_path.read_text())
+    raw["long_gone"]["deactivated_at"] = (NOW - timedelta(days=200)).isoformat()
+    users_path.write_text(json.dumps(raw))
+
+    monkeypatch.setattr(retention.config, "DIGEST_PATH", tmp_path / "shift_digest.jsonl")
+    monkeypatch.setattr(retention.config, "RETENTION_DAYS", 90)
+    monkeypatch.setattr(retention.config, "USERS_PATH", users_path)
+    monkeypatch.setattr(sys, "argv", ["retention.py", "--no-archive"])
+
+    retention.main()
+
+    out = capsys.readouterr().out
+    assert "Pruned 1 accounts" in out
+    remaining = json.loads(users_path.read_text())
+    assert "still_active" in remaining
+    assert "long_gone" not in remaining
+
+
+def test_retention_main_account_purge_dry_run_does_not_modify_store(tmp_path, monkeypatch, capsys):
+    from floorwatch_auth import UserStore
+
+    users_path = tmp_path / "users.json"
+    store = UserStore(users_path)
+    store.create_user("long_gone", "pw1234567890", role="viewer")
+    store.set_active("long_gone", False)
+    raw = json.loads(users_path.read_text())
+    raw["long_gone"]["deactivated_at"] = (NOW - timedelta(days=200)).isoformat()
+    users_path.write_text(json.dumps(raw))
+    before = users_path.read_text()
+
+    monkeypatch.setattr(retention.config, "DIGEST_PATH", tmp_path / "shift_digest.jsonl")
+    monkeypatch.setattr(retention.config, "RETENTION_DAYS", 90)
+    monkeypatch.setattr(retention.config, "USERS_PATH", users_path)
+    monkeypatch.setattr(sys, "argv", ["retention.py", "--dry-run"])
+
+    retention.main()
+
+    out = capsys.readouterr().out
+    assert "Would prune 1 accounts" in out
+    assert users_path.read_text() == before
+
+
+def test_retention_main_account_purge_archives_before_deleting(tmp_path, monkeypatch, capsys):
+    from floorwatch_auth import UserStore
+
+    users_path = tmp_path / "users.json"
+    archive_dir = tmp_path / "my_archive"
+    store = UserStore(users_path)
+    store.create_user("long_gone", "pw1234567890", role="viewer")
+    store.set_active("long_gone", False)
+    raw = json.loads(users_path.read_text())
+    raw["long_gone"]["deactivated_at"] = (NOW - timedelta(days=200)).isoformat()
+    users_path.write_text(json.dumps(raw))
+
+    monkeypatch.setattr(retention.config, "DIGEST_PATH", tmp_path / "shift_digest.jsonl")
+    monkeypatch.setattr(retention.config, "RETENTION_DAYS", 90)
+    monkeypatch.setattr(retention.config, "USERS_PATH", users_path)
+    monkeypatch.setattr(sys, "argv", ["retention.py", "--archive-dir", str(archive_dir)])
+
+    retention.main()
+
+    archived = list(archive_dir.glob("accounts_archived_*.jsonl"))
+    assert archived
+    assert "long_gone" in archived[0].read_text()
+
+
+def test_retention_main_never_purges_active_accounts(tmp_path, monkeypatch, capsys):
+    from floorwatch_auth import UserStore
+
+    users_path = tmp_path / "users.json"
+    store = UserStore(users_path)
+    store.create_user("very_old_but_active", "pw1234567890", role="viewer",
+                       created_by=None)
+    # backdate created_at only — account has never been deactivated
+    raw = json.loads(users_path.read_text())
+    raw["very_old_but_active"]["created_at"] = (NOW - timedelta(days=1000)).isoformat()
+    users_path.write_text(json.dumps(raw))
+
+    monkeypatch.setattr(retention.config, "DIGEST_PATH", tmp_path / "shift_digest.jsonl")
+    monkeypatch.setattr(retention.config, "RETENTION_DAYS", 90)
+    monkeypatch.setattr(retention.config, "USERS_PATH", users_path)
+    monkeypatch.setattr(sys, "argv", ["retention.py", "--no-archive"])
+
+    retention.main()
+
+    out = capsys.readouterr().out
+    assert "Pruned 0 accounts" in out
+    assert "very_old_but_active" in json.loads(users_path.read_text())

@@ -1,0 +1,74 @@
+name: Floorwatch tests
+
+# Set 2 (production-readiness): no CI pipeline previously ran the test
+# suites automatically on push — everything was run manually. This closes
+# that gap for the two Floorwatch API services (floorwatch-rules-engine,
+# floorwatch-intelligence). Scoped to paths that can actually affect
+# those two services' behavior — the shared skills/lib modules included,
+# since both services import from there directly.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/floorwatch-rules-engine/**"
+      - "services/floorwatch-intelligence/**"
+      - "skills/lib/**"
+      - "config/**"
+      - ".github/workflows/floorwatch-tests.yml"
+  pull_request:
+    paths:
+      - "services/floorwatch-rules-engine/**"
+      - "services/floorwatch-intelligence/**"
+      - "skills/lib/**"
+      - "config/**"
+      - ".github/workflows/floorwatch-tests.yml"
+
+jobs:
+  rules-engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: |
+            services/floorwatch-rules-engine/requirements.txt
+            services/floorwatch-rules-engine/tests/requirements-dev.txt
+
+      - name: Install dependencies
+        working-directory: services/floorwatch-rules-engine
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r tests/requirements-dev.txt
+
+      - name: Run tests
+        working-directory: services/floorwatch-rules-engine
+        run: python -m pytest tests/ -v
+
+  intelligence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+          cache-dependency-path: |
+            services/floorwatch-intelligence/requirements.txt
+            services/floorwatch-intelligence/tests/requirements-dev.txt
+
+      - name: Install dependencies
+        working-directory: services/floorwatch-intelligence
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r tests/requirements-dev.txt
+
+      - name: Run tests
+        working-directory: services/floorwatch-intelligence
+        run: python -m pytest tests/ -v

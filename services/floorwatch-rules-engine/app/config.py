@@ -90,6 +90,25 @@ AUTH_SECRET = os.environ.get("FLOORWATCH_AUTH_SECRET") or get_or_create_secret(
 USERS_PATH = Path(os.environ.get("FLOORWATCH_USERS_PATH", SERVICE_DIR / "users.json"))
 TOKEN_TTL_SECONDS = int(os.environ.get("FLOORWATCH_TOKEN_TTL_SECONDS", 12 * 3600))
 
+# ── Rate limiting (DATA_PROTECTION_SECURITY_ANALYSIS.md DP-H3) ──────────
+# /api/login had NO throttling at all — combined with an 8-char-minimum
+# password policy, this made online brute-force/credential-stuffing
+# against any known username unbounded-speed. Two limiters, same
+# rationale as floorwatch-intelligence's /api/chat limiter (per-caller,
+# in-process — see skills/lib/floorwatch_rate_limit.py's module
+# docstring for why, and its "no horizontal scaling" caveat):
+#   - per-IP: catches one attacker hammering many usernames, or one
+#     username, from a single source.
+#   - per-username: catches a DISTRIBUTED attempt against one specific
+#     target account from many IPs (e.g. a botnet), which a per-IP-only
+#     limit would never trip.
+LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE = int(os.environ.get("FLOORWATCH_LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE", 10))
+LOGIN_RATE_LIMIT_PER_USERNAME_PER_MINUTE = int(
+    os.environ.get("FLOORWATCH_LOGIN_RATE_LIMIT_PER_USERNAME_PER_MINUTE", 5))
+# Post-auth, but still throttled — bounds a compromised/malicious admin
+# token from bulk-creating/enumerating accounts unbounded.
+ADMIN_RATE_LIMIT_PER_MINUTE = int(os.environ.get("FLOORWATCH_ADMIN_RATE_LIMIT_PER_MINUTE", 30))
+
 # Account storage — see skills/lib/floorwatch_auth.py's build_user_store().
 # Empty falls back to the local users.json (dev/pilot only — doesn't
 # survive a Railway redeploy without a volume). Point this at the SAME

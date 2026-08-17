@@ -73,6 +73,17 @@ RETRIEVAL_TOP_K = int(os.environ.get("FLOORWATCH_RETRIEVAL_TOP_K", 5))
 AUTH_SECRET = os.environ.get("FLOORWATCH_AUTH_SECRET") or get_or_create_secret(
     Path(os.environ.get("FLOORWATCH_AUTH_SECRET_PATH", REPO_ROOT / "services" / ".floorwatch_auth_secret")))
 
+# Token revocation (production-readiness: "no server-side token
+# revocation") — optional. This service never revokes anything itself
+# (only floorwatch-rules-engine deactivates accounts / force-resets
+# passwords), but if pointed at the SAME Redis instance rules-engine
+# uses, it can honor a revocation that happened there instead of
+# continuing to accept an otherwise-valid token for a since-revoked
+# user. Left unset, this service has no way to learn about a revocation
+# and keeps accepting such a token until it naturally expires — see
+# main.py's startup log for the explicit warning when that's the case.
+REDIS_URL = os.environ.get("FLOORWATCH_REDIS_URL", "")
+
 # This service's own token for its server-to-server GETs against the rules
 # engine (tools.py). Deliberately issued at "viewer" scope — never a role
 # that could pass require_supervisor there — so a bug in the read-only tool

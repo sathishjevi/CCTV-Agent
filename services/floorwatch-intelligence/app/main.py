@@ -34,21 +34,39 @@ from incident_notes import IncidentNoteStore  # noqa: E402
 from ingest import ingest_new_records  # noqa: E402
 from llm import build_assistant  # noqa: E402
 from mcp_server import build_mcp_server  # noqa: E402
-from rate_limit import RateLimiter  # noqa: E402
+from floorwatch_rate_limit import RateLimiter  # noqa: E402
+from floorwatch_security_headers import install_security_headers  # noqa: E402
 from tools import ReadOnlyTools  # noqa: E402
 from vector_store import build_vector_store  # noqa: E402
 from embeddings import build_embedding_provider  # noqa: E402
 
-from floorwatch_auth import make_auth_dependency  # noqa: E402
-
-# Same auth used by floorwatch-rules-engine (shared secret) — a supervisor's
-# login there works here too. See SECURITY_REVIEW.md finding AUTH-1.
-require_auth = make_auth_dependency(config.AUTH_SECRET)
-require_supervisor = make_auth_dependency(config.AUTH_SECRET, required_role="supervisor")
+from floorwatch_auth import RevocationStore, make_auth_dependency  # noqa: E402
 
 
 def log(msg: str):
     print(f"[intelligence] {msg}", file=sys.stderr, flush=True)
+
+
+# Same auth used by floorwatch-rules-engine (shared secret) — a supervisor's
+# login there works here too. See SECURITY_REVIEW.md finding AUTH-1.
+#
+# Token revocation (production-readiness: "no server-side token
+# revocation") — this service never revokes anything itself (only
+# floorwatch-rules-engine deactivates accounts / force-resets passwords),
+# but honors a revocation that happened there if pointed at the same
+# Redis instance. See config.py's REDIS_URL comment.
+if config.REDIS_URL:
+    import redis.asyncio as aioredis
+    revocation_store = RevocationStore(aioredis.Redis.from_url(config.REDIS_URL, decode_responses=True))
+else:
+    revocation_store = None
+    log("WARNING: FLOORWATCH_REDIS_URL not set — this service cannot check token revocation. "
+        "A token revoked on floorwatch-rules-engine (deactivated account, forced password reset) "
+        "stays valid here until it naturally expires.")
+
+require_auth = make_auth_dependency(config.AUTH_SECRET, revocation_store=revocation_store)
+require_supervisor = make_auth_dependency(
+    config.AUTH_SECRET, required_role="supervisor", revocation_store=revocation_store)
 
 
 vector_store = build_vector_store(config)
@@ -79,6 +97,8 @@ async def lifespan(app: FastAPI):
     log(f"Supervisor intelligence service started. Assistant available: {assistant is not None}")
     yield
     task.cancel()
+    if revocation_store is not None:
+        await revocation_store.close()
 
 
 app = FastAPI(
@@ -92,6 +112,7 @@ app.add_middleware(
     CORSMiddleware, allow_origins=config.CORS_ALLOWED_ORIGINS,
     allow_methods=["*"], allow_headers=["*"], allow_credentials=True,
 )
+install_security_headers(app)  # DP-M2 — see floorwatch_security_headers.py
 
 
 @app.get("/healthz")

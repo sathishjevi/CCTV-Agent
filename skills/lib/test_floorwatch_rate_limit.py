@@ -1,11 +1,13 @@
-"""Unit tests for the per-caller /api/chat rate limiter (SECURITY_REVIEW.md H2)."""
+"""Unit tests for the shared per-caller rate limiter (used by both
+floorwatch-intelligence's /api/chat and floorwatch-rules-engine's
+/api/login — see floorwatch_rate_limit.py's module docstring)."""
 
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from rate_limit import RateLimiter  # noqa: E402
+from floorwatch_rate_limit import RateLimiter  # noqa: E402
 
 
 def test_allows_up_to_the_limit():

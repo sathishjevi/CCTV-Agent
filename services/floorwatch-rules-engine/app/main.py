@@ -18,7 +18,7 @@ import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -32,14 +32,49 @@ from notifications import ContactBook, NotificationDispatcher, build_sender  # n
 from roster import Roster  # noqa: E402
 
 from floorwatch_auth import (  # noqa: E402
-    VALID_ROLES, build_user_store, issue_token, make_auth_dependency, verify_ws_token,
+    VALID_ROLES, RevocationStore, build_user_store, issue_token, make_auth_dependency,
+    validate_password_strength, validate_username, verify_ws_token,
 )
+from floorwatch_rate_limit import RateLimiter  # noqa: E402
 from floorwatch_schema import validate_event  # noqa: E402
+from floorwatch_security_headers import install_security_headers  # noqa: E402
 
 users = build_user_store(config.POSTGRES_DSN, config.USERS_PATH)
-require_auth = make_auth_dependency(config.AUTH_SECRET)                    # any valid role
-require_supervisor = make_auth_dependency(config.AUTH_SECRET, required_role="supervisor")  # supervisor or admin
-require_admin = make_auth_dependency(config.AUTH_SECRET, required_role="admin")
+
+# Token revocation (production-readiness: "no server-side token
+# revocation") — Redis-backed since this service already requires Redis
+# for its event/motion streams, so this adds no new infrastructure. See
+# floorwatch_auth.py's RevocationStore docstring for exactly what this
+# does and doesn't cover.
+import redis.asyncio as aioredis  # noqa: E402
+revocation_store = RevocationStore(
+    aioredis.Redis.from_url(config.REDIS_URL, decode_responses=True), ttl_seconds=config.TOKEN_TTL_SECONDS)
+
+require_auth = make_auth_dependency(config.AUTH_SECRET, revocation_store=revocation_store)  # any valid role
+require_supervisor = make_auth_dependency(
+    config.AUTH_SECRET, required_role="supervisor", revocation_store=revocation_store)  # supervisor or admin
+require_admin = make_auth_dependency(
+    config.AUTH_SECRET, required_role="admin", revocation_store=revocation_store)
+
+# DATA_PROTECTION_SECURITY_ANALYSIS.md DP-H3 — see config.py's comment
+# above these three env vars for the per-IP vs per-username rationale.
+login_rate_limiter_by_ip = RateLimiter(config.LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE, window_seconds=60.0)
+login_rate_limiter_by_username = RateLimiter(config.LOGIN_RATE_LIMIT_PER_USERNAME_PER_MINUTE, window_seconds=60.0)
+admin_rate_limiter = RateLimiter(config.ADMIN_RATE_LIMIT_PER_MINUTE, window_seconds=60.0)
+
+
+def client_ip(request: Request) -> str:
+    """Prefers X-Forwarded-For (Railway and most reverse proxies set this
+    — request.client.host alone would just be the proxy's own address,
+    making every caller look identical for rate-limiting purposes).
+    Takes the leftmost address (the original client, per the standard
+    left-to-right append order of that header) and falls back to
+    request.client.host if the header isn't present (e.g. local dev,
+    direct connection)."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 def log(msg: str):
@@ -61,8 +96,9 @@ def _seed_admin_from_env():
             f"exists — not touching its password/role. Unset these env vars once you no longer need "
             f"them, or leave them — they're harmless from here on.")
         return
-    if len(config.ADMIN_PASSWORD) < 8:
-        log(f"WARNING: FLOORWATCH_ADMIN_PASSWORD is set but shorter than 8 characters — "
+    ok, reason = validate_password_strength(config.ADMIN_PASSWORD, username=config.ADMIN_USERNAME)
+    if not ok:
+        log(f"WARNING: FLOORWATCH_ADMIN_PASSWORD rejected ({reason}) — "
             f"refusing to seed account '{config.ADMIN_USERNAME}'.")
         return
     users.create_user(config.ADMIN_USERNAME, config.ADMIN_PASSWORD, role="admin",
@@ -250,6 +286,7 @@ async def lifespan(app: FastAPI):
     consumer_task.cancel()
     motion_task.cancel()
     ticker_task.cancel()
+    await revocation_store.close()
 
 
 app = FastAPI(
@@ -263,6 +300,7 @@ app.add_middleware(
     CORSMiddleware, allow_origins=config.CORS_ALLOWED_ORIGINS,
     allow_methods=["*"], allow_headers=["*"], allow_credentials=True,
 )
+install_security_headers(app)  # DP-M2 — see floorwatch_security_headers.py
 
 
 COVERAGE_UI_PATH = config.REPO_ROOT / "dashboard" / "floorwatch_demo.html"
@@ -286,7 +324,20 @@ class LoginRequest(BaseModel):
 
 
 @app.post("/api/login")
-async def login(body: LoginRequest):
+async def login(body: LoginRequest, request: Request):
+    ip = client_ip(request)
+    if not login_rate_limiter_by_ip.allow(ip):
+        retry_after = login_rate_limiter_by_ip.retry_after_seconds(ip)
+        return JSONResponse(
+            status_code=429, content={"error": "Too many login attempts — try again shortly."},
+            headers={"Retry-After": str(int(retry_after) + 1)},
+        )
+    if not login_rate_limiter_by_username.allow(body.username):
+        retry_after = login_rate_limiter_by_username.retry_after_seconds(body.username)
+        return JSONResponse(
+            status_code=429, content={"error": "Too many login attempts for this account — try again shortly."},
+            headers={"Retry-After": str(int(retry_after) + 1)},
+        )
     auth_result = users.authenticate(body.username, body.password)
     if auth_result is None:
         return JSONResponse(status_code=401, content={"error": "invalid username or password"})
@@ -315,8 +366,9 @@ async def change_password(body: ChangePasswordRequest, user=Depends(require_auth
     auth_result = users.authenticate(username, body.current_password)
     if auth_result is None:
         return JSONResponse(status_code=401, content={"error": "current password is incorrect"})
-    if len(body.new_password) < 8:
-        return JSONResponse(status_code=400, content={"error": "new password must be at least 8 characters"})
+    ok, reason = validate_password_strength(body.new_password, username=username)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
     users.set_password(username, body.new_password, must_change_password=False)
     return {"ok": True}
 
@@ -327,18 +379,40 @@ class CreateUserRequest(BaseModel):
     role: str = "supervisor"
 
 
+def _check_admin_rate_limit(user) -> "JSONResponse | None":
+    """Shared by every /api/admin/users* handler — bounds a compromised
+    or malicious admin token from bulk-creating/enumerating/deactivating
+    accounts unbounded (DP-H3's admin-endpoints half). Returns a 429
+    response if over budget, else None (caller proceeds normally)."""
+    if not admin_rate_limiter.allow(user["sub"]):
+        retry_after = admin_rate_limiter.retry_after_seconds(user["sub"])
+        return JSONResponse(
+            status_code=429, content={"error": "Too many admin actions — try again shortly."},
+            headers={"Retry-After": str(int(retry_after) + 1)},
+        )
+    return None
+
+
 @app.get("/api/admin/users")
 async def list_users(user=Depends(require_admin)):
+    if (limited := _check_admin_rate_limit(user)) is not None:
+        return limited
     return {"users": users.list_users()}
 
 
 @app.post("/api/admin/users")
 async def create_user_endpoint(body: CreateUserRequest, user=Depends(require_admin)):
+    if (limited := _check_admin_rate_limit(user)) is not None:
+        return limited
     if body.role not in VALID_ROLES - {"service"}:
         return JSONResponse(status_code=400, content={
             "error": f"role must be one of: {sorted(VALID_ROLES - {'service'})}"})
-    if len(body.password) < 8:
-        return JSONResponse(status_code=400, content={"error": "password must be at least 8 characters"})
+    ok, reason = validate_username(body.username)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    ok, reason = validate_password_strength(body.password, username=body.username)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
     if users.user_exists(body.username):
         return JSONResponse(status_code=409, content={"error": f"user '{body.username}' already exists"})
     users.create_user(body.username, body.password, role=body.role, created_by=user["sub"])
@@ -348,16 +422,23 @@ async def create_user_endpoint(body: CreateUserRequest, user=Depends(require_adm
 
 @app.post("/api/admin/users/{username}/deactivate")
 async def deactivate_user(username: str, user=Depends(require_admin)):
+    if (limited := _check_admin_rate_limit(user)) is not None:
+        return limited
     if username == user["sub"]:
         return JSONResponse(status_code=400, content={"error": "cannot deactivate your own account"})
     if not users.set_active(username, False):
         return JSONResponse(status_code=404, content={"error": f"user '{username}' not found"})
+    # Deactivation should mean "this account can't act anymore," not just
+    # "can't log in again" — kill any token they're already holding too.
+    await revocation_store.revoke(username)
     log(f"Admin '{user['sub']}' deactivated account '{username}'")
     return {"ok": True}
 
 
 @app.post("/api/admin/users/{username}/reactivate")
 async def reactivate_user(username: str, user=Depends(require_admin)):
+    if (limited := _check_admin_rate_limit(user)) is not None:
+        return limited
     if not users.set_active(username, True):
         return JSONResponse(status_code=404, content={"error": f"user '{username}' not found"})
     log(f"Admin '{user['sub']}' reactivated account '{username}'")
@@ -374,10 +455,20 @@ async def reset_password(username: str, body: ResetPasswordRequest, user=Depends
     out-of-band (Slack, in person, etc.) — no email system in this
     codebase. must_change_password is forced true so the temp password
     can't quietly become permanent."""
-    if len(body.new_password) < 8:
-        return JSONResponse(status_code=400, content={"error": "password must be at least 8 characters"})
+    if (limited := _check_admin_rate_limit(user)) is not None:
+        return limited
+    ok, reason = validate_password_strength(body.new_password, username=username)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
     if not users.set_password(username, body.new_password, must_change_password=True):
         return JSONResponse(status_code=404, content={"error": f"user '{username}' not found"})
+    # An admin-forced reset is the "I think this account may be
+    # compromised" lever — kill whatever token they're currently holding,
+    # not just their old password. Deliberately NOT applied to self-service
+    # /api/change-password below: that caller already re-proved they hold
+    # both a valid token AND the current password, so there's no reason to
+    # log out the very session that just made this change.
+    await revocation_store.revoke(username)
     log(f"Admin '{user['sub']}' reset the password for account '{username}'")
     return {"ok": True}
 
@@ -492,7 +583,7 @@ async def dismiss_task_flag(task_id: str, user=Depends(require_supervisor)):
 
 @app.websocket("/events")
 async def events_ws(ws: WebSocket):
-    payload = await verify_ws_token(config.AUTH_SECRET, ws)
+    payload = await verify_ws_token(config.AUTH_SECRET, ws, revocation_store=revocation_store)
     if payload is None:
         await ws.close(code=4401)
         return

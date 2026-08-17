@@ -4,10 +4,18 @@ Retention/rotation job — SECURITY_REVIEW.md M1: "No retention/expiry
 policy — history grows unbounded forever... Decide an explicit retention
 window (the brief never specifies one) and implement rotation/deletion."
 
-Prunes shift_digest.jsonl entries older than --retention-days (default:
-config.RETENTION_DAYS, 90 — see config.py for the rationale). Pruned
-entries are archived to a dated JSONL file before deletion by default —
-never silently destroyed.
+Prunes shift_digest.jsonl entries AND stale deactivated accounts, both
+older than --retention-days (default: config.RETENTION_DAYS, 90 — see
+config.py for the rationale). Pruned entries/accounts are archived to a
+dated JSONL file before deletion by default — never silently destroyed.
+
+The account half is DP-M4 (DATA_PROTECTION_SECURITY_ANALYSIS.md): this
+job used to only ever touch shift_digest.jsonl — a deactivated account's
+record (and any personal data in created_by/last_login_at) persisted
+forever with no expiry path. Only accounts an admin has explicitly
+deactivated are ever eligible, and only once they've sat deactivated past
+the retention window — an active account is never touched regardless of
+age. See floorwatch_auth.py's purge_stale_deactivated_accounts().
 
 Meant to run on a schedule (cron/Task Scheduler/Celery Beat), same as
 shift_digest_job.py — see that script's docstring for why this project
@@ -22,12 +30,14 @@ Usage:
 
 import argparse
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "app"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "skills" / "lib"))
 import config  # noqa: E402
 from floorwatch_retention import prune_jsonl_file  # noqa: E402
+from floorwatch_auth import build_user_store, purge_stale_deactivated_accounts  # noqa: E402
 
 
 def main():
@@ -54,6 +64,22 @@ def main():
     print(f"Kept {result['kept']} entries ({result['undated']} had no parseable timestamp — always kept)")
     if result["pruned"] and archive_dir and not args.dry_run:
         print(f"Archived pruned entries under {archive_dir}/")
+
+    # DP-M4 — accounts deactivated (not just any old account) past the same
+    # retention window. Uses whichever store main.py itself uses (Postgres
+    # if configured, else the local JSON file).
+    users = build_user_store(config.POSTGRES_DSN, config.USERS_PATH)
+    accounts_dir = archive_dir if archive_dir else config.SERVICE_DIR / "archive"
+    accounts_archive_path = None if args.no_archive else (
+        accounts_dir / f"accounts_archived_{datetime.now(timezone.utc):%Y%m%d}.jsonl")
+    account_result = purge_stale_deactivated_accounts(
+        users, retention_days, archive_path=accounts_archive_path, dry_run=args.dry_run)
+
+    print(f"{verb} {account_result['purged']} accounts deactivated more than {retention_days} days ago")
+    print(f"Kept {account_result['kept']} accounts (active, recently deactivated, or missing a "
+          f"deactivated_at timestamp)")
+    if account_result["purged"] and accounts_archive_path and not args.dry_run:
+        print(f"Archived purged accounts to {accounts_archive_path}")
 
 
 if __name__ == "__main__":

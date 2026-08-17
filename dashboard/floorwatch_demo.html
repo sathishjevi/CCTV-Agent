@@ -400,7 +400,38 @@
   setInterval(tickClock, 1000); tickClock();
 
   function restBase(wsUrl){
-    return wsUrl.replace(/^ws/, 'http').replace(/\/events\/?$/, '');
+    // Was a regex requiring "/events" at the very end of the string —
+    // broke as soon as a token query string was appended after it
+    // (ws://host/events?token=... never matches /\/events\/?$/), leaving
+    // "/events?token=..." un-stripped and every REST call 404ing with the
+    // token+path glued onto the end. Proper URL parsing instead, so
+    // path/query/hash are handled correctly regardless of what's around them.
+    try {
+      const u = new URL(wsUrl.replace(/^ws/, 'http'));
+      u.pathname = u.pathname.replace(/\/events\/?$/, '');
+      u.search = '';
+      u.hash = '';
+      return u.toString().replace(/\/$/, '');
+    } catch(e){
+      return wsUrl.replace(/^ws/, 'http').split('?')[0].replace(/\/events\/?$/, '');
+    }
+  }
+
+  // DP-H1/DP-H2 (DATA_PROTECTION_SECURITY_ANALYSIS.md) — every value below
+  // that can originate from user input (task names, zone names/messages
+  // from server events, usernames) was going into innerHTML unescaped,
+  // including inside HTML attribute values (data-username="..."), which
+  // is exploitable even if only text-content escaping is applied. Escapes
+  // both & < > and " ' so it's safe in either context. Rule followed
+  // throughout this file: state objects (tasks/pendingCommands/zoneState)
+  // always store RAW text; escaping happens exactly once, at the point a
+  // render*() function (or a direct logEvent() call building its own
+  // string) actually inserts it into the DOM — never at write-time, to
+  // avoid double-escaping the same value through two different paths.
+  function escapeHtml(s){
+    return String(s == null ? '' : s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
 
   function renderZones(){
@@ -411,8 +442,8 @@
       div.className = 'zone state-'+st.state;
       div.style.left = z.x+'%'; div.style.top = z.y+'%'; div.style.width = z.w+'%'; div.style.height = z.h+'%';
       let label = {covered:'Covered', gap:'Gap detected', nudge:'Nudge sent', command:'Command issued', escalated:'Escalated'}[st.state] || st.state;
-      div.innerHTML = `<div><div class="zn">${z.name}</div><div class="zr">${z.role}</div></div>
-        <div class="zs"><span class="sdot"></span>${label}</div>`;
+      div.innerHTML = `<div><div class="zn">${escapeHtml(z.name)}</div><div class="zr">${escapeHtml(z.role)}</div></div>
+        <div class="zs"><span class="sdot"></span>${escapeHtml(label)}</div>`;
       floorEl.appendChild(div);
     });
     document.getElementById('statCovered').textContent = ZONES.filter(z=>(zoneState[z.id]||{}).state==='covered').length;
@@ -454,7 +485,7 @@
       const div = document.createElement('div');
       div.className = 'taskcard';
       div.innerHTML = `
-        <div class="hd"><div class="tn">${t.name}</div><div class="tz">${t.zone}</div></div>
+        <div class="hd"><div class="tn">${escapeHtml(t.name)}</div><div class="tz">${escapeHtml(t.zone)}</div></div>
         <div class="barwrap"><div class="bar ${barClass}" style="width:${pct}%"></div></div>
         <div class="stats"><span>Active: ${t.activeMin.toFixed(1)} / ${t.assignedMin} min</span><span>Elapsed: ${elapsedMin.toFixed(1)} / ${t.assignedMin} min</span></div>
         <div class="status ${statusClass}">${statusText}</div>
@@ -473,7 +504,7 @@
       const res = await authFetch(`${base}/api/tasks/${encodeURIComponent(taskId)}/complete`, {method:'POST'});
       if(!res.ok) throw new Error(`HTTP ${res.status}`);
     } catch(err){
-      logEvent('crit', `Failed to complete task ${taskId}: ${err.message}`);
+      logEvent('crit', `Failed to complete task ${escapeHtml(taskId)}: ${escapeHtml(err.message)}`);
     }
   }
 
@@ -483,7 +514,7 @@
       const res = await authFetch(`${base}/api/queue/zone/${encodeURIComponent(zoneId)}/${action}`, {method:'POST'});
       if(!res.ok) throw new Error(`HTTP ${res.status}`);
     } catch(err){
-      logEvent('crit', `Failed to send ${action} for ${zoneId}: ${err.message}`);
+      logEvent('crit', `Failed to send ${escapeHtml(action)} for ${escapeHtml(zoneId)}: ${escapeHtml(err.message)}`);
     }
   }
 
@@ -493,7 +524,7 @@
       const res = await authFetch(`${base}/api/queue/task/${encodeURIComponent(taskId)}/${action}`, {method:'POST'});
       if(!res.ok) throw new Error(`HTTP ${res.status}`);
     } catch(err){
-      logEvent('crit', `Failed to send ${action} for task ${taskId}: ${err.message}`);
+      logEvent('crit', `Failed to send ${escapeHtml(action)} for task ${escapeHtml(taskId)}: ${escapeHtml(err.message)}`);
     }
   }
 
@@ -509,12 +540,12 @@
         const card = document.createElement('div');
         card.className = 'cmdcard';
         card.innerHTML = `
-          <div class="hd"><div class="zn">${cmd.zone_name || zoneId}</div><div class="age">coverage gap unresolved</div></div>
+          <div class="hd"><div class="zn">${escapeHtml(cmd.zone_name || zoneId)}</div><div class="age">coverage gap unresolved</div></div>
           <div class="msg">Auto-drafted directive ready for your approval:
-            <span class="draft">"${cmd.message || ''}"</span></div>
+            <span class="draft">"${escapeHtml(cmd.message || '')}"</span></div>
           <div class="cmdrow">
-            <button class="btn approve" data-zone="${zoneId}" data-a="approve">Approve &amp; send</button>
-            <button class="btn reassign" data-zone="${zoneId}" data-a="reassign">Reassign coverage</button>
+            <button class="btn approve" data-zone="${escapeHtml(zoneId)}" data-a="approve">Approve &amp; send</button>
+            <button class="btn reassign" data-zone="${escapeHtml(zoneId)}" data-a="reassign">Reassign coverage</button>
           </div>`;
         queueEl.appendChild(card);
       });
@@ -523,12 +554,12 @@
         const card = document.createElement('div');
         card.className = 'cmdcard effort';
         card.innerHTML = `
-          <div class="hd"><div class="zn">${t.name}</div><div class="age">marked complete, low active time</div></div>
+          <div class="hd"><div class="zn">${escapeHtml(t.name)}</div><div class="age">marked complete, low active time</div></div>
           <div class="msg">Employee marked this task complete. Active time detected: <b>${t.activeMin.toFixed(1)} of ${t.assignedMin} min</b> assigned.
             <span class="draft">This is a flag, not a conclusion — worth a quick check before assuming anything.</span></div>
           <div class="cmdrow">
-            <button class="btn approve" data-type="task" data-id="${id}" data-a="confirm">Confirm — follow up with employee</button>
-            <button class="btn dismiss" data-type="task" data-id="${id}" data-a="dismiss">Dismiss — looks fine</button>
+            <button class="btn approve" data-type="task" data-id="${escapeHtml(id)}" data-a="confirm">Confirm — follow up with employee</button>
+            <button class="btn dismiss" data-type="task" data-id="${escapeHtml(id)}" data-a="dismiss">Dismiss — looks fine</button>
           </div>`;
         queueEl.appendChild(card);
       });
@@ -564,21 +595,21 @@
     switch(evt.event_type){
       case 'zone_gap':
         zoneState[evt.zone_id].state = 'gap';
-        logEvent('warn', `Coverage gap detected — ${zoneLabel(evt)} unattended (confidence ${evt.confidence}).`);
+        logEvent('warn', `Coverage gap detected — ${escapeHtml(zoneLabel(evt))} unattended (confidence ${evt.confidence}).`);
         break;
       case 'zone_nudge_sent':
         zoneState[evt.zone_id].state = 'nudge';
         counters.nudges++;
-        logEvent('warn', `Nudge sent for ${zoneLabel(evt)}${evt.shadow_mode_suppressed ? ' (shadow mode — not actually delivered)' : ''}.`);
+        logEvent('warn', `Nudge sent for ${escapeHtml(zoneLabel(evt))}${evt.shadow_mode_suppressed ? ' (shadow mode — not actually delivered)' : ''}.`);
         break;
       case 'zone_supervisor_command':
         zoneState[evt.zone_id].state = 'command';
         pendingCommands[evt.zone_id] = evt;
-        logEvent('crit', `Supervisor directive drafted for ${zoneLabel(evt)} — awaiting approval.`);
+        logEvent('crit', `Supervisor directive drafted for ${escapeHtml(zoneLabel(evt))} — awaiting approval.`);
         break;
       case 'zone_escalated':
         zoneState[evt.zone_id].state = 'escalated';
-        logEvent('crit', `<b>${zoneLabel(evt)} escalated</b> — logged to shift digest, unresolved after supervisor command timeout.`);
+        logEvent('crit', `<b>${escapeHtml(zoneLabel(evt))} escalated</b> — logged to shift digest, unresolved after supervisor command timeout.`);
         break;
       case 'zone_resolved':
         zoneState[evt.zone_id].state = 'covered';
@@ -586,8 +617,8 @@
         counters.cmds += (evt.resolved_by && evt.resolved_by.startsWith('supervisor:')) ? 1 : 0;
         logEvent(evt.resolved_by === 'auto' ? 'ok' : 'info',
           evt.resolved_by === 'auto'
-            ? `${zoneLabel(evt)} self-resolved.`
-            : `${zoneLabel(evt)} resolved by ${evt.resolved_by}.`);
+            ? `${escapeHtml(zoneLabel(evt))} self-resolved.`
+            : `${escapeHtml(zoneLabel(evt))} resolved by ${escapeHtml(evt.resolved_by)}.`);
         break;
       case 'task_assigned':
         tasks[evt.task_id] = {
@@ -595,7 +626,7 @@
           assignedMin: evt.assigned_minutes, activeMin: 0, elapsedMin: 0,
           assignedAtMs: Date.now(), status: 'ok',
         };
-        logEvent('eff', `Task assigned: "${evt.task_name}", ${zoneLabel(evt)}, ${evt.assigned_minutes} min budget.`);
+        logEvent('eff', `Task assigned: "${escapeHtml(evt.task_name)}", ${escapeHtml(zoneLabel(evt))}, ${evt.assigned_minutes} min budget.`);
         break;
       case 'task_active_time_update':
         if(tasks[evt.task_id]) tasks[evt.task_id].activeMin = evt.active_minutes;
@@ -603,18 +634,18 @@
       case 'task_low_effort_nudge':
         if(tasks[evt.task_id]){ tasks[evt.task_id].status = 'low'; tasks[evt.task_id].activeMin = evt.active_minutes; }
         counters.nudges++;
-        logEvent('eff', `Low active-time nudge for "${evt.task_name}"${evt.shadow_mode_suppressed ? ' (shadow mode — not actually delivered)' : ''}.`);
+        logEvent('eff', `Low active-time nudge for "${escapeHtml(evt.task_name)}"${evt.shadow_mode_suppressed ? ' (shadow mode — not actually delivered)' : ''}.`);
         break;
       case 'task_flag':
         if(tasks[evt.task_id]){ tasks[evt.task_id].status = 'flagged'; tasks[evt.task_id].activeMin = evt.active_minutes; tasks[evt.task_id].elapsedMin = tasks[evt.task_id].assignedMin; }
         counters.effortFlags++;
-        logEvent('eff', `<b>"${evt.task_name}" flagged</b> — ${evt.message || 'active time below expected for this task type.'}`);
+        logEvent('eff', `<b>"${escapeHtml(evt.task_name)}" flagged</b> — ${escapeHtml(evt.message || 'active time below expected for this task type.')}`);
         break;
       case 'task_resolved':
         if(tasks[evt.task_id]){ tasks[evt.task_id].status = 'resolved'; tasks[evt.task_id].activeMin = evt.active_minutes; }
         logEvent('eff', evt.resolved_by === 'auto'
-          ? `"${evt.task_name}" completed — active time met expectations.`
-          : `"${evt.task_name}" reviewed by ${evt.resolved_by}${evt.action_type ? ' ('+evt.action_type+')' : ''}.`);
+          ? `"${escapeHtml(evt.task_name)}" completed — active time met expectations.`
+          : `"${escapeHtml(evt.task_name)}" reviewed by ${escapeHtml(evt.resolved_by)}${evt.action_type ? ' ('+escapeHtml(evt.action_type)+')' : ''}.`);
         break;
       default:
         return;
@@ -653,7 +684,7 @@
       renderZones(); renderQueue(); renderTasks();
       logEvent('info', 'Loaded current zone and task state from rules engine.');
     } catch(err){
-      logEvent('crit', `Could not load initial state: ${err.message}`);
+      logEvent('crit', `Could not load initial state: ${escapeHtml(err.message)}`);
     }
   }
 
@@ -678,7 +709,7 @@
     };
     ws.onmessage = (msg) => {
       try { applyEvent(JSON.parse(msg.data)); }
-      catch(err){ logEvent('crit', `Bad event from server: ${err.message}`); }
+      catch(err){ logEvent('crit', `Bad event from server: ${escapeHtml(err.message)}`); }
     };
     ws.onclose = () => {
       setConnBadge('down', 'Disconnected — retrying in 5s');
@@ -712,7 +743,7 @@
       if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       document.getElementById('taskName').value = '';
     } catch(err){
-      logEvent('crit', `Failed to assign task: ${err.message}`);
+      logEvent('crit', `Failed to assign task: ${escapeHtml(err.message)}`);
     }
   };
 
@@ -810,22 +841,31 @@
       tbody.innerHTML = '<tr><td colspan="5" class="empty">No accounts yet.</td></tr>';
       return;
     }
-    tbody.innerHTML = userList.map(u => `
+    tbody.innerHTML = userList.map(u => {
+      // DP-H2: u.username is admin-supplied (or env-seeded) free text —
+      // escaped for BOTH the text-content use (line below) AND the
+      // data-username attribute uses, since an unescaped " in the
+      // attribute case lets a crafted username break out of the
+      // attribute and inject new attributes/handlers on the <button>.
+      const un = escapeHtml(u.username);
+      const isYou = u.username === currentAuth.username;
+      return `
       <tr style="border-bottom:1px solid var(--line);">
-        <td style="padding:8px;overflow-wrap:anywhere;">${u.username}${u.username === currentAuth.username ? ' <span style="color:var(--dimmer);">(you)</span>' : ''}</td>
-        <td style="padding:8px;font-family:var(--mono);">${u.role}</td>
+        <td style="padding:8px;overflow-wrap:anywhere;">${un}${isYou ? ' <span style="color:var(--dimmer);">(you)</span>' : ''}</td>
+        <td style="padding:8px;font-family:var(--mono);">${escapeHtml(u.role)}</td>
         <td style="padding:8px;color:${u.active ? 'var(--ok)' : 'var(--red)'};">${u.active ? 'active' : 'deactivated'}</td>
-        <td style="padding:8px;font-family:var(--mono);font-size:11px;color:var(--dim);">${u.last_login_at ? new Date(u.last_login_at).toLocaleString() : 'never'}</td>
+        <td style="padding:8px;font-family:var(--mono);font-size:11px;color:var(--dim);">${u.last_login_at ? escapeHtml(new Date(u.last_login_at).toLocaleString()) : 'never'}</td>
         <td style="padding:8px;">
           <div style="display:flex;flex-wrap:wrap;gap:6px;">
-            <button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reset" data-username="${u.username}">Reset pw</button>
-            ${u.username === currentAuth.username ? '' : (u.active
-              ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="deactivate" data-username="${u.username}">Deactivate</button>`
-              : `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reactivate" data-username="${u.username}">Reactivate</button>`)}
+            <button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reset" data-username="${un}">Reset pw</button>
+            ${isYou ? '' : (u.active
+              ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="deactivate" data-username="${un}">Deactivate</button>`
+              : `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reactivate" data-username="${un}">Reactivate</button>`)}
           </div>
         </td>
       </tr>
-    `).join('');
+    `;
+    }).join('');
   }
 
   async function loadUsers(){
