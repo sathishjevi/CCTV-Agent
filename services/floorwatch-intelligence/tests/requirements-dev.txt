@@ -13,4 +13,4 @@ httpx>=0.27
 # the full suite in an isolated venv seeded from only this file plus
 # ../requirements.txt — both gaps were found that way, not guessed.
 google-genai>=0.3
-openai>=1.0
+openai>=3.0.0
