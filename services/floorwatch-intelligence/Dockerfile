@@ -13,7 +13,7 @@
 # deployment. It won't exist here regardless of this Dockerfile — this is
 # an application-level gap flagged for a decision, not something a
 # Dockerfile can resolve.
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 
