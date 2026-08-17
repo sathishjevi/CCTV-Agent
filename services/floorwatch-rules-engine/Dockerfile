@@ -16,7 +16,7 @@
 # that at runtime with ModuleNotFoundError — copying the full tree here,
 # with paths preserved, reproduces the same directory layout config.py
 # already assumes when run locally.
-FROM python:3.13-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 
