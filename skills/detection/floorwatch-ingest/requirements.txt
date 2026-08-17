@@ -1,7 +1,7 @@
 # Core — always needed regardless of which source type(s) a deployment uses.
 opencv-python>=4.8
 numpy>=1.24
-httpx>=0.27
+httpx>=0.28.1
 
 # Optional — only needed for the cloud storage provider(s) actually
 # configured in cameras.json. Install just what you need:
