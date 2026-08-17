@@ -34,16 +34,15 @@ expires) keeps that window small, not zero.
 """
 
 import asyncio
-import sys
 import uuid
 from typing import Awaitable, Callable, Optional
+
+from floorwatch_logging import get_logger
 
 DEFAULT_LEASE_SECONDS = 15.0
 DEFAULT_RENEW_INTERVAL_SECONDS = 5.0
 
-
-def _log(msg: str):
-    print(f"[leader_election] {msg}", file=sys.stderr, flush=True)
+_log = get_logger("rules-engine.leader_election")
 
 
 class LeaderElection:
@@ -113,7 +112,7 @@ async def leadership_loop(election: LeaderElection, on_change: Callable[[bool], 
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            _log(f"WARNING: leadership check failed ({e}) — assuming leadership lost until it recovers")
+            _log(f"leadership check failed ({e}) — assuming leadership lost until it recovers", level="warning")
             current = False
             election._is_leader = False
         if current != previous:

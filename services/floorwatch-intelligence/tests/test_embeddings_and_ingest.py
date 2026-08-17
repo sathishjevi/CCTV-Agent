@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "skills" / "lib"))
 
 from embeddings import TfidfEmbeddingProvider, build_embedding_provider  # noqa: E402
 from incident_notes import IncidentNoteStore  # noqa: E402

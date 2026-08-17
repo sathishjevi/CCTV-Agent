@@ -22,12 +22,11 @@ end-to-end, not a substitute for a real embedding model. Flagged in
 PHASE_5_NOTES.md.
 """
 
-import sys
 from typing import List
 
+from floorwatch_logging import get_logger
 
-def log(msg: str):
-    print(f"[embeddings] {msg}", file=sys.stderr, flush=True)
+log = get_logger("intelligence.embeddings")
 
 
 class TfidfEmbeddingProvider:
@@ -73,8 +72,8 @@ def build_embedding_provider(config):
             log(f"Using VoyageEmbeddingProvider (model={config.VOYAGE_MODEL})")
             return provider
         except Exception as e:
-            log(f"WARNING: could not initialize Voyage embeddings ({e}) — "
-                f"falling back to TfidfEmbeddingProvider")
+            log(f"could not initialize Voyage embeddings ({e}) — "
+                f"falling back to TfidfEmbeddingProvider", level="warning")
     else:
         log("Using TfidfEmbeddingProvider (dev/pilot fallback — no VOYAGE_API_KEY configured).")
     return TfidfEmbeddingProvider(dim=config.EMBEDDING_DIM)

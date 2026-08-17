@@ -12,6 +12,7 @@ import pytest
 
 APP_DIR = Path(__file__).resolve().parent.parent / "app"
 sys.path.insert(0, str(APP_DIR))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "skills" / "lib"))
 
 fakeredis = pytest.importorskip("fakeredis")
 pytest.importorskip("redis")
@@ -152,9 +153,9 @@ async def test_broadcast_subscriber_receives_published_events(redis_client):
     async def on_event(evt):
         received.append(evt)
 
-    sub_task = asyncio.create_task(broadcast_subscriber_loop(redis_client, on_event))
+    sub_task = asyncio.create_task(broadcast_subscriber_loop(redis_client, "replica-solo", on_event))
     try:
-        await asyncio.sleep(0.2)  # let the subscription actually establish
+        await asyncio.sleep(0.2)  # let the consumer group actually get created
         await publish_event(redis_client, {"event_type": "zone_gap", "zone_id": "lobby"})
 
         deadline = time.time() + 5
@@ -181,8 +182,8 @@ async def test_broadcast_reaches_multiple_subscribers(redis_client):
     async def on_event_b(evt):
         received_b.append(evt)
 
-    task_a = asyncio.create_task(broadcast_subscriber_loop(redis_client, on_event_a))
-    task_b = asyncio.create_task(broadcast_subscriber_loop(redis_client, on_event_b))
+    task_a = asyncio.create_task(broadcast_subscriber_loop(redis_client, "replica-a", on_event_a))
+    task_b = asyncio.create_task(broadcast_subscriber_loop(redis_client, "replica-b", on_event_b))
     try:
         await asyncio.sleep(0.2)
         await publish_event(redis_client, {"event_type": "zone_resolved"})

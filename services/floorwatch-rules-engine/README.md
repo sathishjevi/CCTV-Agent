@@ -97,6 +97,39 @@ Both:
   python shift_digest_job.py --date 2026-07-24
   ```
 
+## Horizontal scaling (multiple replicas)
+
+This service is safe to run as 2+ replicas — it wasn't always. `RulesEngine`/
+`EffortEngine` are still private, in-process Python objects (unchanged), but
+now only the current **leader** replica ever calls their mutating methods,
+determined by a Redis-backed lease (`app/leader_election.py`). Everything
+else routes through Redis so it works correctly regardless of which replica
+a given request lands on:
+
+- **Reads** (`/api/state`, `/api/queue`, `/api/tasks`, `/api/queue/tasks`)
+  come from a JSON snapshot the leader writes to Redis after every change —
+  every replica answers identically.
+- **Mutating REST calls** (approve/reassign/assign_task/complete_task/
+  confirm_flag/dismiss_flag) go through a Redis Streams command bus
+  (`app/cluster_bus.py`) — a request landing on a follower is forwarded to
+  and applied by whichever replica currently holds leadership, not silently
+  dropped or applied to an inert local copy.
+- **WebSocket broadcast** fans out over a Redis Stream with one consumer
+  group per replica, so a dashboard connected to any replica sees every
+  event the leader produces, not just events from whichever replica happens
+  to be consuming the detection stream.
+
+No new required configuration — this reuses `FLOORWATCH_REDIS_URL`, already
+a hard dependency for the event/motion streams. On Railway, just raise the
+service's replica count; leadership is acquired automatically, and if the
+leader is lost (crash, redeploy) another replica takes over once its lease
+expires (default 15s — see `leader_election.py`'s `DEFAULT_LEASE_SECONDS`).
+
+Known residual scope: the login/admin rate limiters
+(`skills/lib/floorwatch_rate_limit.py`) are still per-process, not
+Redis-backed — a narrower, separately-tracked limitation, not part of this
+fix (see that module's docstring).
+
 ## Known Phase 2 approximation
 
 Nudge caps and command throttling are scoped per-**zone**, not

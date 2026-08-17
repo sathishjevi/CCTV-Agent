@@ -12,14 +12,12 @@ only embeds the new ones — safe to call on every poll/cron tick.
 """
 
 import json
-import sys
 from pathlib import Path
 
 from incident_notes import IncidentNoteStore
+from floorwatch_logging import get_logger
 
-
-def log(msg: str):
-    print(f"[ingest] {msg}", file=sys.stderr, flush=True)
+log = get_logger("intelligence.ingest")
 
 
 def load_digest(path: Path) -> list:

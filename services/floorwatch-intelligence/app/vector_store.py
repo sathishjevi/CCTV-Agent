@@ -32,15 +32,14 @@ mutates zone state, task state, or the notification system
 
 import json
 import sqlite3
-import sys
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 
+from floorwatch_logging import get_logger
 
-def log(msg: str):
-    print(f"[vector_store] {msg}", file=sys.stderr, flush=True)
+log = get_logger("intelligence.vector_store")
 
 
 class SqliteVectorStore:
@@ -226,9 +225,9 @@ def build_vector_store(config):
             log(f"Using PgVectorStore at {config.POSTGRES_DSN}")
             return store
         except Exception as e:
-            log(f"WARNING: could not connect to Postgres+pgvector ({e}) — "
+            log(f"could not connect to Postgres+pgvector ({e}) — "
                 f"falling back to SqliteVectorStore. This is expected in "
-                f"this dev sandbox; see PHASE_5_NOTES.md.")
+                f"this dev sandbox; see PHASE_5_NOTES.md.", level="warning")
     else:
         log("No POSTGRES_DSN configured — using SqliteVectorStore (dev/pilot fallback).")
     return SqliteVectorStore(config.SQLITE_VECTOR_DB_PATH)

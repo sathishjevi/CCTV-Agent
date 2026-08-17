@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "skills" / "lib"))
 
 from vector_store import SqliteVectorStore, build_vector_store  # noqa: E402
 

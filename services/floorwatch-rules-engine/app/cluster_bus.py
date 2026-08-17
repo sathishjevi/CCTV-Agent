@@ -17,34 +17,54 @@ replica still work correctly despite not owning that state:
     IS currently the leader still goes through this same path, so there
     is only ever one way a mutation happens, not two behaviorally-
     -identical-in-theory code paths to keep in sync.
-  - **Broadcast fan-out**: the leader publishes every event it produces
-    to a Redis Pub/Sub channel; every replica (leader included, for
-    uniformity — see main.py) subscribes and forwards to its own
-    locally-connected WebSocket clients via the existing
-    `ConnectionManager`. This is what makes two dashboards connected to
-    two different replicas see the same live events.
+  - **Broadcast fan-out**: the leader appends every event it produces to
+    a Redis Stream; every replica (leader included, for uniformity — see
+    main.py) reads that stream under its OWN uniquely-named consumer
+    group and forwards each entry to its own locally-connected WebSocket
+    clients via the existing `ConnectionManager`. This is what makes two
+    dashboards connected to two different replicas see the same live
+    events.
 
-All three pieces reuse the same general-purpose Redis client — no new
+    This deliberately uses a Stream with one consumer group PER REPLICA,
+    not Redis Pub/Sub — two reasons. First, correctness under this
+    project's own test infrastructure: `fakeredis`'s `TcpFakeServer` (the
+    fake Redis every test in this suite runs against — no real
+    Redis/Docker available here) does not reliably deliver Pub/Sub
+    messages across separate connections; confirmed directly (a minimal
+    subscribe/publish reproduction never received the message, despite
+    PUBLISH correctly reporting a subscriber count), while the exact same
+    reproduction using a Stream + per-consumer-group read worked
+    correctly. Second, and separately worth having regardless of the
+    test-infra issue: Streams give each replica at-least-once delivery —
+    a replica that's briefly disconnected and reconnects resumes from
+    where it left off, rather than silently missing whatever was
+    published during the gap the way Pub/Sub would. A per-replica group
+    reading from "$" (now) rather than the stream's start means a freshly
+    -started replica doesn't replay history — it only sees NEW events
+    from the moment it starts, matching live-dashboard semantics rather
+    than an audit log.
+
+All pieces reuse the same general-purpose Redis client — no new
 infrastructure beyond the Redis instance this service already requires.
 """
 
 import asyncio
 import json
-import sys
 import uuid
 from typing import Awaitable, Callable, Optional
+
+from floorwatch_logging import get_logger
 
 COMMAND_STREAM = "floorwatch:commands"
 COMMAND_GROUP = "floorwatch-rules-engine-commands"
 REPLY_KEY_PREFIX = "floorwatch:command_reply:"
 REPLY_KEY_TTL_SECONDS = 30
-BROADCAST_CHANNEL = "floorwatch:broadcast"
+BROADCAST_STREAM = "floorwatch:broadcast_stream"
+BROADCAST_STREAM_MAXLEN = 1000  # approximate cap — see broadcast_subscriber_loop's docstring
 
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 5.0
 
-
-def _log(msg: str):
-    print(f"[cluster_bus] {msg}", file=sys.stderr, flush=True)
+_log = get_logger("rules-engine.cluster_bus")
 
 
 # ── Snapshots ────────────────────────────────────────────────────────────
@@ -98,7 +118,7 @@ async def consume_commands_loop(redis_client, consumer_name: str,
         await redis_client.xgroup_create(COMMAND_STREAM, COMMAND_GROUP, id="0", mkstream=True)
     except Exception as e:
         if "BUSYGROUP" not in str(e):
-            _log(f"WARNING: could not create command consumer group: {e}")
+            _log(f"could not create command consumer group: {e}", level="warning")
 
     _log(f"Consuming command stream '{COMMAND_STREAM}' as group '{COMMAND_GROUP}'")
     while True:
@@ -131,7 +151,7 @@ async def consume_commands_loop(redis_client, consumer_name: str,
                     try:
                         reply = await handler(payload)
                     except Exception as e:
-                        _log(f"ERROR handling command '{command_type}': {e}")
+                        _log(f"error handling command '{command_type}': {e}", level="error")
                         reply = {"error": "internal error processing this action"}
 
                 if request_id:
@@ -144,26 +164,52 @@ async def consume_commands_loop(redis_client, consumer_name: str,
 # ── Broadcast fan-out (leader's events -> every replica's WebSocket clients) ──
 
 async def publish_event(redis_client, event: dict) -> None:
-    await redis_client.publish(BROADCAST_CHANNEL, json.dumps(event))
+    await redis_client.xadd(BROADCAST_STREAM, {"data": json.dumps(event)},
+                             maxlen=BROADCAST_STREAM_MAXLEN, approximate=True)
 
 
-async def broadcast_subscriber_loop(redis_client, on_event: Callable[[dict], Awaitable[None]]):
+async def broadcast_subscriber_loop(redis_client, replica_id: str,
+                                     on_event: Callable[[dict], Awaitable[None]]):
     """Run by EVERY replica (not leader-gated) — this is what lets a
     dashboard connected to a follower still see events the leader
     produced. `on_event` is expected to be the local ConnectionManager's
-    `broadcast()` method (or equivalent)."""
-    pubsub = redis_client.pubsub()
-    await pubsub.subscribe(BROADCAST_CHANNEL)
-    _log(f"Subscribed to broadcast channel '{BROADCAST_CHANNEL}'")
+    `broadcast()` method (or equivalent).
+
+    `replica_id` must be unique per replica (reuse the same one as this
+    replica's LeaderElection.owner_id — see main.py) — each replica gets
+    its OWN consumer group, so it receives a FULL, independent copy of
+    every broadcast event rather than a split share of them the way
+    redis_consumer_loop/motion_consumer_loop's SHARED group works. Starts
+    reading from "$" (now), not the stream's start, so a freshly-started
+    replica doesn't replay the entire history."""
+    group = f"floorwatch-broadcast-{replica_id}"
     try:
-        async for message in pubsub.listen():
-            if message.get("type") != "message":
-                continue
-            try:
-                event = json.loads(message["data"])
-            except (TypeError, json.JSONDecodeError):
-                continue
-            await on_event(event)
-    finally:
-        await pubsub.unsubscribe(BROADCAST_CHANNEL)
-        await pubsub.aclose()
+        await redis_client.xgroup_create(BROADCAST_STREAM, group, id="$", mkstream=True)
+    except Exception as e:
+        if "BUSYGROUP" not in str(e):
+            _log(f"could not create broadcast consumer group: {e}", level="warning")
+
+    _log(f"Consuming broadcast stream '{BROADCAST_STREAM}' as group '{group}'")
+    while True:
+        try:
+            resp = await redis_client.xreadgroup(
+                group, "reader", {BROADCAST_STREAM: ">"}, count=20, block=2000)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            _log(f"Broadcast stream read error: {e} — retrying in 2s")
+            await asyncio.sleep(2)
+            continue
+
+        if not resp:
+            continue
+
+        for _stream_name, entries in resp:
+            for entry_id, fields in entries:
+                try:
+                    event = json.loads(fields.get("data") or "{}")
+                except json.JSONDecodeError:
+                    event = None
+                if event:
+                    await on_event(event)
+                await redis_client.xack(BROADCAST_STREAM, group, entry_id)

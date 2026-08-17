@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "skills" / "lib"))
 
 from notifications import (  # noqa: E402
     ContactBook, NoOpSender, NotificationDispatcher, TwilioSmsSender, build_sender,

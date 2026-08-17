@@ -15,6 +15,7 @@ Run:
 import asyncio
 import json
 import sys
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -35,20 +36,36 @@ from floorwatch_auth import (  # noqa: E402
     VALID_ROLES, RevocationStore, build_user_store, issue_token, make_auth_dependency,
     validate_password_strength, validate_username, verify_ws_token,
 )
+from floorwatch_logging import get_logger  # noqa: E402
 from floorwatch_rate_limit import RateLimiter  # noqa: E402
 from floorwatch_schema import validate_event  # noqa: E402
 from floorwatch_security_headers import install_security_headers  # noqa: E402
+from cluster_bus import (  # noqa: E402
+    broadcast_subscriber_loop, consume_commands_loop, publish_event, read_snapshot,
+    submit_command, write_snapshot,
+)
+from leader_election import LeaderElection, leadership_loop  # noqa: E402
+
+log = get_logger("rules-engine")
 
 users = build_user_store(config.POSTGRES_DSN, config.USERS_PATH)
 
-# Token revocation (production-readiness: "no server-side token
-# revocation") — Redis-backed since this service already requires Redis
-# for its event/motion streams, so this adds no new infrastructure. See
-# floorwatch_auth.py's RevocationStore docstring for exactly what this
-# does and doesn't cover.
+# Shared Redis client for every piece of cross-replica coordination this
+# service needs — token revocation, leader election, state snapshots, the
+# command bus, and the broadcast fan-out (see cluster_bus.py and
+# leader_election.py). One client, not one per concern — this service
+# already requires Redis for its event/motion streams, so consolidating
+# onto a single connection adds no new infrastructure and matches how
+# revocation_store already worked before this.
 import redis.asyncio as aioredis  # noqa: E402
-revocation_store = RevocationStore(
-    aioredis.Redis.from_url(config.REDIS_URL, decode_responses=True), ttl_seconds=config.TOKEN_TTL_SECONDS)
+cluster_redis = aioredis.Redis.from_url(config.REDIS_URL, decode_responses=True)
+
+# Unique per PROCESS (not per request) — identifies this replica for
+# leader election and for its own broadcast-fan-out consumer group. A
+# random UUID is sufficient; nothing needs it to be human-meaningful.
+REPLICA_ID = str(uuid.uuid4())
+
+revocation_store = RevocationStore(cluster_redis, ttl_seconds=config.TOKEN_TTL_SECONDS)
 
 require_auth = make_auth_dependency(config.AUTH_SECRET, revocation_store=revocation_store)  # any valid role
 require_supervisor = make_auth_dependency(
@@ -77,10 +94,6 @@ def client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def log(msg: str):
-    print(f"[rules-engine] {msg}", file=sys.stderr, flush=True)
-
-
 def _seed_admin_from_env():
     """FLOORWATCH_ADMIN_USERNAME/FLOORWATCH_ADMIN_PASSWORD — an alternative
     bootstrap to running create_user.py/generate_admin_sql.py by hand (see
@@ -98,8 +111,8 @@ def _seed_admin_from_env():
         return
     ok, reason = validate_password_strength(config.ADMIN_PASSWORD, username=config.ADMIN_USERNAME)
     if not ok:
-        log(f"WARNING: FLOORWATCH_ADMIN_PASSWORD rejected ({reason}) — "
-            f"refusing to seed account '{config.ADMIN_USERNAME}'.")
+        log(f"FLOORWATCH_ADMIN_PASSWORD rejected ({reason}) — "
+            f"refusing to seed account '{config.ADMIN_USERNAME}'.", level="warning")
         return
     users.create_user(config.ADMIN_USERNAME, config.ADMIN_PASSWORD, role="admin",
                        created_by="env:FLOORWATCH_ADMIN_USERNAME", must_change_password=True)
@@ -182,6 +195,128 @@ effort_engine = EffortEngine(
 )
 
 
+# ── Horizontal scaling: shared read-state + event fan-out ───────────────
+# Production-readiness gap: "the WebSocket connection manager and
+# in-memory state assume exactly one running instance." engine/
+# effort_engine above stay exactly as they were — private, in-process
+# Python objects — but only the current LEADER (see leader_election.py)
+# ever calls their mutating methods now. Every replica's GET endpoints
+# read the snapshots below instead of touching engine/effort_engine
+# directly, so they answer identically regardless of which replica
+# processed the underlying event.
+SNAPSHOT_STATE_KEY = "floorwatch:snapshot:state"
+SNAPSHOT_QUEUE_KEY = "floorwatch:snapshot:queue"
+SNAPSHOT_TASKS_KEY = "floorwatch:snapshot:tasks"
+SNAPSHOT_QUEUE_TASKS_KEY = "floorwatch:snapshot:queue_tasks"
+
+
+async def _refresh_snapshots():
+    """Called by the LEADER after any state change (stream-driven or
+    command-driven) and on every tick — recomputes exactly what each GET
+    endpoint used to compute inline from engine/effort_engine, and writes
+    it where every replica can read it."""
+    state = {
+        zone_id: {"status": z.status, "camera_id": z.camera_id, "role_tag": z.role_tag,
+                   "nudge_count_shift": z.nudge_count_shift}
+        for zone_id, z in engine.zones.items()
+    }
+    now = effort_engine._clock()
+    tasks = {
+        task_id: {"task_name": t.task_name, "task_type": t.task_type, "zone_id": t.zone_id,
+                  "zone_name": effort_engine._zone_label(t.zone_id), "status": t.status,
+                  "assigned_minutes": t.assigned_minutes,
+                  "active_minutes": round(t.active_seconds / 60.0, 2),
+                  "elapsed_minutes": round((now - t.start_monotonic) / 60.0, 2)}
+        for task_id, t in effort_engine.tasks.items()
+    }
+    await write_snapshot(cluster_redis, SNAPSHOT_STATE_KEY, state)
+    await write_snapshot(cluster_redis, SNAPSHOT_QUEUE_KEY, engine.pending_commands())
+    await write_snapshot(cluster_redis, SNAPSHOT_TASKS_KEY, tasks)
+    await write_snapshot(cluster_redis, SNAPSHOT_QUEUE_TASKS_KEY, effort_engine.pending_flags())
+
+
+async def _emit(evt: dict):
+    """Every event the engine produces goes through here instead of a
+    direct manager.broadcast() call — refreshes the shared snapshots
+    (BEFORE publishing, so by the time any replica's WebSocket clients
+    see the event, a concurrent GET on any replica already reflects it)
+    and fans the event out over the broadcast stream so every replica's
+    locally-connected WebSocket clients receive it, not just this
+    (leader) replica's own. Only ever called by the leader — see
+    consume_commands_loop/redis_consumer_loop/motion_consumer_loop/
+    tick_loop, all leader-gated in lifespan()."""
+    await _refresh_snapshots()
+    await publish_event(cluster_redis, evt)
+
+
+# ── Command bus dispatch table — see cluster_bus.py's module docstring.
+# Every mutating REST endpoint submits one of these instead of calling
+# engine/effort_engine directly; only the leader's consume_commands_loop
+# ever actually calls them. ──────────────────────────────────────────
+
+async def _handle_approve_zone(payload: dict) -> dict:
+    evt = engine.approve(payload["zone_id"], supervisor_id=payload.get("supervisor_id", "supervisor"))
+    if evt is None:
+        return {"error": "unknown zone or nothing pending"}
+    await _emit(evt)
+    return {"event": evt}
+
+
+async def _handle_reassign_zone(payload: dict) -> dict:
+    evt = engine.reassign(payload["zone_id"], supervisor_id=payload.get("supervisor_id", "supervisor"))
+    if evt is None:
+        return {"error": "unknown zone"}
+    await _emit(evt)
+    return {"event": evt}
+
+
+async def _handle_assign_task(payload: dict) -> dict:
+    evt = effort_engine.assign_task(payload["task_name"], payload["zone_id"],
+                                     payload["assigned_minutes"], payload.get("task_type"))
+    if evt is None:
+        return {"error": f"zone '{payload['zone_id']}' is not staffed per the roster — task not created"}
+    await _emit(evt)
+    return {"event": evt}
+
+
+async def _handle_complete_task(payload: dict) -> dict:
+    evt = effort_engine.complete_task(payload["task_id"])
+    if evt is None:
+        return {"error": "unknown task or already completed"}
+    await _emit(evt)
+    return {"event": evt}
+
+
+async def _handle_confirm_flag(payload: dict) -> dict:
+    evt = effort_engine.confirm_flag(payload["task_id"], supervisor_id=payload.get("supervisor_id", "supervisor"))
+    if evt is None:
+        return {"error": "unknown task or nothing pending"}
+    await _emit(evt)
+    return {"event": evt}
+
+
+async def _handle_dismiss_flag(payload: dict) -> dict:
+    evt = effort_engine.dismiss_flag(payload["task_id"], supervisor_id=payload.get("supervisor_id", "supervisor"))
+    if evt is None:
+        return {"error": "unknown task or nothing pending"}
+    await _emit(evt)
+    return {"event": evt}
+
+
+COMMAND_DISPATCH = {
+    "approve_zone": _handle_approve_zone,
+    "reassign_zone": _handle_reassign_zone,
+    "assign_task": _handle_assign_task,
+    "complete_task": _handle_complete_task,
+    "confirm_flag": _handle_confirm_flag,
+    "dismiss_flag": _handle_dismiss_flag,
+}
+
+
+async def command_consumer_loop():
+    await consume_commands_loop(cluster_redis, REPLICA_ID, COMMAND_DISPATCH)
+
+
 async def redis_consumer_loop():
     import redis.asyncio as aioredis
 
@@ -190,7 +325,7 @@ async def redis_consumer_loop():
         await client.xgroup_create(config.REDIS_STREAM, config.REDIS_CONSUMER_GROUP, id="0", mkstream=True)
     except Exception as e:
         if "BUSYGROUP" not in str(e):
-            log(f"WARNING: could not create consumer group: {e}")
+            log(f"could not create consumer group: {e}", level="warning")
 
     log(f"Consuming Redis stream '{config.REDIS_STREAM}' as group '{config.REDIS_CONSUMER_GROUP}'")
     while True:
@@ -223,7 +358,7 @@ async def redis_consumer_loop():
 
                 out_events = engine.process_detection_event(validated.model_dump())
                 for evt in out_events:
-                    await manager.broadcast(evt)
+                    await _emit(evt)
                 await client.xack(config.REDIS_STREAM, config.REDIS_CONSUMER_GROUP, entry_id)
 
 
@@ -239,7 +374,7 @@ async def motion_consumer_loop():
                                     id="0", mkstream=True)
     except Exception as e:
         if "BUSYGROUP" not in str(e):
-            log(f"WARNING: could not create motion consumer group: {e}")
+            log(f"could not create motion consumer group: {e}", level="warning")
 
     log(f"Consuming Redis motion stream '{config.REDIS_MOTION_STREAM}' "
         f"as group '{config.REDIS_MOTION_CONSUMER_GROUP}'")
@@ -271,22 +406,79 @@ async def tick_loop():
     while True:
         await asyncio.sleep(config.TICK_INTERVAL_SECONDS)
         for evt in engine.tick():
-            await manager.broadcast(evt)
+            await _emit(evt)
         for evt in effort_engine.tick():
-            await manager.broadcast(evt)
+            await _emit(evt)
+        # active_seconds/elapsed_minutes keep changing even on ticks that
+        # produce no events — refresh regardless so /api/tasks doesn't
+        # go stale between events.
+        await _refresh_snapshots()
+
+
+leadership = LeaderElection(cluster_redis, owner_id=REPLICA_ID)
+_leader_tasks: list = []
+
+
+async def _start_leader_tasks():
+    """Only the current leader ever runs the stream/tick/command
+    processing — see leader_election.py's module docstring for why
+    (duplicate real notifications, inconsistent partial state)."""
+    global _leader_tasks
+    log(f"Acquired rules-engine leadership (replica={REPLICA_ID}) — "
+        f"starting stream/tick/command processing.")
+    _leader_tasks = [
+        asyncio.create_task(redis_consumer_loop()),
+        asyncio.create_task(motion_consumer_loop()),
+        asyncio.create_task(tick_loop()),
+        asyncio.create_task(command_consumer_loop()),
+    ]
+
+
+async def _stop_leader_tasks():
+    global _leader_tasks
+    if _leader_tasks:
+        log(f"Lost rules-engine leadership (replica={REPLICA_ID}) — "
+            f"stopping stream/tick/command processing.")
+    for t in _leader_tasks:
+        t.cancel()
+    _leader_tasks = []
+
+
+async def _on_leadership_change(is_leader: bool):
+    if is_leader:
+        await _start_leader_tasks()
+    else:
+        await _stop_leader_tasks()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    consumer_task = asyncio.create_task(redis_consumer_loop())
-    motion_task = asyncio.create_task(motion_consumer_loop())
-    ticker_task = asyncio.create_task(tick_loop())
-    log(f"Rules engine started. shadow_mode={config.SHADOW_MODE}")
+    # Establish INITIAL leadership synchronously, before yield — so a
+    # single-instance deployment (the common case, and every existing
+    # test) has its stream/tick/command tasks already running by the
+    # time startup completes, with no acquisition-race window. The
+    # leadership_loop background task below only fires _on_leadership_change
+    # for actual TRANSITIONS after this point (renewal, or a real failover).
+    if await leadership.try_acquire_or_renew():
+        await _start_leader_tasks()
+    else:
+        log(f"Another replica already holds rules-engine leadership — "
+            f"this replica ({REPLICA_ID}) starts as a follower.")
+
+    # Always runs, on every replica, leader or not — this is what lets a
+    # dashboard connected to a follower see events the leader produces.
+    broadcast_task = asyncio.create_task(
+        broadcast_subscriber_loop(cluster_redis, REPLICA_ID, manager.broadcast))
+    leadership_task = asyncio.create_task(leadership_loop(leadership, _on_leadership_change))
+
+    log(f"Rules engine started. shadow_mode={config.SHADOW_MODE} replica_id={REPLICA_ID} "
+        f"leader={leadership.is_leader}")
     yield
-    consumer_task.cancel()
-    motion_task.cancel()
-    ticker_task.cancel()
-    await revocation_store.close()
+    leadership_task.cancel()
+    broadcast_task.cancel()
+    await _stop_leader_tasks()
+    await leadership.release()
+    await cluster_redis.aclose()
 
 
 app = FastAPI(
@@ -315,7 +507,8 @@ async def coverage_ui():
 
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "shadow_mode": config.SHADOW_MODE, "connections": len(manager.active)}
+    return {"ok": True, "shadow_mode": config.SHADOW_MODE, "connections": len(manager.active),
+            "replica_id": REPLICA_ID, "is_leader": leadership.is_leader}
 
 
 class LoginRequest(BaseModel):
@@ -473,17 +666,23 @@ async def reset_password(username: str, body: ResetPasswordRequest, user=Depends
     return {"ok": True}
 
 
+def _command_reply_to_response(reply: dict, error_status: int = 404):
+    """Every mutating endpoint below turns a command-bus reply into an
+    HTTP response the same way — a timeout means no replica currently
+    holds leadership (e.g. mid-failover), which is a 503, not a 404/400
+    (the request wasn't invalid, the system just couldn't process it
+    right now)."""
+    if reply.get("__timeout__"):
+        return JSONResponse(status_code=503, content={
+            "error": "No rules-engine leader available to process this action right now — try again shortly."})
+    if "error" in reply:
+        return JSONResponse(status_code=error_status, content={"error": reply["error"]})
+    return reply["event"]
+
+
 @app.get("/api/state")
 async def get_state(user=Depends(require_auth)):
-    return {
-        zone_id: {
-            "status": z.status,
-            "camera_id": z.camera_id,
-            "role_tag": z.role_tag,
-            "nudge_count_shift": z.nudge_count_shift,
-        }
-        for zone_id, z in engine.zones.items()
-    }
+    return await read_snapshot(cluster_redis, SNAPSHOT_STATE_KEY, default={})
 
 
 @app.get("/api/digest")
@@ -493,25 +692,19 @@ async def get_digest(user=Depends(require_auth)):
 
 @app.get("/api/queue")
 async def get_queue(user=Depends(require_auth)):
-    return engine.pending_commands()
+    return await read_snapshot(cluster_redis, SNAPSHOT_QUEUE_KEY, default=[])
 
 
 @app.post("/api/queue/zone/{zone_id}/approve")
 async def approve_zone(zone_id: str, user=Depends(require_supervisor)):
-    evt = engine.approve(zone_id, supervisor_id=user["sub"])
-    if evt is None:
-        return JSONResponse(status_code=404, content={"error": "unknown zone or nothing pending"})
-    await manager.broadcast(evt)
-    return evt
+    reply = await submit_command(cluster_redis, "approve_zone", {"zone_id": zone_id, "supervisor_id": user["sub"]})
+    return _command_reply_to_response(reply)
 
 
 @app.post("/api/queue/zone/{zone_id}/reassign")
 async def reassign_zone(zone_id: str, user=Depends(require_supervisor)):
-    evt = engine.reassign(zone_id, supervisor_id=user["sub"])
-    if evt is None:
-        return JSONResponse(status_code=404, content={"error": "unknown zone"})
-    await manager.broadcast(evt)
-    return evt
+    reply = await submit_command(cluster_redis, "reassign_zone", {"zone_id": zone_id, "supervisor_id": user["sub"]})
+    return _command_reply_to_response(reply)
 
 
 class TaskAssignRequest(BaseModel):
@@ -523,62 +716,39 @@ class TaskAssignRequest(BaseModel):
 
 @app.post("/api/tasks")
 async def assign_task(body: TaskAssignRequest, user=Depends(require_supervisor)):
-    evt = effort_engine.assign_task(body.task_name, body.zone_id, body.assigned_minutes, body.task_type)
-    if evt is None:
-        return JSONResponse(status_code=400, content={
-            "error": f"zone '{body.zone_id}' is not staffed per the roster — task not created"})
-    await manager.broadcast(evt)
-    return evt
+    reply = await submit_command(cluster_redis, "assign_task", {
+        "task_name": body.task_name, "zone_id": body.zone_id,
+        "assigned_minutes": body.assigned_minutes, "task_type": body.task_type,
+    })
+    return _command_reply_to_response(reply, error_status=400)
 
 
 @app.get("/api/tasks")
 async def list_tasks(user=Depends(require_auth)):
-    now = effort_engine._clock()
-    return {
-        task_id: {
-            "task_name": t.task_name,
-            "task_type": t.task_type,
-            "zone_id": t.zone_id,
-            "zone_name": effort_engine._zone_label(t.zone_id),
-            "status": t.status,
-            "assigned_minutes": t.assigned_minutes,
-            "active_minutes": round(t.active_seconds / 60.0, 2),
-            "elapsed_minutes": round((now - t.start_monotonic) / 60.0, 2),
-        }
-        for task_id, t in effort_engine.tasks.items()
-    }
+    return await read_snapshot(cluster_redis, SNAPSHOT_TASKS_KEY, default={})
 
 
 @app.post("/api/tasks/{task_id}/complete")
 async def complete_task(task_id: str, user=Depends(require_supervisor)):
-    evt = effort_engine.complete_task(task_id)
-    if evt is None:
-        return JSONResponse(status_code=404, content={"error": "unknown task or already completed"})
-    await manager.broadcast(evt)
-    return evt
+    reply = await submit_command(cluster_redis, "complete_task", {"task_id": task_id})
+    return _command_reply_to_response(reply)
 
 
 @app.get("/api/queue/tasks")
 async def get_task_queue(user=Depends(require_auth)):
-    return effort_engine.pending_flags()
+    return await read_snapshot(cluster_redis, SNAPSHOT_QUEUE_TASKS_KEY, default=[])
 
 
 @app.post("/api/queue/task/{task_id}/confirm")
 async def confirm_task_flag(task_id: str, user=Depends(require_supervisor)):
-    evt = effort_engine.confirm_flag(task_id, supervisor_id=user["sub"])
-    if evt is None:
-        return JSONResponse(status_code=404, content={"error": "unknown task or nothing pending"})
-    await manager.broadcast(evt)
-    return evt
+    reply = await submit_command(cluster_redis, "confirm_flag", {"task_id": task_id, "supervisor_id": user["sub"]})
+    return _command_reply_to_response(reply)
 
 
 @app.post("/api/queue/task/{task_id}/dismiss")
 async def dismiss_task_flag(task_id: str, user=Depends(require_supervisor)):
-    evt = effort_engine.dismiss_flag(task_id, supervisor_id=user["sub"])
-    if evt is None:
-        return JSONResponse(status_code=404, content={"error": "unknown task or nothing pending"})
-    await manager.broadcast(evt)
-    return evt
+    reply = await submit_command(cluster_redis, "dismiss_flag", {"task_id": task_id, "supervisor_id": user["sub"]})
+    return _command_reply_to_response(reply)
 
 
 @app.websocket("/events")

@@ -23,13 +23,12 @@ Twilio/Firebase APIs. See PHASE_4_NOTES.md.
 """
 
 import json
-import sys
 from pathlib import Path
 from typing import Optional
 
+from floorwatch_logging import get_logger
 
-def log(msg: str):
-    print(f"[notifications] {msg}", file=sys.stderr, flush=True)
+log = get_logger("rules-engine.notifications")
 
 
 def _mask_phone(number: Optional[str]) -> Optional[str]:
@@ -160,13 +159,13 @@ def build_sender(channel: str, config):
         try:
             return TwilioSmsSender(config.TWILIO_ACCOUNT_SID, config.TWILIO_AUTH_TOKEN, config.TWILIO_FROM_NUMBER)
         except Exception as e:
-            log(f"WARNING: could not initialize Twilio sender ({e}) — falling back to NoOpSender")
+            log(f"could not initialize Twilio sender ({e}) — falling back to NoOpSender", level="warning")
             return NoOpSender()
     if channel == "fcm":
         try:
             return FcmSender(config.FCM_CREDENTIALS_PATH)
         except Exception as e:
-            log(f"WARNING: could not initialize FCM sender ({e}) — falling back to NoOpSender")
+            log(f"could not initialize FCM sender ({e}) — falling back to NoOpSender", level="warning")
             return NoOpSender()
     return NoOpSender()
 

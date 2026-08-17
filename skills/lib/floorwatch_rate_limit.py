@@ -10,15 +10,22 @@ duplicate copies (skills/lib and a per-skill copy) and one of them didn't
 get the RT-DETR/ONNX-format fix applied to it, silently reintroducing a
 bug the other copy had already fixed. One shared source here instead.
 
-Deliberately a plain in-process sliding-window counter, not Redis-backed:
-both services run as a single process each (see each one's main.py — one
-event loop, in-memory state throughout), so per-process state is already
-the model everywhere else in both. If either service is ever run with
-multiple worker processes/replicas, this limiter would need to move to a
-shared store (Redis) to stay effective per-caller across processes —
-flagged here rather than silently wrong. (This is the same underlying gap
-as the "no horizontal scaling support" limitation already tracked for
-floorwatch-rules-engine's WebSocket broadcast — see RAILWAY_DEPLOYMENT.md.)
+Deliberately a plain in-process sliding-window counter, not Redis-backed.
+This is a REAL, still-open limitation if either service is ever run with
+multiple replicas: each replica would enforce the limit independently
+against its own share of traffic, not the combined total — an attacker
+spread across N replicas effectively gets N times the intended budget.
+Flagged here rather than silently wrong; fixing it means moving the
+counter itself into Redis (a per-caller sorted set or similar), not just
+routing every replica's check through a shared store naively (that would
+turn every rate-limit check into a Redis round-trip on the hot path,
+worth doing deliberately rather than as an afterthought).
+
+This is a DIFFERENT, narrower problem than floorwatch-rules-engine's
+former "no horizontal scaling support" gap (WebSocket broadcast +
+in-memory RulesEngine/EffortEngine state) — that one's been fixed (see
+app/leader_election.py + app/cluster_bus.py there); this limiter wasn't
+in scope for that fix and still needs its own.
 """
 
 import time

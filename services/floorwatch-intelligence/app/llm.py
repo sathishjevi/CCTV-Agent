@@ -47,8 +47,9 @@ installed.
 """
 
 import json
-import sys
 from typing import Optional
+
+from floorwatch_logging import get_logger
 
 SYSTEM_PROMPT = """You are Floorwatch's read-only supervisor intelligence assistant.
 
@@ -60,8 +61,7 @@ Rules you must follow, without exception:
 """
 
 
-def log(msg: str):
-    print(f"[llm] {msg}", file=sys.stderr, flush=True)
+log = get_logger("intelligence.llm")
 
 
 def _mcp_tools_to_anthropic_schema(mcp_tools) -> list:
