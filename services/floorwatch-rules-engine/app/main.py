@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402 (also inserts skills/lib onto sys.path — see config.py)
 from digest_store import DigestStore  # noqa: E402
 from effort_engine import EffortEngine  # noqa: E402
+from event_history import build_event_history_store  # noqa: E402
 from engine import RulesEngine  # noqa: E402
 from notifications import ContactBook, NotificationDispatcher, build_sender  # noqa: E402
 from roster import Roster  # noqa: E402
@@ -151,6 +152,11 @@ task_type_thresholds = (json.loads(config.TASK_TYPE_THRESHOLDS_PATH.read_text())
                          if config.TASK_TYPE_THRESHOLDS_PATH.exists() else {"_default": {"expected_active_ratio": 0.5}})
 roster = Roster(config.ROSTER_PATH)
 digest = DigestStore(config.DIGEST_PATH)
+event_history = build_event_history_store(config.POSTGRES_DSN, config.EVENT_HISTORY_PATH)
+
+# Heartbeat-style events excluded from durable history — see
+# event_history.py's module docstring for why.
+EVENT_HISTORY_EXCLUDED_TYPES = {"task_active_time_update"}
 
 contacts = ContactBook(config.CONTACTS_PATH)
 notify_sender = build_sender(config.NOTIFY_CHANNEL, config)
@@ -239,14 +245,26 @@ async def _emit(evt: dict):
     """Every event the engine produces goes through here instead of a
     direct manager.broadcast() call — refreshes the shared snapshots
     (BEFORE publishing, so by the time any replica's WebSocket clients
-    see the event, a concurrent GET on any replica already reflects it)
-    and fans the event out over the broadcast stream so every replica's
-    locally-connected WebSocket clients receive it, not just this
-    (leader) replica's own. Only ever called by the leader — see
-    consume_commands_loop/redis_consumer_loop/motion_consumer_loop/
-    tick_loop, all leader-gated in lifespan()."""
+    see the event, a concurrent GET on any replica already reflects it),
+    fans the event out over the broadcast stream so every replica's
+    locally-connected WebSocket clients receive it (not just this
+    leader's own), and durably records it to event_history (except
+    heartbeat-style updates — see EVENT_HISTORY_EXCLUDED_TYPES). Only
+    ever called by the leader — see consume_commands_loop/
+    redis_consumer_loop/motion_consumer_loop/tick_loop, all leader-gated
+    in lifespan()."""
     await _refresh_snapshots()
     await publish_event(cluster_redis, evt)
+    if evt.get("event_type") not in EVENT_HISTORY_EXCLUDED_TYPES:
+        try:
+            # event_history.record() is a plain synchronous call (same
+            # blocking-Postgres-call pattern already used throughout this
+            # codebase, e.g. users.authenticate()) — run off the event
+            # loop since this fires on every single event, not just once
+            # per request.
+            await asyncio.to_thread(event_history.record, evt)
+        except Exception as e:
+            log(f"could not record event to durable history: {e}", level="warning")
 
 
 # ── Command bus dispatch table — see cluster_bus.py's module docstring.
@@ -688,6 +706,22 @@ async def get_state(user=Depends(require_auth)):
 @app.get("/api/digest")
 async def get_digest(user=Depends(require_auth)):
     return digest.read_all()
+
+
+@app.get("/api/history")
+async def get_event_history(
+    event_type: str | None = None, zone_id: str | None = None, task_id: str | None = None,
+    since: str | None = None, until: str | None = None, limit: int = 200,
+    user=Depends(require_auth),
+):
+    """Durable audit trail — the full zone/task lifecycle (assignment,
+    nudges, flags, resolutions, supervisor actions), unlike /api/state
+    and /api/tasks which only ever show CURRENT status. See
+    event_history.py's module docstring for what's excluded and why."""
+    limit = max(1, min(limit, 1000))  # bound it — query params are caller-controlled
+    return await asyncio.to_thread(
+        event_history.query, event_type=event_type, zone_id=zone_id, task_id=task_id,
+        since=since, until=until, limit=limit)
 
 
 @app.get("/api/queue")

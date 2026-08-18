@@ -18,10 +18,11 @@ NOW = datetime.now(timezone.utc)
 @pytest.fixture(autouse=True)
 def isolate_user_store(tmp_path, monkeypatch):
     """Every test below drives retention.main(), which (DP-M4) now also
-    purges stale accounts — point it at an isolated, empty JSON store so
-    no test ever reads/writes a real local users.json on the machine
-    running these tests."""
+    purges stale accounts and event_history — point both at isolated,
+    empty local stores so no test ever reads/writes a real local file on
+    the machine running these tests."""
     monkeypatch.setattr(retention.config, "USERS_PATH", tmp_path / "users.json")
+    monkeypatch.setattr(retention.config, "EVENT_HISTORY_PATH", tmp_path / "event_history.jsonl")
     monkeypatch.setattr(retention.config, "POSTGRES_DSN", "")
 
 
@@ -191,3 +192,84 @@ def test_retention_main_never_purges_active_accounts(tmp_path, monkeypatch, caps
     out = capsys.readouterr().out
     assert "Pruned 0 accounts" in out
     assert "very_old_but_active" in json.loads(users_path.read_text())
+
+
+# ── event_history purging ────────────────────────────────────────────────
+
+def test_retention_main_prunes_old_event_history_entries(tmp_path, monkeypatch, capsys):
+    events_path = tmp_path / "event_history.jsonl"
+    old_evt = {"event_id": "old", "event_type": "task_assigned",
+               "timestamp": (NOW - timedelta(days=50)).isoformat()}
+    recent_evt = {"event_id": "recent", "event_type": "task_assigned",
+                  "timestamp": (NOW - timedelta(days=1)).isoformat()}
+    events_path.write_text(json.dumps(old_evt) + "\n" + json.dumps(recent_evt) + "\n")
+
+    monkeypatch.setattr(retention.config, "DIGEST_PATH", tmp_path / "shift_digest.jsonl")
+    monkeypatch.setattr(retention.config, "RETENTION_DAYS", 90)
+    monkeypatch.setattr(retention.config, "EVENT_HISTORY_PATH", events_path)
+    monkeypatch.setattr(retention.config, "EVENT_HISTORY_RETENTION_DAYS", 30)
+    monkeypatch.setattr(sys, "argv", ["retention.py", "--no-archive"])
+
+    retention.main()
+
+    out = capsys.readouterr().out
+    assert "Pruned 1 event_history entries" in out
+    remaining = [json.loads(line) for line in events_path.read_text().splitlines()]
+    assert [e["event_id"] for e in remaining] == ["recent"]
+
+
+def test_retention_main_respects_event_history_retention_days_cli_override(tmp_path, monkeypatch, capsys):
+    events_path = tmp_path / "event_history.jsonl"
+    evt = {"event_id": "e1", "event_type": "task_assigned",
+           "timestamp": (NOW - timedelta(days=20)).isoformat()}
+    events_path.write_text(json.dumps(evt) + "\n")
+
+    monkeypatch.setattr(retention.config, "DIGEST_PATH", tmp_path / "shift_digest.jsonl")
+    monkeypatch.setattr(retention.config, "RETENTION_DAYS", 90)
+    monkeypatch.setattr(retention.config, "EVENT_HISTORY_PATH", events_path)
+    monkeypatch.setattr(retention.config, "EVENT_HISTORY_RETENTION_DAYS", 30)  # default would keep this
+    monkeypatch.setattr(sys, "argv", ["retention.py", "--event-history-retention-days", "14", "--no-archive"])
+
+    retention.main()
+
+    assert events_path.read_text() == ""  # pruned because 14-day override beat the 30-day default
+
+
+def test_retention_main_event_history_purge_dry_run_does_not_modify_file(tmp_path, monkeypatch, capsys):
+    events_path = tmp_path / "event_history.jsonl"
+    evt = {"event_id": "old", "event_type": "task_assigned",
+           "timestamp": (NOW - timedelta(days=50)).isoformat()}
+    events_path.write_text(json.dumps(evt) + "\n")
+    before = events_path.read_text()
+
+    monkeypatch.setattr(retention.config, "DIGEST_PATH", tmp_path / "shift_digest.jsonl")
+    monkeypatch.setattr(retention.config, "RETENTION_DAYS", 90)
+    monkeypatch.setattr(retention.config, "EVENT_HISTORY_PATH", events_path)
+    monkeypatch.setattr(retention.config, "EVENT_HISTORY_RETENTION_DAYS", 30)
+    monkeypatch.setattr(sys, "argv", ["retention.py", "--dry-run"])
+
+    retention.main()
+
+    out = capsys.readouterr().out
+    assert "Would prune 1 event_history entries" in out
+    assert events_path.read_text() == before
+
+
+def test_retention_main_event_history_purge_archives_before_deleting(tmp_path, monkeypatch, capsys):
+    events_path = tmp_path / "event_history.jsonl"
+    archive_dir = tmp_path / "my_archive"
+    evt = {"event_id": "old", "event_type": "task_assigned",
+           "timestamp": (NOW - timedelta(days=50)).isoformat()}
+    events_path.write_text(json.dumps(evt) + "\n")
+
+    monkeypatch.setattr(retention.config, "DIGEST_PATH", tmp_path / "shift_digest.jsonl")
+    monkeypatch.setattr(retention.config, "RETENTION_DAYS", 90)
+    monkeypatch.setattr(retention.config, "EVENT_HISTORY_PATH", events_path)
+    monkeypatch.setattr(retention.config, "EVENT_HISTORY_RETENTION_DAYS", 30)
+    monkeypatch.setattr(sys, "argv", ["retention.py", "--archive-dir", str(archive_dir)])
+
+    retention.main()
+
+    archived = list(archive_dir.glob("event_history_archived_*.jsonl"))
+    assert archived
+    assert "old" in archived[0].read_text()

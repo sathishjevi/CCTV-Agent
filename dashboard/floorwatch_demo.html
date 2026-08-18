@@ -130,6 +130,19 @@
   .login-error{color:var(--red);font-size:12px;margin-top:10px;min-height:16px;}
   .user-badge{font-family:var(--mono);font-size:11px;color:var(--dim);display:flex;align-items:center;gap:8px;}
   .user-badge .who{color:var(--text);font-weight:600;}
+
+  .history-filters{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--line);}
+  .history-filters .field{display:flex;flex-direction:column;gap:4px;}
+  .history-filters label{font-family:var(--mono);font-size:9.5px;color:var(--dim);text-transform:uppercase;letter-spacing:0.4px;}
+  .history-filters input, .history-filters select{font-family:var(--sans);font-size:12.5px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:7px 9px;}
+  .history-table-wrap{max-height:60vh;overflow-y:auto;}
+  .history-row{border-left:3px solid var(--line);padding:8px 10px;margin-bottom:6px;background:var(--panel-2);border-radius:0 6px 6px 0;}
+  .history-row.ok{border-color:var(--ok);} .history-row.warn{border-color:var(--amber);} .history-row.crit{border-color:var(--red);} .history-row.info{border-color:var(--dimmer);} .history-row.eff{border-color:var(--purple);}
+  .history-row .hd{display:flex;justify-content:space-between;gap:10px;font-size:12px;}
+  .history-row .t{font-family:var(--mono);font-size:10.5px;color:var(--dimmer);white-space:nowrap;}
+  .history-row .type{font-family:var(--mono);font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:0.3px;}
+  .history-row .msg{font-size:12px;color:var(--text);margin-top:4px;line-height:1.4;}
+  .history-row .by{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:4px;}
 </style>
 </head>
 <body>
@@ -219,6 +232,53 @@
   </div>
 </div>
 
+<div class="login-overlay" id="historyOverlay" style="display:none;align-items:flex-start;padding:40px 20px;overflow-y:auto;">
+  <div class="login-card" style="width:min(920px,100%);">
+    <div class="brand" style="justify-content:space-between;display:flex;">
+      <div style="display:flex;align-items:center;">
+        <div class="brand-mark" style="display:inline-flex;">FW</div>
+        <strong style="margin-left:8px;font-size:15px;">History</strong>
+      </div>
+      <button class="btn" id="closeHistoryBtn" style="width:auto;padding:6px 12px;">Close</button>
+    </div>
+    <div style="font-family:var(--mono);font-size:10.5px;color:var(--dimmer);margin:-6px 0 16px;line-height:1.5;">
+      The durable audit trail — every zone/task lifecycle event, not just what's currently active. Unlike the live Event Feed, this survives a page reload and a service restart.
+    </div>
+
+    <div id="historyError" class="login-error" style="min-height:0;"></div>
+
+    <form id="historyFilterForm" class="history-filters">
+      <div class="field">
+        <label for="historyEventType">Event type</label>
+        <select id="historyEventType">
+          <option value="">All types</option>
+          <option value="zone_nudge_sent">zone_nudge_sent</option>
+          <option value="zone_supervisor_command">zone_supervisor_command</option>
+          <option value="zone_escalated">zone_escalated</option>
+          <option value="zone_resolved">zone_resolved</option>
+          <option value="task_assigned">task_assigned</option>
+          <option value="task_low_effort_nudge">task_low_effort_nudge</option>
+          <option value="task_flag">task_flag</option>
+          <option value="task_resolved">task_resolved</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="historyZone">Zone</label>
+        <select id="historyZone"><option value="">All zones</option></select>
+      </div>
+      <div class="field">
+        <label for="historySince">Since</label>
+        <input type="datetime-local" id="historySince">
+      </div>
+      <button type="submit" class="btn primary" style="width:auto;">Refresh</button>
+    </form>
+
+    <div class="history-table-wrap" id="historyResults">
+      <div class="empty">Loading…</div>
+    </div>
+  </div>
+</div>
+
 <div class="wrap">
 
   <div class="topbar">
@@ -230,6 +290,7 @@
     <div class="user-badge" id="userBadge" style="display:none;">
       <span class="who" id="userWho"></span>
       <button class="btn" id="manageUsersBtn" style="padding:4px 10px;font-size:11px;display:none;">Manage Users</button>
+      <button class="btn" id="historyBtn" style="padding:4px 10px;font-size:11px;">History</button>
       <button class="btn" id="changePasswordBtn" style="padding:4px 10px;font-size:11px;">Change password</button>
       <button class="btn" id="logoutBtn" style="padding:4px 10px;font-size:11px;">Log out</button>
     </div>
@@ -940,6 +1001,91 @@
       errEl.textContent = err.message;
     }
   });
+
+  // ── History — the durable audit trail (GET /api/history), distinct
+  // from the live Event Feed above: that panel only ever holds whatever
+  // arrived over the WebSocket since the page was last loaded, and a
+  // reload (or the browser tab just being closed) loses it entirely.
+  // This view queries event_history.py's store instead, so a supervisor
+  // can actually answer "what happened to this task" after the fact —
+  // see event_history.py's module docstring for exactly what is and
+  // isn't recorded there. ──────────────────────────────────────────────
+  const historyZoneSelect = document.getElementById('historyZone');
+  ZONES.forEach(z=>{ const opt=document.createElement('option'); opt.value=z.id; opt.textContent=z.name; historyZoneSelect.appendChild(opt); });
+
+  function historyEventKind(evt){
+    switch(evt.event_type){
+      case 'zone_nudge_sent': case 'task_low_effort_nudge': return 'warn';
+      case 'zone_supervisor_command': case 'zone_escalated': return 'crit';
+      case 'zone_resolved': return evt.resolved_by === 'auto' ? 'ok' : 'info';
+      case 'task_assigned': case 'task_flag': case 'task_resolved': return 'eff';
+      default: return 'info';
+    }
+  }
+
+  function renderHistoryResults(events){
+    const wrap = document.getElementById('historyResults');
+    if(!events.length){
+      wrap.innerHTML = '<div class="empty">No matching history yet.</div>';
+      return;
+    }
+    wrap.innerHTML = events.map(evt=>{
+      const kind = historyEventKind(evt);
+      const when = evt.timestamp ? new Date(evt.timestamp).toLocaleString() : '—';
+      const subject = evt.task_name ? escapeHtml(evt.task_name)
+        : (evt.zone_name || evt.zone_id ? escapeHtml(evt.zone_name || evt.zone_id) : '');
+      const by = evt.resolved_by ? `<div class="by">By: ${escapeHtml(evt.resolved_by)}</div>` : '';
+      return `
+        <div class="history-row ${kind}">
+          <div class="hd">
+            <div><span class="type">${escapeHtml(evt.event_type || 'unknown')}</span>${subject ? ' — ' + subject : ''}</div>
+            <div class="t">${escapeHtml(when)}</div>
+          </div>
+          ${evt.message ? `<div class="msg">${escapeHtml(evt.message)}</div>` : ''}
+          ${by}
+        </div>`;
+    }).join('');
+  }
+
+  async function loadHistory(){
+    const wrap = document.getElementById('historyResults');
+    const errEl = document.getElementById('historyError');
+    errEl.textContent = '';
+    wrap.innerHTML = '<div class="empty">Loading…</div>';
+
+    const params = new URLSearchParams();
+    const eventType = document.getElementById('historyEventType').value;
+    const zoneId = document.getElementById('historyZone').value;
+    const since = document.getElementById('historySince').value;
+    if(eventType) params.set('event_type', eventType);
+    if(zoneId) params.set('zone_id', zoneId);
+    // datetime-local has no timezone — treated as local time, converted
+    // to a real ISO-8601 instant for the API (which compares against
+    // UTC-stored timestamps).
+    if(since) params.set('since', new Date(since).toISOString());
+
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/history?${params.toString()}`);
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      renderHistoryResults(data);
+    } catch(err){
+      errEl.textContent = `Failed to load history: ${err.message}`;
+      wrap.innerHTML = '';
+    }
+  }
+
+  document.getElementById('historyBtn').onclick = () => {
+    document.getElementById('historyOverlay').style.display = 'flex';
+    loadHistory();
+  };
+  document.getElementById('closeHistoryBtn').onclick = () => {
+    document.getElementById('historyOverlay').style.display = 'none';
+  };
+  document.getElementById('historyFilterForm').onsubmit = (e) => {
+    e.preventDefault();
+    loadHistory();
+  };
 
   renderZones(); renderTasks(); renderQueue();
   if(currentAuth){

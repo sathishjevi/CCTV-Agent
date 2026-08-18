@@ -79,6 +79,7 @@ def app_client(fake_redis_url, monkeypatch, tmp_path):
     monkeypatch.setattr(config, "EFFORT_NUDGE_GRACE_RATIO", 0.0)
     monkeypatch.setattr(config, "EFFORT_NUDGE_MARGIN", 0.1)
     monkeypatch.setattr(config, "USERS_PATH", tmp_path / "users.json")
+    monkeypatch.setattr(config, "EVENT_HISTORY_PATH", tmp_path / "event_history.jsonl")
     monkeypatch.setattr(config, "AUTH_SECRET", "test-fixture-secret-needs-32-bytes-minimum")
 
     for mod in ("main", "engine", "effort_engine", "notifications"):

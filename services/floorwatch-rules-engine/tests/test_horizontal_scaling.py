@@ -63,6 +63,7 @@ def two_replicas(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "DIGEST_PATH", tmp_path / "digest.jsonl")
     monkeypatch.setattr(config, "TICK_INTERVAL_SECONDS", 0.1)
     monkeypatch.setattr(config, "USERS_PATH", tmp_path / "users.json")
+    monkeypatch.setattr(config, "EVENT_HISTORY_PATH", tmp_path / "event_history.jsonl")
     monkeypatch.setattr(config, "POSTGRES_DSN", "")
     monkeypatch.setattr(config, "ADMIN_USERNAME", "")
     monkeypatch.setattr(config, "ADMIN_PASSWORD", "")

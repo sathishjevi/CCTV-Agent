@@ -42,6 +42,7 @@ def app_client(fake_redis_url, monkeypatch, tmp_path):
     monkeypatch.setattr(config, "DIGEST_PATH", tmp_path / "digest.jsonl")
     monkeypatch.setattr(config, "TICK_INTERVAL_SECONDS", 0.1)
     monkeypatch.setattr(config, "USERS_PATH", tmp_path / "users.json")
+    monkeypatch.setattr(config, "EVENT_HISTORY_PATH", tmp_path / "event_history.jsonl")
     monkeypatch.setattr(config, "AUTH_SECRET", "test-fixture-secret-needs-32-bytes-minimum")
 
     sys.modules.pop("main", None)
@@ -210,3 +211,62 @@ def test_confirm_task_flag_endpoint(app_client):
     assert confirm_resp.status_code == 200
     assert confirm_resp.json()["resolved_by"] == "supervisor:test-supervisor"
     assert client.get("/api/queue/tasks").json() == []
+
+
+# ── event history — the durable audit trail (reported missing directly:
+# a supervisor confirmed a flagged task, watched it happen live in the
+# dashboard, and it was never recorded anywhere) ─────────────────────────
+
+def test_full_task_lifecycle_is_durably_recorded(app_client):
+    """The exact scenario reported: assign -> flag -> supervisor confirm
+    — every step must show up in /api/history, not just the flag (which
+    is all shift_digest.jsonl ever captured)."""
+    client, main_module, _url = app_client
+    resp = client.post("/api/tasks", json={
+        "task_name": "Clean Door", "zone_id": "theatre3", "assigned_minutes": 60, "task_type": "clean_door",
+    })
+    task_id = resp.json()["task_id"]
+    client.post(f"/api/tasks/{task_id}/complete")  # no active time -> flagged
+    client.post(f"/api/queue/task/{task_id}/confirm")
+
+    history = client.get("/api/history", params={"task_id": task_id}).json()
+    event_types = {e["event_type"] for e in history}
+    assert "task_assigned" in event_types
+    assert "task_flag" in event_types
+    assert "task_resolved" in event_types  # the supervisor's confirm — this was the missing one
+
+    confirmed = next(e for e in history if e["event_type"] == "task_resolved")
+    assert confirmed["resolved_by"] == "supervisor:test-supervisor"
+
+
+def test_history_survives_independent_of_shift_digest(app_client):
+    """shift_digest.jsonl only ever captured zone_escalated/task_flag —
+    task_assigned specifically was never in it. Confirm event_history
+    has it even though the digest doesn't."""
+    client, main_module, _url = app_client
+    resp = client.post("/api/tasks", json={
+        "task_name": "Clean Door", "zone_id": "theatre3", "assigned_minutes": 60, "task_type": "clean_door",
+    })
+    task_id = resp.json()["task_id"]
+
+    digest_types = {e["event_type"] for e in client.get("/api/digest").json()}
+    assert "task_assigned" not in digest_types  # confirms the gap actually existed
+
+    history_types = {e["event_type"] for e in client.get("/api/history", params={"task_id": task_id}).json()}
+    assert "task_assigned" in history_types  # and confirms it's now closed
+
+
+def test_history_filters_by_event_type(app_client):
+    client, main_module, _url = app_client
+    client.post("/api/tasks", json={
+        "task_name": "Clean Door", "zone_id": "theatre3", "assigned_minutes": 60, "task_type": "clean_door",
+    })
+    results = client.get("/api/history", params={"event_type": "task_assigned"}).json()
+    assert results
+    assert all(e["event_type"] == "task_assigned" for e in results)
+
+
+def test_history_requires_authentication(app_client):
+    client, main_module, _url = app_client
+    resp = client.get("/api/history", headers={"Authorization": ""})
+    assert resp.status_code == 401

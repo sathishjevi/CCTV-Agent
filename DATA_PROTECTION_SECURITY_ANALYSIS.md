@@ -12,7 +12,7 @@ Worth stating plainly before the threat list, since it determines how seriously 
 
 | Data | Sensitivity | Where |
 |---|---|---|
-| Employee zone-presence/motion/effort events, tied to camera+timestamp | Personal data (identifiable via shift roster even without facial recognition) | Redis Streams (transient) → shift digest JSONL → optionally Postgres vector store |
+| Employee zone-presence/motion/effort events, tied to camera+timestamp | Personal data (identifiable via shift roster even without facial recognition) | Redis Streams (transient) → shift digest JSONL (zone_escalated/task_flag only) + `floorwatch_event_history` table (full lifecycle: assignment, nudges, flags, resolutions — see `event_history.py`), Postgres if configured else local JSONL → optionally Postgres vector store |
 | Supervisor/admin/viewer account credentials (hashed) | Authentication secret | `users.json` or Postgres `floorwatch_users` |
 | Supervisor incident notes, chat Q&A | Free-text, potentially contains names/details written by a human | `incident_notes.jsonl`, vector store |
 | CCTV source credentials — S3/Azure/GCS keys, and **a client's real EZVIZ account password** | Infrastructure/vendor credentials | `config/secrets.env` locally, Railway env vars in deployment |

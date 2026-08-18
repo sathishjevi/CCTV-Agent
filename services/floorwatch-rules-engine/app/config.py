@@ -29,6 +29,21 @@ DIGEST_PATH = Path(os.environ.get("FLOORWATCH_DIGEST_PATH", SERVICE_DIR / "shift
 TASK_TYPE_THRESHOLDS_PATH = Path(os.environ.get(
     "FLOORWATCH_TASK_TYPE_THRESHOLDS_PATH", SERVICE_DIR / "task_type_thresholds.json"))
 
+# ── Event history (durable audit log of the full zone/task lifecycle —
+# assignment, nudges, flags, resolutions, supervisor actions) — separate
+# from DIGEST_PATH above, which only ever captured zone_escalated and
+# task_flag, not the full picture. Uses Postgres if FLOORWATCH_POSTGRES_DSN
+# is set (same instance as accounts — see event_history.py), else falls
+# back to this local JSONL file (dev/pilot only, same as the other
+# fallbacks in this project — won't survive a Railway redeploy without a
+# mounted volume).
+EVENT_HISTORY_PATH = Path(os.environ.get(
+    "FLOORWATCH_EVENT_HISTORY_PATH", SERVICE_DIR / "event_history.jsonl"))
+# Deliberately shorter default than RETENTION_DAYS (90) — this table is
+# much higher-volume (every zone/task event, not just digest-worthy
+# ones), so a tighter default window is more sensible. Override via env.
+EVENT_HISTORY_RETENTION_DAYS = int(os.environ.get("FLOORWATCH_EVENT_HISTORY_RETENTION_DAYS", 30))
+
 # Global Constraint 4 — shadow mode before real notifications. Defaults to
 # True; must be explicitly flipped off (and only after accuracy validation
 # per the brief's go-live checklist, which is Phase 4 scope).

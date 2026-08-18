@@ -68,11 +68,12 @@ Railway's container filesystem is ephemeral on redeploy. Beyond the sqlite vecto
 |---|---|---|
 | `floorwatch-rules-engine` | `users.json` | **Solved if `FLOORWATCH_POSTGRES_DSN` is set** — accounts then live in Postgres instead (see §3a below), same instance `floorwatch-intelligence` already uses. Only applies if you're still on the JSON fallback: every supervisor/viewer/admin account, and you'd have to re-run `create_user.py` after every redeploy. |
 | `floorwatch-rules-engine` | `shift_digest.jsonl` | Escalation history (also the cross-service gap above) |
+| `floorwatch-rules-engine` | `event_history.jsonl` | **Solved if `FLOORWATCH_POSTGRES_DSN` is set** — same as `users.json`. Only applies on the JSON fallback: the full zone/task lifecycle audit trail (assignment, nudges, flags, resolutions — see `event_history.py`). |
 | `floorwatch-rules-engine` | `roster.json`, `zones_meta.json`, `contacts.json`, `task_type_thresholds.json` | Whatever's been edited at runtime past what's checked into the repo — if these are only ever edited via the repo, this doesn't apply |
 | `floorwatch-intelligence` | `vectors.sqlite3` | The embedded/searchable shift-digest and incident-note index — same Postgres fix applies here too |
 | Both | `.floorwatch_auth_secret` (only if `FLOORWATCH_AUTH_SECRET` env var is left unset) | Every existing login session invalidates on redeploy |
 
-For a real pilot beyond a quick demo: set `FLOORWATCH_POSTGRES_DSN` on `floorwatch-rules-engine` (fixes `users.json`), and set `FLOORWATCH_AUTH_SECRET` explicitly (see §4) so logins survive redeploys regardless. A volume is still the only fix for `shift_digest.jsonl` and the runtime-edited JSON files, since those don't have a Postgres-backed store yet.
+For a real pilot beyond a quick demo: set `FLOORWATCH_POSTGRES_DSN` on `floorwatch-rules-engine` (fixes `users.json` and `event_history.jsonl` both), and set `FLOORWATCH_AUTH_SECRET` explicitly (see §4) so logins survive redeploys regardless. A volume is still the only fix for `shift_digest.jsonl` and the runtime-edited JSON files, since those don't have a Postgres-backed store.
 
 ### 3a. Accounts and the admin role — no more manual `create_user.py` per account
 
