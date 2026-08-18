@@ -268,7 +268,7 @@
       </div>
       <div class="field">
         <label for="historySince">Since</label>
-        <input type="datetime-local" id="historySince">
+        <input type="date" id="historySince">
       </div>
       <button type="submit" class="btn primary" style="width:auto;">Refresh</button>
     </form>
@@ -1059,10 +1059,15 @@
     const since = document.getElementById('historySince').value;
     if(eventType) params.set('event_type', eventType);
     if(zoneId) params.set('zone_id', zoneId);
-    // datetime-local has no timezone — treated as local time, converted
-    // to a real ISO-8601 instant for the API (which compares against
-    // UTC-stored timestamps).
-    if(since) params.set('since', new Date(since).toISOString());
+    // A bare "YYYY-MM-DD" string (what type="date" gives us) is parsed by
+    // Date() as UTC midnight, per spec — wrong for "since this day" in
+    // any timezone behind UTC (e.g. US timezones), where that would
+    // exclude several hours of that actual local day. Appending a
+    // time-of-day with no offset makes it parse as LOCAL midnight
+    // instead, which is what "since [date]" actually means to whoever's
+    // picking it — then convert to a real ISO-8601 instant for the API
+    // (which compares against UTC-stored timestamps).
+    if(since) params.set('since', new Date(since + 'T00:00:00').toISOString());
 
     try {
       const res = await authFetch(`${currentAuth.backendBase}/api/history?${params.toString()}`);
