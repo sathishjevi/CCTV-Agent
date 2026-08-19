@@ -17,6 +17,7 @@ import json
 import sys
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -28,10 +29,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402 (also inserts skills/lib onto sys.path — see config.py)
 from digest_store import DigestStore  # noqa: E402
 from effort_engine import EffortEngine  # noqa: E402
+from employee_directory import (  # noqa: E402
+    build_employee_directory, validate_employee_number, validate_phone,
+)
 from event_history import build_event_history_store  # noqa: E402
 from engine import RulesEngine  # noqa: E402
-from notifications import ContactBook, NotificationDispatcher, build_sender  # noqa: E402
+from notifications import ContactBook, NotificationDispatcher, _mask_phone, build_sender  # noqa: E402
 from roster import Roster  # noqa: E402
+from sms_webhook import parse_sms_command, reply_twiml, validate_signature  # noqa: E402
+from task_store import build_task_store, rehydrate_tasks, task_runtime_to_record  # noqa: E402
 
 from floorwatch_auth import (  # noqa: E402
     VALID_ROLES, RevocationStore, build_user_store, issue_token, make_auth_dependency,
@@ -153,6 +159,14 @@ task_type_thresholds = (json.loads(config.TASK_TYPE_THRESHOLDS_PATH.read_text())
 roster = Roster(config.ROSTER_PATH)
 digest = DigestStore(config.DIGEST_PATH)
 event_history = build_event_history_store(config.POSTGRES_DSN, config.EVENT_HISTORY_PATH)
+employee_directory = build_employee_directory(config.POSTGRES_DSN, config.EMPLOYEE_DIRECTORY_PATH)
+task_store = build_task_store(config.POSTGRES_DSN, config.TASK_STORE_PATH)
+
+# TaskRuntime only holds a MONOTONIC start (meaningless across a
+# restart) — this tracks the real wall-clock start per task_id so
+# task_store persists something rehydrate_tasks() can actually use.
+# Populated on first assignment and by rehydration itself on startup.
+_task_started_at: dict = {}
 
 # Heartbeat-style events excluded from durable history — see
 # event_history.py's module docstring for why.
@@ -232,7 +246,9 @@ async def _refresh_snapshots():
                   "zone_name": effort_engine._zone_label(t.zone_id), "status": t.status,
                   "assigned_minutes": t.assigned_minutes,
                   "active_minutes": round(t.active_seconds / 60.0, 2),
-                  "elapsed_minutes": round((now - t.start_monotonic) / 60.0, 2)}
+                  "elapsed_minutes": round((now - t.start_monotonic) / 60.0, 2),
+                  "assigned_to": t.assigned_to, "assigned_by": t.assigned_by,
+                  "workflow_status": t.workflow_status, "short_code": effort_engine.short_code(task_id)}
         for task_id, t in effort_engine.tasks.items()
     }
     await write_snapshot(cluster_redis, SNAPSHOT_STATE_KEY, state)
@@ -266,11 +282,126 @@ async def _emit(evt: dict):
         except Exception as e:
             log(f"could not record event to durable history: {e}", level="warning")
 
+    task_id = evt.get("task_id")
+    if task_id and task_id in effort_engine.tasks:
+        try:
+            t = effort_engine.tasks[task_id]
+            started_at_iso = _task_started_at.setdefault(task_id, datetime.now(timezone.utc).isoformat())
+            await asyncio.to_thread(task_store.upsert, task_runtime_to_record(t, started_at_iso))
+        except Exception as e:
+            log(f"could not persist task state: {e}", level="warning")
+
+
+# ── Employee messaging — the outbound half of the task workflow ─────────
+
+def _send_task_notification(employee_number, message) -> dict:
+    """Synchronous — always run via asyncio.to_thread from async callers,
+    same as event_history.record(). Global Constraint 4 applies here
+    exactly as it does to the zone/effort engines' own on_notify() path:
+    shadow mode suppresses the real send but the caller still treats it
+    as delivered for workflow-transition purposes, so the state machine
+    behaves identically whether or not a real SMS account is configured."""
+    if not employee_number:
+        return {"sent": False, "channel": "none", "detail": "no assignee"}
+    employee = employee_directory.get(employee_number)
+    phone = employee.get("phone") if employee else None
+    if not phone:
+        return {"sent": False, "channel": "none", "detail": "no phone on file for this employee"}
+    if config.SHADOW_MODE:
+        log(f"SHADOW MODE — would message employee {employee_number} "
+            f"({_mask_phone(phone)}): {message}")
+        return {"sent": False, "channel": "shadow_mode_suppressed", "detail": ""}
+    result = notify_sender.send({"phone": phone}, message)
+    return result.to_dict()
+
+
+async def _notify_assignee(task_id: str):
+    """After a fresh assignment (or reassignment), sends the assignment
+    SMS and records the outcome via mark_notified()/mark_notify_failed()
+    — a visible state either way, per effort_engine.py's
+    WORKFLOW_STATUSES docstring: an assignment that couldn't be
+    delivered must be VISIBLE (notify_failed), never silently dropped."""
+    t = effort_engine.tasks.get(task_id)
+    if t is None or not t.assigned_to:
+        return
+    message = (
+        f'Floorwatch: you are assigned "{t.task_name}" — {t.assigned_minutes:.0f} min allocated. '
+        f"Reply START to begin, DONE when finished, MORE if you need extra time, "
+        f"or REVIEW to ask a supervisor to check in. Task code: {effort_engine.short_code(task_id)}."
+    )
+    result = await asyncio.to_thread(_send_task_notification, t.assigned_to, message)
+    if result.get("sent") or result.get("channel") == "shadow_mode_suppressed":
+        follow = effort_engine.mark_notified(task_id)
+    else:
+        follow = effort_engine.mark_notify_failed(task_id, reason=result.get("detail", ""))
+    if follow:
+        await _emit(follow)
+
+
+# ── Auto-assignment — the CCTV-driven half of the task workflow (spec
+# flow 1: "task should be assigned automatically from CCTV monitor").
+# Only ever invoked from tick_loop(), which only runs on the leader, so
+# this calls _handle_assign_task directly rather than via the command
+# bus — same reasoning as engine.tick()/effort_engine.tick() events
+# being emitted directly above. ──────────────────────────────────────
+
+def _least_loaded_employee(department: str) -> str | None:
+    """Picks the department's active employee with the fewest currently
+    OPEN tasks assigned to them (ties broken by employee_number for
+    determinism). Only considers role == "employee" — auto-assignment
+    never hands coverage work to a supervisor."""
+    candidates = [e for e in employee_directory.list_all(department=department, active_only=True)
+                  if e.get("role") == "employee"]
+    if not candidates:
+        return None
+    load: dict = {}
+    for t in effort_engine.tasks.values():
+        if t.status == "open" and t.assigned_to:
+            load[t.assigned_to] = load.get(t.assigned_to, 0) + 1
+    candidates.sort(key=lambda e: (load.get(e["employee_number"], 0), e["employee_number"]))
+    return candidates[0]["employee_number"]
+
+
+def _auto_task_already_open_for_zone(zone_id: str) -> bool:
+    """Dedup guard — a zone left unresolved keeps producing zone_escalated
+    on every subsequent tick until a supervisor acts; without this, each
+    tick would spawn a new coverage task for the same gap."""
+    return any(t.status == "open" and t.zone_id == zone_id and t.task_type == "auto_coverage"
+               for t in effort_engine.tasks.values())
+
+
+async def _maybe_auto_assign(evt: dict):
+    event_type = evt.get("event_type")
+    if event_type not in config.AUTO_ASSIGN_TRIGGER_EVENT_TYPES:
+        return
+    zone_id = evt.get("zone_id")
+    if not zone_id or _auto_task_already_open_for_zone(zone_id):
+        return
+    department = evt.get("role_tag", "")
+    assignee = _least_loaded_employee(department)
+    payload = {
+        "task_name": f"Cover {effort_engine._zone_label(zone_id)}", "zone_id": zone_id,
+        "assigned_minutes": config.AUTO_ASSIGN_DEFAULT_MINUTES, "task_type": "auto_coverage",
+        "assigned_to": assignee, "assigned_by": "system:auto_assign",
+    }
+    result = await _handle_assign_task(payload)
+    if result.get("error"):
+        log(f"auto-assign could not create a coverage task for zone '{zone_id}': {result['error']}",
+            level="warning")
+    elif assignee is None:
+        # Created, but unassigned — surfaces in /api/tasks with
+        # workflow_status "unassigned" so a supervisor can hand-assign
+        # it; per the spec's own fallback requirement (no eligible
+        # employee should never mean the gap silently goes untracked).
+        log(f"auto-assign created an unassigned coverage task for zone '{zone_id}' — "
+            f"no active employee found in department '{department}'.", level="warning")
+
 
 # ── Command bus dispatch table — see cluster_bus.py's module docstring.
-# Every mutating REST endpoint submits one of these instead of calling
-# engine/effort_engine directly; only the leader's consume_commands_loop
-# ever actually calls them. ──────────────────────────────────────────
+# Every mutating REST endpoint (AND the SMS webhook — Twilio can hit
+# ANY replica, and only the leader's effort_engine.tasks is authoritative)
+# submits one of these instead of calling engine/effort_engine directly;
+# only the leader's consume_commands_loop ever actually calls them. ──────
 
 async def _handle_approve_zone(payload: dict) -> dict:
     evt = engine.approve(payload["zone_id"], supervisor_id=payload.get("supervisor_id", "supervisor"))
@@ -290,11 +421,73 @@ async def _handle_reassign_zone(payload: dict) -> dict:
 
 async def _handle_assign_task(payload: dict) -> dict:
     evt = effort_engine.assign_task(payload["task_name"], payload["zone_id"],
-                                     payload["assigned_minutes"], payload.get("task_type"))
+                                     payload["assigned_minutes"], payload.get("task_type"),
+                                     assigned_to=payload.get("assigned_to"),
+                                     assigned_by=payload.get("assigned_by"))
     if evt is None:
         return {"error": f"zone '{payload['zone_id']}' is not staffed per the roster — task not created"}
     await _emit(evt)
+    if evt.get("assigned_to"):
+        await _notify_assignee(evt["task_id"])
     return {"event": evt}
+
+
+async def _handle_extend_task(payload: dict) -> dict:
+    evt = effort_engine.extend_task(payload["task_id"], payload["extra_minutes"],
+                                     supervisor_id=payload.get("supervisor_id", "supervisor"))
+    if evt is None:
+        return {"error": "unknown task, task not open, or extra_minutes must be positive"}
+    await _emit(evt)
+    return {"event": evt}
+
+
+async def _handle_reassign_task(payload: dict) -> dict:
+    """Reassigns the ASSIGNEE (who's doing the task) — distinct from
+    reassign_zone above, which is about coverage, not this workflow."""
+    evt = effort_engine.reassign_task(payload["task_id"], payload["new_assignee"],
+                                       supervisor_id=payload.get("supervisor_id", "supervisor"))
+    if evt is None:
+        return {"error": "unknown task or task not open"}
+    await _emit(evt)
+    await _notify_assignee(payload["task_id"])  # re-runs the notification path for the NEW assignee
+    return {"event": evt}
+
+
+async def _handle_sms_reply(payload: dict) -> dict:
+    """Everything the inbound-SMS webhook needs resolved server-side —
+    see main.py's webhook route for why this whole thing is ONE command
+    rather than the webhook resolving the task itself: the webhook can
+    land on any replica, but only the leader's effort_engine.tasks is
+    authoritative."""
+    employee = employee_directory.get_by_phone(payload["phone"])
+    if employee is None:
+        return {"reply": "Your number isn't recognized. Contact your supervisor to update your contact info."}
+
+    action, code = parse_sms_command(payload["body"])
+    if action is None:
+        return {"reply": "Reply START, DONE, MORE, or REVIEW "
+                          "(add the task code too if you have more than one open task)."}
+
+    task, reason = effort_engine.resolve_task_reference(employee["employee_number"], code)
+    if task is None:
+        return {"reply": reason}
+
+    handler = {
+        "START": effort_engine.mark_started, "DONE": effort_engine.complete_task,
+        "MORE": effort_engine.request_extension, "REVIEW": effort_engine.request_review,
+    }[action]
+    evt = handler(task.task_id)
+    if evt is None:
+        return {"reply": f'Could not update "{task.task_name}" — it may have already changed status.'}
+    await _emit(evt)
+
+    reply_text = {
+        "START": f'Got it — "{task.task_name}" marked in progress.',
+        "DONE": f'Thanks — "{task.task_name}" marked complete.',
+        "MORE": f'Noted — a supervisor will follow up about extra time on "{task.task_name}".',
+        "REVIEW": f'Noted — a supervisor will review "{task.task_name}".',
+    }[action]
+    return {"reply": reply_text}
 
 
 async def _handle_complete_task(payload: dict) -> dict:
@@ -328,6 +521,9 @@ COMMAND_DISPATCH = {
     "complete_task": _handle_complete_task,
     "confirm_flag": _handle_confirm_flag,
     "dismiss_flag": _handle_dismiss_flag,
+    "extend_task": _handle_extend_task,
+    "reassign_task": _handle_reassign_task,
+    "sms_reply": _handle_sms_reply,
 }
 
 
@@ -425,8 +621,13 @@ async def tick_loop():
         await asyncio.sleep(config.TICK_INTERVAL_SECONDS)
         for evt in engine.tick():
             await _emit(evt)
+            await _maybe_auto_assign(evt)
         for evt in effort_engine.tick():
             await _emit(evt)
+            if evt.get("event_type") == "task_status_nudge":
+                # the event's own message already has the full text —
+                # reuse it verbatim rather than building it twice.
+                await asyncio.to_thread(_send_task_notification, evt.get("assigned_to"), evt.get("message", ""))
         # active_seconds/elapsed_minutes keep changing even on ticks that
         # produce no events — refresh regardless so /api/tasks doesn't
         # go stale between events.
@@ -444,6 +645,18 @@ async def _start_leader_tasks():
     global _leader_tasks
     log(f"Acquired rules-engine leadership (replica={REPLICA_ID}) — "
         f"starting stream/tick/command processing.")
+
+    # Restores open tasks from the durable store — a restart used to
+    # silently lose every in-flight task; this is what fixes that. Only
+    # done here (leadership acquisition), never redundantly per-request —
+    # effort_engine.tasks is only ever authoritative on whichever replica
+    # currently holds leadership.
+    restored = await asyncio.to_thread(rehydrate_tasks, task_store, effort_engine, effort_engine._clock)
+    if restored:
+        for rec in await asyncio.to_thread(task_store.list_open):
+            if rec["task_id"] in effort_engine.tasks:
+                _task_started_at[rec["task_id"]] = rec["started_at"]
+
     _leader_tasks = [
         asyncio.create_task(redis_consumer_loop()),
         asyncio.create_task(motion_consumer_loop()),
@@ -684,6 +897,96 @@ async def reset_password(username: str, body: ResetPasswordRequest, user=Depends
     return {"ok": True}
 
 
+# ── Employee directory (floor staff a task can be assigned to) ──────────
+# require_supervisor, not require_admin — supervisors need to be able to
+# add their own department's people (flow 3 in the workflow spec), not
+# just admins. No leader/command-bus routing needed here: unlike
+# engine/effort_engine, employee_directory has no in-memory-only state —
+# every replica reads/writes the same Postgres/JSON store directly, same
+# as floorwatch_users already does.
+
+class AddEmployeeRequest(BaseModel):
+    employee_number: str
+    name: str
+    role: str  # "employee" | "supervisor"
+    department: str
+    phone: str
+    account_username: str | None = None  # links to a floorwatch_users login, if the person has one
+
+
+@app.get("/api/admin/employees")
+async def list_employees(department: str | None = None, user=Depends(require_supervisor)):
+    return {"employees": employee_directory.list_all(department=department)}
+
+
+@app.post("/api/admin/employees")
+async def add_employee(body: AddEmployeeRequest, user=Depends(require_supervisor)):
+    ok, reason = validate_employee_number(body.employee_number)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    ok, reason = validate_phone(body.phone)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    if body.role not in ("employee", "supervisor"):
+        return JSONResponse(status_code=400, content={"error": "role must be 'employee' or 'supervisor'"})
+    if not body.department.strip():
+        return JSONResponse(status_code=400, content={"error": "department is required"})
+    await asyncio.to_thread(
+        employee_directory.add, body.employee_number, body.name, body.role, body.department,
+        body.phone, account_username=body.account_username, created_by=user["sub"])
+    log(f"'{user['sub']}' added directory entry for employee {body.employee_number} "
+        f"({body.role}, {body.department})")
+    return {"ok": True}
+
+
+@app.post("/api/admin/employees/{employee_number}/deactivate")
+async def deactivate_employee(employee_number: str, user=Depends(require_supervisor)):
+    if not await asyncio.to_thread(employee_directory.set_active, employee_number, False):
+        return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
+    return {"ok": True}
+
+
+@app.post("/api/admin/employees/{employee_number}/reactivate")
+async def reactivate_employee(employee_number: str, user=Depends(require_supervisor)):
+    if not await asyncio.to_thread(employee_directory.set_active, employee_number, True):
+        return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
+    return {"ok": True}
+
+
+# ── Inbound SMS webhook (Twilio) — the employee-reply half of the task
+# workflow. NOT behind require_auth: Twilio has no bearer token to send.
+# X-Twilio-Signature is the ONLY authentication here — see
+# sms_webhook.py's module docstring for why that check is not optional. ──
+
+@app.post("/api/webhooks/twilio-sms")
+async def twilio_sms_webhook(request: Request):
+    if not config.PUBLIC_BASE_URL:
+        log("Inbound SMS webhook called but FLOORWATCH_PUBLIC_BASE_URL isn't set — "
+            "cannot validate the request signature, refusing.", level="warning")
+        return JSONResponse(status_code=503, content={"error": "webhook not configured"})
+
+    form = await request.form()
+    params = dict(form)
+    signature = request.headers.get("x-twilio-signature", "")
+    url = config.PUBLIC_BASE_URL.rstrip("/") + request.url.path
+
+    if not validate_signature(config.TWILIO_AUTH_TOKEN, url, params, signature):
+        log("Inbound SMS webhook: signature validation failed — rejecting "
+            "(this is either a misconfiguration or a forged request).", level="warning")
+        return JSONResponse(status_code=403, content={"error": "invalid signature"})
+
+    from_number = params.get("From", "")
+    body_text = params.get("Body", "")
+    reply = await submit_command(cluster_redis, "sms_reply", {"phone": from_number, "body": body_text})
+    if reply.get("__timeout__"):
+        reply_text = "Floorwatch is temporarily unavailable — please try again shortly."
+    else:
+        reply_text = reply.get("reply", "Sorry, something went wrong processing that.")
+
+    from fastapi import Response
+    return Response(content=reply_twiml(reply_text), media_type="application/xml")
+
+
 def _command_reply_to_response(reply: dict, error_status: int = 404):
     """Every mutating endpoint below turns a command-bus reply into an
     HTTP response the same way — a timeout means no replica currently
@@ -746,6 +1049,7 @@ class TaskAssignRequest(BaseModel):
     zone_id: str
     assigned_minutes: float
     task_type: str | None = None
+    assigned_to: str | None = None  # employee_number — omit for an unassigned task
 
 
 @app.post("/api/tasks")
@@ -753,7 +1057,31 @@ async def assign_task(body: TaskAssignRequest, user=Depends(require_supervisor))
     reply = await submit_command(cluster_redis, "assign_task", {
         "task_name": body.task_name, "zone_id": body.zone_id,
         "assigned_minutes": body.assigned_minutes, "task_type": body.task_type,
+        "assigned_to": body.assigned_to,
+        "assigned_by": f"user:{user['sub']}" if body.assigned_to else None,
     })
+    return _command_reply_to_response(reply, error_status=400)
+
+
+class TaskExtendRequest(BaseModel):
+    extra_minutes: float
+
+
+@app.post("/api/tasks/{task_id}/extend")
+async def extend_task(task_id: str, body: TaskExtendRequest, user=Depends(require_supervisor)):
+    reply = await submit_command(cluster_redis, "extend_task", {
+        "task_id": task_id, "extra_minutes": body.extra_minutes, "supervisor_id": user["sub"]})
+    return _command_reply_to_response(reply, error_status=400)
+
+
+class TaskReassignRequest(BaseModel):
+    new_assignee: str  # employee_number
+
+
+@app.post("/api/tasks/{task_id}/reassign")
+async def reassign_task(task_id: str, body: TaskReassignRequest, user=Depends(require_supervisor)):
+    reply = await submit_command(cluster_redis, "reassign_task", {
+        "task_id": task_id, "new_assignee": body.new_assignee, "supervisor_id": user["sub"]})
     return _command_reply_to_response(reply, error_status=400)
 
 

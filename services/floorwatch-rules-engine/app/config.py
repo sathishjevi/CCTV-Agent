@@ -44,6 +44,30 @@ EVENT_HISTORY_PATH = Path(os.environ.get(
 # ones), so a tighter default window is more sensible. Override via env.
 EVENT_HISTORY_RETENTION_DAYS = int(os.environ.get("FLOORWATCH_EVENT_HISTORY_RETENTION_DAYS", 30))
 
+# ── Task workflow — employee directory + durable task store, both
+# Postgres-if-configured/local-JSON-fallback (see employee_directory.py /
+# task_store.py). Distinct from floorwatch_users (login accounts) — this
+# is floor staff a task can be ASSIGNED to, most of whom never log in.
+EMPLOYEE_DIRECTORY_PATH = Path(os.environ.get(
+    "FLOORWATCH_EMPLOYEE_DIRECTORY_PATH", SERVICE_DIR / "employee_directory.json"))
+TASK_STORE_PATH = Path(os.environ.get("FLOORWATCH_TASK_STORE_PATH", SERVICE_DIR / "tasks.json"))
+
+# Minutes a CCTV-auto-assigned task gets by default (an admin/supervisor
+# manually assigning a task always sets this explicitly via the form).
+AUTO_ASSIGN_DEFAULT_MINUTES = float(os.environ.get("FLOORWATCH_AUTO_ASSIGN_DEFAULT_MINUTES", 30))
+# Which zone-engine event types trigger an automatic task assignment —
+# comma-separated. zone_escalated (Tier 3 — unresolved after a
+# supervisor command timeout) is the default: by that point coverage has
+# already gone through nudge -> command and failed, a real task is
+# warranted. zone_supervisor_command (Tier 2) is deliberately NOT
+# included by default — that tier is a DRAFT awaiting human
+# approve()/reassign(), and auto-creating a task before a human even
+# looks at it would race the human's own decision.
+AUTO_ASSIGN_TRIGGER_EVENT_TYPES = {
+    e.strip() for e in os.environ.get(
+        "FLOORWATCH_AUTO_ASSIGN_TRIGGER_EVENT_TYPES", "zone_escalated").split(",") if e.strip()
+}
+
 # Global Constraint 4 — shadow mode before real notifications. Defaults to
 # True; must be explicitly flipped off (and only after accuracy validation
 # per the brief's go-live checklist, which is Phase 4 scope).
@@ -92,6 +116,18 @@ CONTACTS_PATH = Path(os.environ.get("FLOORWATCH_CONTACTS_PATH", SERVICE_DIR / "c
 TWILIO_ACCOUNT_SID = os.environ.get("FLOORWATCH_TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN = os.environ.get("FLOORWATCH_TWILIO_AUTH_TOKEN", "")
 TWILIO_FROM_NUMBER = os.environ.get("FLOORWATCH_TWILIO_FROM_NUMBER", "")
+
+# The exact public URL Twilio calls for inbound SMS replies
+# (POST {PUBLIC_BASE_URL}/api/webhooks/twilio-sms) — required to validate
+# Twilio's X-Twilio-Signature header (see main.py's webhook handler).
+# Deliberately NOT auto-derived from the request Railway hands this
+# process (its X-Forwarded-Proto/Host can differ from what Twilio
+# actually called depending on proxy config) — signature validation
+# needs the EXACT url Twilio signed, so this must be set explicitly for
+# the webhook to work at all in production. Empty in local/dev by
+# default; the webhook logs a clear warning and rejects everything until
+# it's set, rather than silently trusting an unverified request.
+PUBLIC_BASE_URL = os.environ.get("FLOORWATCH_PUBLIC_BASE_URL", "")
 
 FCM_CREDENTIALS_PATH = os.environ.get("FLOORWATCH_FCM_CREDENTIALS_PATH", "")
 

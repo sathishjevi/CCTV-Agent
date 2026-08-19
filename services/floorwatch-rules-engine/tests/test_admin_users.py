@@ -36,6 +36,8 @@ def app_client(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "TICK_INTERVAL_SECONDS", 0.1)
     monkeypatch.setattr(config, "USERS_PATH", tmp_path / "users.json")
     monkeypatch.setattr(config, "EVENT_HISTORY_PATH", tmp_path / "event_history.jsonl")
+    monkeypatch.setattr(config, "EMPLOYEE_DIRECTORY_PATH", tmp_path / "employee_directory.json")
+    monkeypatch.setattr(config, "TASK_STORE_PATH", tmp_path / "tasks.json")
     monkeypatch.setattr(config, "POSTGRES_DSN", "")
     monkeypatch.setattr(config, "ADMIN_USERNAME", "")  # isolate from any real env var set on this machine
     monkeypatch.setattr(config, "ADMIN_PASSWORD", "")
@@ -86,6 +88,8 @@ def seeded_env(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "TICK_INTERVAL_SECONDS", 0.1)
     monkeypatch.setattr(config, "USERS_PATH", tmp_path / "users.json")
     monkeypatch.setattr(config, "EVENT_HISTORY_PATH", tmp_path / "event_history.jsonl")
+    monkeypatch.setattr(config, "EMPLOYEE_DIRECTORY_PATH", tmp_path / "employee_directory.json")
+    monkeypatch.setattr(config, "TASK_STORE_PATH", tmp_path / "tasks.json")
     monkeypatch.setattr(config, "POSTGRES_DSN", "")
     monkeypatch.setattr(config, "AUTH_SECRET", "test-fixture-secret-needs-32-bytes-minimum")
     yield config, monkeypatch
