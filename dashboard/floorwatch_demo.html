@@ -143,6 +143,13 @@
   .history-row .type{font-family:var(--mono);font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:0.3px;}
   .history-row .msg{font-size:12px;color:var(--text);margin-top:4px;line-height:1.4;}
   .history-row .by{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:4px;}
+
+  .wf-badge{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:0.3px;padding:2px 7px;border-radius:10px;display:inline-block;margin-top:4px;}
+  .wf-badge.wf-neutral{background:var(--panel-2);color:var(--dim);border:1px solid var(--line);}
+  .wf-badge.wf-ok{background:var(--ok-glow);color:var(--ok);border:1px solid rgba(18,135,90,0.4);}
+  .wf-badge.wf-warn{background:var(--amber-glow);color:var(--amber);border:1px solid rgba(180,121,14,0.4);}
+  .wf-badge.wf-bad{background:var(--red-glow);color:var(--red);border:1px solid rgba(208,55,74,0.4);}
+  .taskcard .assignee{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:2px;}
 </style>
 </head>
 <body>
@@ -232,6 +239,60 @@
   </div>
 </div>
 
+<div class="login-overlay" id="manageEmployeesOverlay" style="display:none;align-items:flex-start;padding:40px 20px;overflow-y:auto;">
+  <div class="login-card" style="width:min(820px,100%);">
+    <div class="brand" style="justify-content:space-between;display:flex;">
+      <div style="display:flex;align-items:center;">
+        <div class="brand-mark" style="display:inline-flex;">FW</div>
+        <strong style="margin-left:8px;font-size:15px;">Manage Employees</strong>
+      </div>
+      <button class="btn" id="closeManageEmployeesBtn" style="width:auto;padding:6px 12px;">Close</button>
+    </div>
+    <div style="font-family:var(--mono);font-size:10.5px;color:var(--dimmer);margin:-6px 0 16px;line-height:1.5;">
+      Floor staff and supervisors who can be assigned tasks — distinct from dashboard login accounts. Each needs a phone number to receive assignment messages.
+    </div>
+
+    <div id="manageEmployeesError" class="login-error" style="min-height:0;"></div>
+
+    <div style="overflow-x:auto;margin:12px 0 20px;">
+    <table id="employeesTable" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12.5px;">
+      <colgroup>
+        <col style="width:14%;"><col style="width:20%;"><col style="width:12%;"><col style="width:16%;"><col style="width:16%;"><col style="width:11%;"><col style="width:11%;">
+      </colgroup>
+      <thead>
+        <tr style="text-align:left;color:var(--dim);font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:0.4px;">
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Emp #</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Name</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Role</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Department</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Phone</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Status</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="employeesTableBody"></tbody>
+    </table>
+    </div>
+
+    <h2 style="margin-top:0;">Add an employee or supervisor</h2>
+    <form id="addEmployeeForm" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+      <div class="field" style="margin-bottom:0;min-width:90px;"><label for="newEmpNumber">Employee #</label><input id="newEmpNumber" required placeholder="101"></div>
+      <div class="field" style="margin-bottom:0;flex:1;min-width:140px;"><label for="newEmpName">Name</label><input id="newEmpName" required></div>
+      <div class="field" style="margin-bottom:0;min-width:110px;">
+        <label for="newEmpRole">Role</label>
+        <select id="newEmpRole" style="width:100%;box-sizing:border-box;font-family:var(--sans);font-size:13px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:9px 10px;">
+          <option value="employee" selected>employee</option>
+          <option value="supervisor">supervisor</option>
+        </select>
+      </div>
+      <div class="field" style="margin-bottom:0;min-width:130px;"><label for="newEmpDept">Department</label><input id="newEmpDept" required placeholder="e.g. usher"></div>
+      <div class="field" style="margin-bottom:0;min-width:140px;"><label for="newEmpPhone">Phone</label><input id="newEmpPhone" required placeholder="+15551234567"></div>
+      <button type="submit" class="btn primary" style="width:auto;">Add</button>
+    </form>
+    <div style="font-family:var(--mono);font-size:10.5px;color:var(--dimmer);margin-top:8px;line-height:1.5;">Department should match the zone's role tag (e.g. "usher", "janitorial", "ticketing") so auto-assignment and manual assignment can find them.</div>
+  </div>
+</div>
+
 <div class="login-overlay" id="historyOverlay" style="display:none;align-items:flex-start;padding:40px 20px;overflow-y:auto;">
   <div class="login-card" style="width:min(920px,100%);">
     <div class="brand" style="justify-content:space-between;display:flex;">
@@ -290,6 +351,7 @@
     <div class="user-badge" id="userBadge" style="display:none;">
       <span class="who" id="userWho"></span>
       <button class="btn" id="manageUsersBtn" style="padding:4px 10px;font-size:11px;display:none;">Manage Users</button>
+      <button class="btn" id="manageEmployeesBtn" style="padding:4px 10px;font-size:11px;display:none;">Manage Employees</button>
       <button class="btn" id="historyBtn" style="padding:4px 10px;font-size:11px;">History</button>
       <button class="btn" id="changePasswordBtn" style="padding:4px 10px;font-size:11px;">Change password</button>
       <button class="btn" id="logoutBtn" style="padding:4px 10px;font-size:11px;">Log out</button>
@@ -350,6 +412,7 @@
           </select>
         </div>
         <div class="field"><label for="taskMinutes">Budget (min)</label><input type="number" id="taskMinutes" value="60" min="1"></div>
+        <div class="field"><label for="taskAssignee">Assign to</label><select id="taskAssignee"><option value="">Unassigned</option></select></div>
         <button class="btn primary" id="assignTaskBtn">Assign task</button>
       </div>
       <div id="tasks"><div class="empty">No tasks assigned yet.</div></div>
@@ -385,6 +448,7 @@
   ZONES.forEach(z=>{ zoneState[z.id] = {state:'covered'}; });
   let tasks = {};
   let pendingCommands = {}; // zone_id -> {message, ...}
+  let employeesById = {}; // employee_number -> {name, role, department, active}
   let ws = null;
   let reconnectTimer = null;
 
@@ -435,6 +499,8 @@
     document.getElementById('userWho').textContent = `${currentAuth.username} (${currentAuth.role})`;
     document.getElementById('userBadge').style.display = 'flex';
     document.getElementById('manageUsersBtn').style.display = currentAuth.role === 'admin' ? 'inline-block' : 'none';
+    document.getElementById('manageEmployeesBtn').style.display =
+      (currentAuth.role === 'admin' || currentAuth.role === 'supervisor') ? 'inline-block' : 'none';
   }
 
   // All fetches to the rules engine go through this — attaches the bearer
@@ -526,6 +592,26 @@
     return (Date.now() - t.assignedAtMs) / 60000;
   }
 
+  // Workflow-status labels — step 7/8 of the spec: "statuses should be
+  // included and mapped" so the current state is always visible, not
+  // just at the moment the message was sent. Distinct from t.status
+  // (open/flagged/resolved, the effort-tracking dimension above).
+  const WORKFLOW_LABELS = {
+    unassigned:          {text: 'Unassigned',                                       cls: 'wf-neutral'},
+    notified:            {text: 'Notified — waiting to start',                      cls: 'wf-neutral'},
+    notify_failed:       {text: 'Notification failed — assignee not reached',       cls: 'wf-bad'},
+    in_progress:         {text: 'In progress',                                      cls: 'wf-ok'},
+    awaiting_update:     {text: 'Pending — waiting for update from employee',        cls: 'wf-warn'},
+    extension_requested: {text: 'Extension requested',                              cls: 'wf-warn'},
+    review_requested:    {text: 'Supervisor review requested',                      cls: 'wf-warn'},
+    completed:           {text: 'Completed',                                        cls: 'wf-ok'},
+  };
+  function employeeLabel(employeeNumber){
+    if(!employeeNumber) return null;
+    const e = employeesById[employeeNumber];
+    return e ? `${e.name} (#${employeeNumber})` : `#${employeeNumber}`;
+  }
+
   function renderTasks(){
     const ids = Object.keys(tasks);
     if(ids.length===0){ tasksEl.innerHTML = '<div class="empty">No tasks assigned yet.</div>'; document.getElementById('taskCount').textContent='0 active'; return; }
@@ -543,6 +629,8 @@
       else if(t.status==='low'){ statusText='Low active time — nudged'; statusClass='warn'; }
       else if(t.status==='flagged'){ statusText='Flagged for supervisor review'; statusClass='bad'; }
       else if(t.status==='resolved'){ statusText='Reviewed'; statusClass='ok'; }
+      const assigneeText = employeeLabel(t.assignedTo);
+      const wf = WORKFLOW_LABELS[t.workflowStatus] || null;
       const div = document.createElement('div');
       div.className = 'taskcard';
       div.innerHTML = `
@@ -550,6 +638,8 @@
         <div class="barwrap"><div class="bar ${barClass}" style="width:${pct}%"></div></div>
         <div class="stats"><span>Active: ${t.activeMin.toFixed(1)} / ${t.assignedMin} min</span><span>Elapsed: ${elapsedMin.toFixed(1)} / ${t.assignedMin} min</span></div>
         <div class="status ${statusClass}">${statusText}</div>
+        ${assigneeText ? `<div class="assignee">Assigned to: ${escapeHtml(assigneeText)}</div>` : ''}
+        ${wf ? `<div class="wf-badge ${wf.cls}">${escapeHtml(wf.text)}</div>` : ''}
         ${(t.status==='ok'||t.status==='low') ? `<button class="btn complete-btn" data-task="${id}">Mark complete</button>` : ''}`;
       tasksEl.appendChild(div);
     });
@@ -686,8 +776,18 @@
           name: evt.task_name, zone: zoneLabel(evt),
           assignedMin: evt.assigned_minutes, activeMin: 0, elapsedMin: 0,
           assignedAtMs: Date.now(), status: 'ok',
+          assignedTo: evt.assigned_to || null, workflowStatus: 'unassigned',
         };
-        logEvent('eff', `Task assigned: "${escapeHtml(evt.task_name)}", ${escapeHtml(zoneLabel(evt))}, ${evt.assigned_minutes} min budget.`);
+        logEvent('eff', `Task assigned: "${escapeHtml(evt.task_name)}", ${escapeHtml(zoneLabel(evt))}, ${evt.assigned_minutes} min budget`
+          + (evt.assigned_to ? ` — to ${escapeHtml(employeeLabel(evt.assigned_to) || evt.assigned_to)}.` : '.'));
+        break;
+      case 'task_workflow_update':
+      case 'task_status_nudge':
+        if(tasks[evt.task_id]){
+          tasks[evt.task_id].workflowStatus = evt.workflow_status;
+          tasks[evt.task_id].assignedTo = evt.assigned_to || tasks[evt.task_id].assignedTo;
+        }
+        logEvent('eff', escapeHtml(evt.message || `Task workflow update: ${evt.workflow_status}`));
         break;
       case 'task_active_time_update':
         if(tasks[evt.task_id]) tasks[evt.task_id].activeMin = evt.active_minutes;
@@ -739,10 +839,12 @@
           name: t.task_name, zone: t.zone_name || t.zone_id,
           assignedMin: t.assigned_minutes, activeMin: t.active_minutes, elapsedMin: t.elapsed_minutes,
           assignedAtMs: Date.now() - t.elapsed_minutes * 60000, status,
+          assignedTo: t.assigned_to || null, workflowStatus: t.workflow_status || 'unassigned',
         };
       });
 
       renderZones(); renderQueue(); renderTasks();
+      loadEmployeesForPicker();
       logEvent('info', 'Loaded current zone and task state from rules engine.');
     } catch(err){
       logEvent('crit', `Could not load initial state: ${escapeHtml(err.message)}`);
@@ -790,6 +892,7 @@
     const zoneId = document.getElementById('taskZone').value;
     const taskType = document.getElementById('taskType').value;
     const assignedMinutes = Number(document.getElementById('taskMinutes').value);
+    const assignedTo = document.getElementById('taskAssignee').value || null;
     if(!taskName || !assignedMinutes || assignedMinutes <= 0){
       logEvent('crit', 'Task name and a positive minute budget are required.');
       return;
@@ -798,7 +901,7 @@
     try {
       const res = await authFetch(`${base}/api/tasks`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({task_name: taskName, zone_id: zoneId, assigned_minutes: assignedMinutes, task_type: taskType}),
+        body: JSON.stringify({task_name: taskName, zone_id: zoneId, assigned_minutes: assignedMinutes, task_type: taskType, assigned_to: assignedTo}),
       });
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -997,6 +1100,123 @@
         if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
       }
       loadUsers();
+    } catch(err){
+      errEl.textContent = err.message;
+    }
+  });
+
+  // ── Employee directory (floor staff a task can be assigned to) —
+  // distinct from Manage Users (dashboard login accounts) above. Visible
+  // to supervisors and admins (backend uses require_supervisor, which
+  // accepts either role — see main.py). Keeps employeesById populated
+  // so task cards can show a name instead of a bare employee number. ──
+  async function loadEmployeesForPicker(){
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees`);
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      employeesById = {};
+      data.employees.forEach(e => { employeesById[e.employee_number] = e; });
+      const select = document.getElementById('taskAssignee');
+      const prevValue = select.value;
+      select.innerHTML = '<option value="">Unassigned</option>' + data.employees
+        .filter(e => e.active)
+        .map(e => `<option value="${escapeHtml(e.employee_number)}">${escapeHtml(e.name)} — ${escapeHtml(e.department)} (#${escapeHtml(e.employee_number)})</option>`)
+        .join('');
+      select.value = prevValue;
+      renderTasks(); // now that employeesById is populated, assignee names can resolve
+    } catch(err){
+      logEvent('crit', `Could not load employee directory: ${escapeHtml(err.message)}`);
+    }
+  }
+
+  function renderEmployeesTable(employeeList){
+    const tbody = document.getElementById('employeesTableBody');
+    if(!employeeList.length){
+      tbody.innerHTML = '<tr><td colspan="7" class="empty">No employees added yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = employeeList.map(e => `
+      <tr style="border-bottom:1px solid var(--line);">
+        <td style="padding:8px;font-family:var(--mono);">${escapeHtml(e.employee_number)}</td>
+        <td style="padding:8px;overflow-wrap:anywhere;">${escapeHtml(e.name)}</td>
+        <td style="padding:8px;font-family:var(--mono);">${escapeHtml(e.role)}</td>
+        <td style="padding:8px;">${escapeHtml(e.department)}</td>
+        <td style="padding:8px;font-family:var(--mono);font-size:11px;">${escapeHtml(e.phone)}</td>
+        <td style="padding:8px;color:${e.active ? 'var(--ok)' : 'var(--red)'};">${e.active ? 'active' : 'deactivated'}</td>
+        <td style="padding:8px;">
+          ${e.active
+            ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="deactivate" data-emp="${escapeHtml(e.employee_number)}">Deactivate</button>`
+            : `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reactivate" data-emp="${escapeHtml(e.employee_number)}">Reactivate</button>`}
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  async function loadEmployees(){
+    const errEl = document.getElementById('manageEmployeesError');
+    errEl.textContent = '';
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees`);
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      renderEmployeesTable(data.employees);
+    } catch(err){
+      errEl.textContent = `Failed to load employees: ${err.message}`;
+    }
+  }
+
+  document.getElementById('manageEmployeesBtn').onclick = () => {
+    document.getElementById('manageEmployeesOverlay').style.display = 'flex';
+    loadEmployees();
+  };
+  document.getElementById('closeManageEmployeesBtn').onclick = () => {
+    document.getElementById('manageEmployeesOverlay').style.display = 'none';
+  };
+
+  document.getElementById('addEmployeeForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('manageEmployeesError');
+    errEl.textContent = '';
+    const employee_number = document.getElementById('newEmpNumber').value.trim();
+    const name = document.getElementById('newEmpName').value.trim();
+    const role = document.getElementById('newEmpRole').value;
+    const department = document.getElementById('newEmpDept').value.trim();
+    const phone = document.getElementById('newEmpPhone').value.trim();
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({employee_number, name, role, department, phone}),
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      document.getElementById('addEmployeeForm').reset();
+      document.getElementById('newEmpRole').value = 'employee';
+      loadEmployees();
+      loadEmployeesForPicker();
+    } catch(err){
+      errEl.textContent = err.message;
+    }
+  };
+
+  document.getElementById('employeesTableBody').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if(!btn) return;
+    const employeeNumber = btn.dataset.emp;
+    const action = btn.dataset.action;
+    const errEl = document.getElementById('manageEmployeesError');
+    errEl.textContent = '';
+    try {
+      if(action === 'deactivate'){
+        if(!confirm(`Deactivate employee #${employeeNumber}? They will no longer be assignable to new tasks.`)) return;
+        const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees/${encodeURIComponent(employeeNumber)}/deactivate`, {method: 'POST'});
+        if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+      } else if(action === 'reactivate'){
+        const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees/${encodeURIComponent(employeeNumber)}/reactivate`, {method: 'POST'});
+        if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+      }
+      loadEmployees();
+      loadEmployeesForPicker();
     } catch(err){
       errEl.textContent = err.message;
     }
