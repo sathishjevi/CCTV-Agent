@@ -468,14 +468,40 @@ class EffortEngine:
         ]
 
     def confirm_flag(self, task_id: str, supervisor_id: str = "supervisor") -> Optional[dict]:
+        """Confirming a flag REOPENS the task rather than terminally
+        resolving it — a flag exists precisely because the work doesn't
+        look done; closing it to history on confirm was a real gap
+        (reported directly: the dashboard claimed "following up with the
+        employee" but nothing was ever sent, and there was no way to
+        track whether they ever did). Distinct from dismiss_flag() below,
+        which really is terminal — "false alarm," no follow-up needed.
+
+        Gives the employee a genuinely fresh window: active_seconds and
+        the elapsed-time clock (start_monotonic) both reset, rather than
+        racing against a budget that's already blown. workflow_status
+        resets to "unassigned" so main.py's _handle_confirm_flag can
+        immediately call _notify_assignee() — the SAME assignment
+        message/notification path used for a fresh assignment or a
+        reassignment, reusing rather than duplicating that logic. The
+        employee can then reply START/DONE/MORE/REVIEW exactly as they
+        would for any other assignment."""
         t = self.tasks.get(task_id)
         if t is None or t.status != "flagged":
             return None
-        t.status = "resolved"
-        evt = self._base_event(t, "task_resolved", t.active_seconds / 60.0,
-                                action_type="confirmed",
-                                message=f"Supervisor confirmed the effort flag on \"{t.task_name}\" — following up with the employee.")
+        t.status = "open"
+        t.active_seconds = 0.0
+        t.start_monotonic = self._clock()
+        t.last_motion_monotonic = None
+        t.last_update_emit_monotonic = 0.0
+        t.nudged = False
+        t.status_nudge_sent = False
+        t.workflow_status = "unassigned"
+        evt = self._base_event(t, "task_flag_confirmed", 0.0, action_type="confirmed",
+            message=f'Supervisor confirmed the effort flag on "{t.task_name}" — reopened, '
+                    f"and the employee has been notified to explain or complete it.")
         evt["resolved_by"] = f"supervisor:{supervisor_id}"
+        evt["assigned_to"] = t.assigned_to
+        evt["workflow_status"] = t.workflow_status
         return evt
 
     def dismiss_flag(self, task_id: str, supervisor_id: str = "supervisor") -> Optional[dict]:

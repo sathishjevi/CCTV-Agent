@@ -323,6 +323,7 @@
           <option value="task_low_effort_nudge">task_low_effort_nudge</option>
           <option value="task_status_nudge">task_status_nudge</option>
           <option value="task_flag">task_flag</option>
+          <option value="task_flag_confirmed">task_flag_confirmed</option>
           <option value="task_resolved">task_resolved</option>
         </select>
       </div>
@@ -817,9 +818,30 @@
         break;
       case 'task_resolved':
         if(tasks[evt.task_id]){ tasks[evt.task_id].status = 'resolved'; tasks[evt.task_id].activeMin = evt.active_minutes; }
+        // a supervisor confirming/dismissing a flag is a supervisor
+        // action just like approving/reassigning a zone directive — it
+        // just never counted here before (only zone_resolved did).
+        counters.cmds += (evt.resolved_by && evt.resolved_by.startsWith('supervisor:')) ? 1 : 0;
         logEvent('eff', evt.resolved_by === 'auto'
           ? `"${escapeHtml(evt.task_name)}" completed — active time met expectations.`
           : `"${escapeHtml(evt.task_name)}" reviewed by ${escapeHtml(evt.resolved_by)}${evt.action_type ? ' ('+escapeHtml(evt.action_type)+')' : ''}.`);
+        break;
+      case 'task_flag_confirmed':
+        // Confirming a flag REOPENS the task rather than closing it to
+        // history — the employee is actually notified (a separate
+        // task_workflow_update/"notified" event follows right after
+        // this one) and gets a genuine second attempt, tracked exactly
+        // like a fresh assignment. Drops out of the Supervisor Queue's
+        // pending list on its own since that list filters by
+        // status==='flagged', which this no longer is.
+        if(tasks[evt.task_id]){
+          const t = tasks[evt.task_id];
+          t.status = 'ok'; t.activeMin = 0; t.elapsedMin = 0; t.assignedAtMs = Date.now();
+          t.assignedTo = evt.assigned_to || t.assignedTo;
+          t.workflowStatus = evt.workflow_status;
+        }
+        counters.cmds += (evt.resolved_by && evt.resolved_by.startsWith('supervisor:')) ? 1 : 0;
+        logEvent('eff', escapeHtml(evt.message || `"${evt.task_name}" flag confirmed — reopened.`));
         break;
       default:
         return;
@@ -1252,7 +1274,7 @@
       case 'zone_supervisor_command': case 'zone_escalated': return 'crit';
       case 'zone_resolved': return evt.resolved_by === 'auto' ? 'ok' : 'info';
       case 'task_assigned': case 'task_auto_assigned': case 'task_reassigned':
-      case 'task_flag': case 'task_resolved': return 'eff';
+      case 'task_flag': case 'task_flag_confirmed': case 'task_resolved': return 'eff';
       default: return 'info';
     }
   }

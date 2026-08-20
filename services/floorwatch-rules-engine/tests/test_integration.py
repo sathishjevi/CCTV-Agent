@@ -215,6 +215,37 @@ def test_confirm_task_flag_endpoint(app_client):
     assert client.get("/api/queue/tasks").json() == []
 
 
+def test_confirm_task_flag_reopens_task_and_notifies_assignee(app_client):
+    """The reported gap: confirming a flag used to just close the task
+    to history, claiming (falsely) that the employee was being followed
+    up with. It must now actually reopen the task (visible again in
+    /api/tasks as an active task, not the supervisor queue) and run the
+    real notification path (mark_notified/mark_notify_failed — visible
+    either way, never silently skipped)."""
+    client, main_module, _url = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101", channel="sms")
+    resp = client.post("/api/tasks", json={
+        "task_name": "Clean Door", "zone_id": "theatre3", "assigned_minutes": 60,
+        "task_type": "clean_door", "assigned_to": "101",
+    })
+    task_id = resp.json()["task_id"]
+    client.post(f"/api/tasks/{task_id}/complete")  # no active time -> flagged
+    assert client.get("/api/tasks").json()[task_id]["status"] == "flagged"
+
+    confirm_resp = client.post(f"/api/queue/task/{task_id}/confirm")
+    assert confirm_resp.status_code == 200
+    assert confirm_resp.json()["event_type"] == "task_flag_confirmed"
+
+    tasks = client.get("/api/tasks").json()
+    assert tasks[task_id]["status"] == "open"  # reopened — no longer flagged/gone
+    assert tasks[task_id]["workflow_status"] == "notified"  # shadow mode still "delivers" for workflow purposes
+    assert client.get("/api/queue/tasks").json() == []  # no longer sitting in the supervisor queue
+
+    history = client.get("/api/history", params={"task_id": task_id}).json()
+    assert any(e["event_type"] == "task_workflow_update" and e.get("action_type") == "notified"
+               for e in history)
+
+
 # ── event history — the durable audit trail (reported missing directly:
 # a supervisor confirmed a flagged task, watched it happen live in the
 # dashboard, and it was never recorded anywhere) ─────────────────────────
@@ -235,9 +266,12 @@ def test_full_task_lifecycle_is_durably_recorded(app_client):
     event_types = {e["event_type"] for e in history}
     assert "task_assigned" in event_types
     assert "task_flag" in event_types
-    assert "task_resolved" in event_types  # the supervisor's confirm — this was the missing one
+    # confirming a flag REOPENS the task (see effort_engine.py's
+    # confirm_flag docstring) rather than resolving it, so the durably-
+    # recorded event is task_flag_confirmed — this was the missing one.
+    assert "task_flag_confirmed" in event_types
 
-    confirmed = next(e for e in history if e["event_type"] == "task_resolved")
+    confirmed = next(e for e in history if e["event_type"] == "task_flag_confirmed")
     assert confirmed["resolved_by"] == "supervisor:test-supervisor"
 
 

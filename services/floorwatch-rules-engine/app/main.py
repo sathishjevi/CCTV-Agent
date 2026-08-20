@@ -635,10 +635,22 @@ async def _handle_complete_task(payload: dict) -> dict:
 
 
 async def _handle_confirm_flag(payload: dict) -> dict:
-    evt = effort_engine.confirm_flag(payload["task_id"], supervisor_id=payload.get("supervisor_id", "supervisor"))
+    """confirm_flag() reopens the task (see its docstring) rather than
+    resolving it — so this must actually notify the employee, same as a
+    fresh assignment/reassignment, not just log a message CLAIMING a
+    follow-up happened."""
+    task_id = payload["task_id"]
+    evt = effort_engine.confirm_flag(task_id, supervisor_id=payload.get("supervisor_id", "supervisor"))
     if evt is None:
         return {"error": "unknown task or nothing pending"}
+    # confirm_flag() reset the task's start_monotonic to "now" — the
+    # wall-clock anchor task_store/rehydrate_tasks() uses for restart
+    # recovery must be reset to match, or a restart after this point
+    # would compute a wildly inflated elapsed time against the NEW
+    # monotonic start using the OLD (pre-reopen) wall-clock timestamp.
+    _task_started_at[task_id] = datetime.now(timezone.utc).isoformat()
     await _emit(evt)
+    await _notify_assignee(task_id)  # actually sends the follow-up message this time
     return {"event": evt}
 
 

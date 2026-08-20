@@ -246,18 +246,70 @@ def test_per_task_type_threshold_used_not_global_default():
 
 # ── supervisor confirm/dismiss ───────────────────────────────────────────
 
-def test_confirm_flag_resolves_with_supervisor_attribution():
+def test_confirm_flag_reopens_task_with_supervisor_attribution():
+    """confirm_flag() no longer terminally resolves — it REOPENS the
+    task so the employee can actually be notified and given a genuine
+    second attempt (previously the dashboard claimed "following up with
+    the employee" but nothing was ever sent, and the task just vanished
+    to history)."""
     engine, clock = make_engine(staffed=True, zone_covered=True)
-    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door",
+                                   assigned_to="101", assigned_by="user:admin")
     task_id = task_evt["task_id"]
+    engine.mark_notified(task_id)
     engine.complete_task(task_id)  # active_seconds=0 -> flagged
     assert engine.pending_flags()[0]["task_id"] == task_id
 
     evt = engine.confirm_flag(task_id, supervisor_id="alice")
-    assert evt["event_type"] == "task_resolved"
+    assert evt["event_type"] == "task_flag_confirmed"
     assert evt["resolved_by"] == "supervisor:alice"
-    assert engine.tasks[task_id].status == "resolved"
-    assert engine.pending_flags() == []
+    assert evt["assigned_to"] == "101"
+    assert evt["workflow_status"] == "unassigned"  # main.py re-notifies from here
+
+    t = engine.tasks[task_id]
+    assert t.status == "open"  # reopened, not resolved
+    assert t.active_seconds == 0.0
+    assert t.nudged is False
+    assert t.status_nudge_sent is False
+    assert engine.pending_flags() == []  # no longer flagged
+
+
+def test_confirm_flag_resets_the_elapsed_time_clock():
+    """The employee gets a genuinely fresh window — elapsed time
+    computed from start_monotonic must restart from zero, not continue
+    counting from the original (already-blown) assignment."""
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+    clock.advance(3600)  # a full hour passes before it's even flagged
+    engine.complete_task(task_id)
+    assert engine.tasks[task_id].status == "flagged"
+
+    engine.confirm_flag(task_id, supervisor_id="alice")
+    t = engine.tasks[task_id]
+    elapsed_minutes = (clock() - t.start_monotonic) / 60.0
+    assert elapsed_minutes == 0.0
+
+
+def test_confirm_flag_can_be_flagged_and_confirmed_a_second_time():
+    """The reopened task goes through the normal effort lifecycle again
+    on its own merits — if it gets flagged a second time, confirm_flag
+    must still work exactly the same way, not error out or double up
+    stale state from the first pass."""
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+    engine.complete_task(task_id)
+    engine.confirm_flag(task_id, supervisor_id="alice")
+    assert engine.tasks[task_id].status == "open"
+
+    second_flag = engine.complete_task(task_id)  # still no active time -> flagged again
+    assert second_flag["event_type"] == "task_flag"
+    assert engine.tasks[task_id].status == "flagged"
+
+    second_confirm = engine.confirm_flag(task_id, supervisor_id="bob")
+    assert second_confirm["event_type"] == "task_flag_confirmed"
+    assert engine.tasks[task_id].status == "open"
 
 
 def test_dismiss_flag_resolves_with_supervisor_attribution():
