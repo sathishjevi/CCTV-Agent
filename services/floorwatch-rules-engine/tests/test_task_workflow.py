@@ -249,6 +249,64 @@ def test_reassign_task_resets_workflow_for_new_assignee():
     assert "reassigned from employee 101 to employee 102" in evt["message"]
 
 
+def test_reassign_task_emits_distinct_auditable_event_type():
+    """Brief requirement: reassignment must be independently auditable —
+    own event_type, plus who/from/to, not folded into the generic
+    task_workflow_update where it'd be harder to find/filter."""
+    engine, _ = make_engine()
+    task_id = assign(engine, assigned_to="101")
+    evt = engine.reassign_task(task_id, "102", supervisor_id="alice")
+    assert evt["event_type"] == "task_reassigned"
+    assert evt["previous_assignee"] == "101"
+    assert evt["reassigned_by"] == "supervisor:alice"
+    assert evt["assigned_to"] == "102"
+
+
+def test_reassign_task_by_supervisor_prefixes_bare_username():
+    engine, _ = make_engine()
+    task_id = assign(engine, assigned_to="101")
+    evt = engine.reassign_task(task_id, "102", supervisor_id="alice")
+    assert evt["reassigned_by"] == "supervisor:alice"
+    assert "by supervisor:alice" in evt["message"]
+
+
+def test_reassign_task_by_employee_keeps_already_qualified_actor():
+    """The SMS-driven path (an employee reassigning their own task) passes
+    an already role-qualified actor string ("employee:101") — this must
+    NOT get a second "supervisor:" prefix slapped on it."""
+    engine, _ = make_engine()
+    task_id = assign(engine, assigned_to="101")
+    evt = engine.reassign_task(task_id, "102", supervisor_id="employee:101")
+    assert evt["reassigned_by"] == "employee:101"
+    assert "by employee:101" in evt["message"]
+    assert "supervisor:employee:101" not in evt["message"]
+
+
+def test_reassign_task_preserves_previous_assignee_when_none():
+    engine, _ = make_engine()
+    task_id = assign(engine, assigned_to=None)  # auto-assign found nobody eligible
+    evt = engine.reassign_task(task_id, "102", supervisor_id="alice")
+    assert evt["previous_assignee"] is None
+    assert "reassigned from employee nobody to employee 102" in evt["message"]
+
+
+def test_auto_assigned_event_records_supervisor_and_is_distinct_from_task_assigned():
+    engine, _ = make_engine()
+    created = engine.assign_task("Cover Theatre 3", "theatre3", 30.0,
+                                  assigned_to="900", assigned_by="system:auto_assign")
+    task_id = created["task_id"]
+    evt = engine.auto_assigned_event(task_id)
+    assert evt["event_type"] == "task_auto_assigned"
+    assert evt["assigned_to"] == "900"
+    assert evt["assigned_by"] == "system:auto_assign"
+    assert evt["task_id"] == task_id
+
+
+def test_auto_assigned_event_unknown_task_returns_none():
+    engine, _ = make_engine()
+    assert engine.auto_assigned_event("nonexistent-task-id") is None
+
+
 def test_complete_closes_workflow_dimension_too():
     engine, _ = make_engine()
     task_id = assign(engine)

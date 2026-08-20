@@ -14,7 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "skills" / "lib"))
 
 from employee_directory import (  # noqa: E402
     JsonEmployeeDirectory, PostgresEmployeeDirectory, build_employee_directory,
-    normalize_phone, validate_employee_number, validate_phone,
+    normalize_phone, validate_channel, validate_employee_number, validate_phone,
+    validate_primary_contact,
 )
 
 
@@ -50,6 +51,40 @@ def test_validate_phone_rejects_garbage():
 def test_normalize_phone_strips_formatting():
     assert normalize_phone("(555) 123-4567") == "5551234567"
     assert normalize_phone("+1 555 123 4567") == "+15551234567"
+
+
+# ── Feature 1/2 validation helpers ───────────────────────────────────────
+
+def test_validate_channel_accepts_none_and_empty():
+    assert validate_channel(None)[0] is True
+    assert validate_channel("")[0] is True
+
+
+def test_validate_channel_accepts_sms_and_fcm():
+    assert validate_channel("sms")[0] is True
+    assert validate_channel("fcm")[0] is True
+
+
+def test_validate_channel_rejects_unknown_value():
+    ok, reason = validate_channel("pager")
+    assert ok is False
+    assert "sms" in reason and "fcm" in reason
+
+
+def test_validate_primary_contact_allows_supervisor():
+    assert validate_primary_contact("supervisor", True)[0] is True
+    assert validate_primary_contact("supervisor", False)[0] is True
+
+
+def test_validate_primary_contact_rejects_employee_role():
+    ok, reason = validate_primary_contact("employee", True)
+    assert ok is False
+    assert "supervisor" in reason
+
+
+def test_validate_primary_contact_false_is_always_fine():
+    # is_primary_contact=False never triggers the role check, regardless of role
+    assert validate_primary_contact("employee", False)[0] is True
 
 
 # ── JsonEmployeeDirectory ───────────────────────────────────────────────
@@ -122,6 +157,43 @@ def test_json_set_active_unknown_returns_false(tmp_path):
     assert d.set_active("nobody", False) is False
 
 
+def test_json_add_stores_channel_and_fcm_token(tmp_path):
+    d = JsonEmployeeDirectory(tmp_path / "employees.json")
+    d.add("101", "Pat", "employee", "janitorial", "+15551234567", channel="fcm", fcm_token="tok-abc123")
+    entry = d.get("101")
+    assert entry["channel"] == "fcm"
+    assert entry["fcm_token"] == "tok-abc123"
+
+
+def test_json_add_defaults_channel_to_none(tmp_path):
+    d = JsonEmployeeDirectory(tmp_path / "employees.json")
+    d.add("101", "Pat", "employee", "janitorial", "+15551234567")
+    assert d.get("101")["channel"] is None
+
+
+def test_json_add_rejects_invalid_channel(tmp_path):
+    d = JsonEmployeeDirectory(tmp_path / "employees.json")
+    with pytest.raises(ValueError):
+        d.add("101", "Pat", "employee", "janitorial", "+15551234567", channel="pager")
+
+
+def test_json_add_accepts_primary_contact_on_supervisor(tmp_path):
+    d = JsonEmployeeDirectory(tmp_path / "employees.json")
+    d.add("900", "Jordan Lee", "supervisor", "janitorial", "+15559990000", is_primary_contact=True)
+    assert d.get("900")["is_primary_contact"] is True
+
+
+def test_json_add_rejects_primary_contact_on_employee(tmp_path):
+    """The primary contact for a department must always be a supervisor
+    — never a line employee. Rejected at write time, not silently
+    allowed, since a line employee ending up flagged primary would mean
+    auto-assignment could route detection-triggered work straight to
+    them, exactly what the supervisor-only design is meant to prevent."""
+    d = JsonEmployeeDirectory(tmp_path / "employees.json")
+    with pytest.raises(ValueError):
+        d.add("101", "Pat", "employee", "janitorial", "+15551234567", is_primary_contact=True)
+
+
 # ── PostgresEmployeeDirectory (mocked — no real Postgres in this sandbox) ──
 
 def _fake_psycopg_module(fake_conn):
@@ -159,6 +231,33 @@ def test_postgres_add_rejects_invalid_role():
         d = PostgresEmployeeDirectory("postgresql://fake/dsn")
         with pytest.raises(ValueError):
             d.add("101", "Pat", "root", "janitorial", "+15551234567")
+
+
+def test_postgres_migration_adds_new_columns():
+    fake_conn = MagicMock()
+    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+        PostgresEmployeeDirectory("postgresql://fake/dsn")
+
+    all_sql = " ".join(call.args[0] for call in fake_conn.execute.call_args_list)
+    assert "ADD COLUMN IF NOT EXISTS channel" in all_sql
+    assert "ADD COLUMN IF NOT EXISTS fcm_token" in all_sql
+    assert "ADD COLUMN IF NOT EXISTS is_primary_contact" in all_sql
+
+
+def test_postgres_add_rejects_invalid_channel():
+    fake_conn = MagicMock()
+    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+        d = PostgresEmployeeDirectory("postgresql://fake/dsn")
+        with pytest.raises(ValueError):
+            d.add("101", "Pat", "employee", "janitorial", "+15551234567", channel="pager")
+
+
+def test_postgres_add_rejects_primary_contact_on_employee():
+    fake_conn = MagicMock()
+    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+        d = PostgresEmployeeDirectory("postgresql://fake/dsn")
+        with pytest.raises(ValueError):
+            d.add("101", "Pat", "employee", "janitorial", "+15551234567", is_primary_contact=True)
 
 
 def test_postgres_get_by_phone_normalizes_lookup():

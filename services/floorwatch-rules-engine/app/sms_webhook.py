@@ -29,15 +29,24 @@ _KEYWORD_ALIASES = {
     "DONE": "DONE", "COMPLETE": "DONE", "COMPLETED": "DONE", "FINISHED": "DONE",
     "MORE": "MORE", "EXTEND": "MORE", "EXTENSION": "MORE",
     "REVIEW": "REVIEW", "HELP": "REVIEW",
+    "REASSIGN": "REASSIGN", "HANDOFF": "REASSIGN", "TRANSFER": "REASSIGN",
 }
-VALID_ACTIONS = {"START", "DONE", "MORE", "REVIEW"}
+VALID_ACTIONS = {"START", "DONE", "MORE", "REVIEW", "REASSIGN"}
 
 
 def parse_sms_command(body: str):
     """Returns (action, code) — action is one of VALID_ACTIONS or None if
-    unrecognized; code is the task short code if one was included, else
-    None. "start" / "START ABC123" / "  Done  " all parse correctly —
-    real people don't type consistently on a phone keyboard."""
+    unrecognized. For START/DONE/MORE/REVIEW, `code` is the task short
+    code if one was included (alnum-only, e.g. "ABC123"), else None —
+    "start" / "START ABC123" / "  Done  " all parse correctly, since real
+    people don't type consistently on a phone keyboard.
+
+    REASSIGN is different: it needs a target employee number AND
+    optionally a task code ("REASSIGN 102" or "REASSIGN 102 ABC123"), so
+    `code` here is the RAW trimmed remainder instead of the alnum-only
+    cleaning applied to the other actions (which would collapse the
+    space between the two tokens) — main.py's _handle_sms_reply splits
+    it itself."""
     text = (body or "").strip()
     if not text:
         return None, None
@@ -45,12 +54,13 @@ def parse_sms_command(body: str):
     keyword = _KEYWORD_ALIASES.get(parts[0].strip().upper())
     if keyword is None:
         return None, None
-    code = None
-    if len(parts) > 1:
-        candidate = re.sub(r"[^A-Za-z0-9]", "", parts[1])
-        if candidate:
-            code = candidate.upper()
-    return keyword, code
+    if len(parts) == 1:
+        return keyword, None
+    remainder = parts[1].strip()
+    if keyword == "REASSIGN":
+        return keyword, (remainder or None)
+    candidate = re.sub(r"[^A-Za-z0-9]", "", remainder)
+    return keyword, (candidate.upper() if candidate else None)
 
 
 def validate_signature(auth_token: str, url: str, params: dict, signature: str) -> bool:

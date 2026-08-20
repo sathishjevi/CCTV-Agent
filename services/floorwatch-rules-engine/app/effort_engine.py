@@ -189,6 +189,27 @@ class EffortEngine:
         evt["assigned_by"] = assigned_by
         return evt
 
+    def auto_assigned_event(self, task_id: str) -> Optional[dict]:
+        """A SEPARATE, distinctly-auditable event emitted alongside the
+        normal task_assigned event when a task was routed automatically
+        to a department's primary-contact supervisor rather than chosen
+        by a person — see main.py's _maybe_auto_assign(). Kept separate
+        from (rather than overriding) task_assigned's event_type so
+        every existing consumer of "task_assigned" — tests, the
+        dashboard, history filters — keeps working unchanged; this is
+        purely additive, recording who was auto-assigned, when, and
+        that it was automatic, not a manual choice."""
+        t = self.tasks.get(task_id)
+        if t is None:
+            return None
+        evt = self._base_event(t, "task_auto_assigned", t.active_seconds / 60.0,
+            action_type="auto_assigned",
+            message=f'"{t.task_name}" auto-assigned to supervisor {t.assigned_to} '
+                    f"— primary contact for this zone's department.")
+        evt["assigned_to"] = t.assigned_to
+        evt["assigned_by"] = t.assigned_by
+        return evt
+
     # ── workflow transitions (assignment/communication dimension) ────────
     #
     # Each returns an event dict (for _emit -> broadcast + durable
@@ -266,20 +287,41 @@ class EffortEngine:
 
     def reassign_task(self, task_id: str, new_assignee: str,
                        supervisor_id: str = "supervisor") -> Optional[dict]:
-        """Supervisor/admin moves the task to a different employee. Resets
-        the workflow to unassigned so main.py re-runs the notification
-        path for the new assignee (mark_notified/mark_notify_failed)."""
+        """Moves the task to a different employee. Resets the workflow to
+        unassigned so main.py re-runs the notification path for the new
+        assignee (mark_notified/mark_notify_failed).
+
+        Two distinct callers use this, per the task-workflow spec's
+        reassignment/delegation requirement: a supervisor delegating via
+        the dashboard REST endpoint, and the currently-assigned employee
+        handing off via the SMS "REASSIGN <employee>" keyword. `actor`
+        is `supervisor_id`'s value if it's already role-qualified
+        (contains ":", e.g. "employee:101" from the SMS path) — otherwise
+        it's treated as a bare username and prefixed "supervisor:", same
+        as every other actor param in this module, for backward
+        compatibility with existing callers.
+
+        event_type is overridden to "task_reassigned" (distinct from the
+        generic "task_workflow_update") so this is independently
+        auditable/filterable in event_history — who reassigned it, from
+        whom, to whom, and when — without the previous assignment
+        silently disappearing from the log; it's superseded, not deleted."""
         t = self.tasks.get(task_id)
         if t is None or t.status != "open":
             return None
         previous = t.assigned_to
+        actor = supervisor_id if ":" in supervisor_id else f"supervisor:{supervisor_id}"
         t.assigned_to = new_assignee
-        t.assigned_by = f"user:{supervisor_id}"
+        t.assigned_by = actor
         t.workflow_status = "unassigned"
         t.status_nudge_sent = False
-        return self._workflow_event(t, "reassigned",
+        evt = self._workflow_event(t, "reassigned",
             f'"{t.task_name}" reassigned from employee {previous or "nobody"} to '
-            f"employee {new_assignee} by supervisor:{supervisor_id}.")
+            f"employee {new_assignee} by {actor}.")
+        evt["event_type"] = "task_reassigned"
+        evt["previous_assignee"] = previous
+        evt["reassigned_by"] = actor
+        return evt
 
     # ── inbound: pose/motion signal (floorwatch-pose) ────────────────────
 

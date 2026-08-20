@@ -53,6 +53,34 @@ def test_code_with_punctuation_gets_cleaned():
     assert parse_sms_command("start #ABC-123!") == ("START", "ABC123")
 
 
+# ── REASSIGN — Conflict 2's employee-side delegation keyword; the
+# remainder is raw (not alnum-stripped) since it needs to preserve the
+# space between a target employee number and an optional task code. ────
+
+def test_reassign_bare_keyword_no_target():
+    assert parse_sms_command("REASSIGN") == ("REASSIGN", None)
+
+
+def test_reassign_with_target_employee_only():
+    assert parse_sms_command("REASSIGN 102") == ("REASSIGN", "102")
+
+
+def test_reassign_with_target_and_task_code_preserves_space():
+    assert parse_sms_command("REASSIGN 102 ABC123") == ("REASSIGN", "102 ABC123")
+
+
+def test_reassign_recognizes_synonyms():
+    assert parse_sms_command("handoff 102") == ("REASSIGN", "102")
+    assert parse_sms_command("transfer 102") == ("REASSIGN", "102")
+
+
+def test_reassign_case_insensitive_keyword_case_preserved_in_remainder():
+    # the KEYWORD is matched case-insensitively, but the remainder
+    # (target employee number / task code) is passed through as typed —
+    # main.py does its own cleanup on the task-code half only.
+    assert parse_sms_command("Reassign 102") == ("REASSIGN", "102")
+
+
 # ── validate_signature ───────────────────────────────────────────────────
 
 def test_validate_signature_rejects_empty_auth_token():

@@ -14,6 +14,7 @@ Run:
 
 import asyncio
 import json
+import re
 import sys
 import uuid
 from contextlib import asynccontextmanager
@@ -30,7 +31,8 @@ import config  # noqa: E402 (also inserts skills/lib onto sys.path — see confi
 from digest_store import DigestStore  # noqa: E402
 from effort_engine import EffortEngine  # noqa: E402
 from employee_directory import (  # noqa: E402
-    build_employee_directory, validate_employee_number, validate_phone,
+    build_employee_directory, validate_channel, validate_employee_number,
+    validate_phone, validate_primary_contact,
 )
 from event_history import build_event_history_store  # noqa: E402
 from engine import RulesEngine  # noqa: E402
@@ -179,6 +181,26 @@ log(f"Notification channel: {config.NOTIFY_CHANNEL} (sender={type(notify_sender)
     f"shadow_mode={config.SHADOW_MODE} — real sends only happen when both a real channel is "
     f"configured AND shadow_mode is false.")
 
+# ── Per-employee notification channel routing (task-workflow messaging
+# only — the ContactBook/notify_sender pair above is Part A/B's
+# anonymous zone-level nudge/directive path and is deliberately left
+# untouched; see PHASE_2_NOTES.md). Both built unconditionally at
+# startup, independent of the global NOTIFY_CHANNEL toggle, since an
+# employee's own `channel` field can select either one regardless of
+# what the deployment's global default is. build_sender() never raises —
+# an unconfigured/misconfigured channel here just resolves to a
+# NoOpSender, same fallback behavior as the global sender above.
+TASK_CHANNEL_SENDERS = {
+    "sms": build_sender("twilio", config),
+    "fcm": build_sender("fcm", config),
+}
+# What an employee record with no `channel` override falls back to —
+# preserves pre-Feature-1 behavior (always SMS) for every employee added
+# before this field existed, per the brief's explicit backward-
+# compatibility requirement.
+_NOTIFY_CHANNEL_TO_TASK_CHANNEL = {"twilio": "sms", "fcm": "fcm"}
+DEFAULT_TASK_CHANNEL = _NOTIFY_CHANNEL_TO_TASK_CHANNEL.get(config.NOTIFY_CHANNEL)
+
 engine = RulesEngine(
     roster=roster,
     digest=digest,
@@ -294,24 +316,51 @@ async def _emit(evt: dict):
 
 # ── Employee messaging — the outbound half of the task workflow ─────────
 
+def _resolve_task_channel(employee: dict) -> str | None:
+    """Feature 1 — per-employee channel routing. An employee's own
+    `channel` field always wins; a record that predates this field (or
+    was added without specifying one) falls back to DEFAULT_TASK_CHANNEL,
+    which mirrors whatever the deployment's global NOTIFY_CHANNEL already
+    meant before per-employee channels existed — see the comment above
+    TASK_CHANNEL_SENDERS' definition. Returns None if there's no channel
+    to use at all (no override AND no usable global default)."""
+    return employee.get("channel") or DEFAULT_TASK_CHANNEL
+
+
 def _send_task_notification(employee_number, message) -> dict:
     """Synchronous — always run via asyncio.to_thread from async callers,
     same as event_history.record(). Global Constraint 4 applies here
     exactly as it does to the zone/effort engines' own on_notify() path:
     shadow mode suppresses the real send but the caller still treats it
     as delivered for workflow-transition purposes, so the state machine
-    behaves identically whether or not a real SMS account is configured."""
+    behaves identically whether or not a real SMS account is configured.
+
+    Explicitly does NOT fall back to a different channel than the one
+    configured for this employee — a supervisor whose record says
+    channel="fcm" but has no fcm_token on file gets a clear
+    "no fcm token on file" skip, never a silent SMS instead (which could
+    go to a stale/wrong number) or vice versa. Missing delivery detail
+    is a real gap a human needs to see and fix, not paper over."""
     if not employee_number:
         return {"sent": False, "channel": "none", "detail": "no assignee"}
     employee = employee_directory.get(employee_number)
-    phone = employee.get("phone") if employee else None
-    if not phone:
-        return {"sent": False, "channel": "none", "detail": "no phone on file for this employee"}
+    if employee is None:
+        return {"sent": False, "channel": "none", "detail": "employee not found in directory"}
+    channel = _resolve_task_channel(employee)
+    if not channel:
+        log(f"No notification channel configured for employee {employee_number} "
+            f"(no per-employee override and no usable global default) — skipping send", level="warning")
+        return {"sent": False, "channel": "none", "detail": "no channel configured for this employee"}
     if config.SHADOW_MODE:
-        log(f"SHADOW MODE — would message employee {employee_number} "
-            f"({_mask_phone(phone)}): {message}")
+        dest = _mask_phone(employee.get("phone")) if channel == "sms" else "fcm token on file"
+        log(f"SHADOW MODE — would message employee {employee_number} via {channel} ({dest}): {message}")
         return {"sent": False, "channel": "shadow_mode_suppressed", "detail": ""}
-    result = notify_sender.send({"phone": phone}, message)
+    sender = TASK_CHANNEL_SENDERS.get(channel)
+    if sender is None:
+        log(f"Employee {employee_number} has unrecognized channel {channel!r} — skipping send", level="warning")
+        return {"sent": False, "channel": "none", "detail": f"unrecognized channel {channel!r}"}
+    to_context = {"phone": employee.get("phone"), "fcm_token": employee.get("fcm_token")}
+    result = sender.send(to_context, message)
     return result.to_dict()
 
 
@@ -343,13 +392,46 @@ async def _notify_assignee(task_id: str):
 # Only ever invoked from tick_loop(), which only runs on the leader, so
 # this calls _handle_assign_task directly rather than via the command
 # bus — same reasoning as engine.tick()/effort_engine.tick() events
-# being emitted directly above. ──────────────────────────────────────
+# being emitted directly above.
+#
+# Targets the department's PRIMARY-CONTACT SUPERVISOR by default, not a
+# line employee directly — see PHASE_2_NOTES.md's Feature 2 section for
+# why this is consistent with Global Constraint 2 (anonymity of the
+# DETECTED person is untouched; only a supervisor's already-nameable
+# identity is used). The supervisor then delegates to whoever should
+# actually do the work — see _handle_reassign_task /
+# _handle_sms_reassign below. _least_loaded_employee() is kept as the
+# suggestion a supervisor's delegation UI can offer (GET
+# /api/admin/employees/suggest), not as an automatic fallback. ─────────
+
+def _primary_contact_for_department(department: str) -> str | None:
+    """The one active supervisor flagged is_primary_contact for this
+    department. If more than one is misconfigured as primary for the
+    same department, picks deterministically (lowest employee_number)
+    and logs a warning rather than picking arbitrarily/crashing —
+    add_employee() is supposed to prevent this by role validation, but
+    two DIFFERENT supervisors can each still legitimately be flagged
+    primary for the same department through no single invalid write."""
+    candidates = [e for e in employee_directory.list_all(department=department, active_only=True)
+                  if e.get("role") == "supervisor" and e.get("is_primary_contact")]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda e: e["employee_number"])
+    if len(candidates) > 1:
+        log(f"department '{department}' has {len(candidates)} active primary contacts "
+            f"({[e['employee_number'] for e in candidates]}) — using the lowest employee_number; "
+            f"this should be cleaned up so only one is flagged.", level="warning")
+    return candidates[0]["employee_number"]
+
 
 def _least_loaded_employee(department: str) -> str | None:
     """Picks the department's active employee with the fewest currently
     OPEN tasks assigned to them (ties broken by employee_number for
-    determinism). Only considers role == "employee" — auto-assignment
-    never hands coverage work to a supervisor."""
+    determinism). Only considers role == "employee". No longer called
+    automatically by _maybe_auto_assign (see module comment above) —
+    exposed via GET /api/admin/employees/suggest as a delegation
+    suggestion for the primary-contact supervisor who's deciding who
+    should actually do the work."""
     candidates = [e for e in employee_directory.list_all(department=department, active_only=True)
                   if e.get("role") == "employee"]
     if not candidates:
@@ -378,7 +460,7 @@ async def _maybe_auto_assign(evt: dict):
     if not zone_id or _auto_task_already_open_for_zone(zone_id):
         return
     department = evt.get("role_tag", "")
-    assignee = _least_loaded_employee(department)
+    assignee = _primary_contact_for_department(department)
     payload = {
         "task_name": f"Cover {effort_engine._zone_label(zone_id)}", "zone_id": zone_id,
         "assigned_minutes": config.AUTO_ASSIGN_DEFAULT_MINUTES, "task_type": "auto_coverage",
@@ -392,9 +474,16 @@ async def _maybe_auto_assign(evt: dict):
         # Created, but unassigned — surfaces in /api/tasks with
         # workflow_status "unassigned" so a supervisor can hand-assign
         # it; per the spec's own fallback requirement (no eligible
-        # employee should never mean the gap silently goes untracked).
+        # primary contact should never mean the gap silently goes
+        # untracked).
         log(f"auto-assign created an unassigned coverage task for zone '{zone_id}' — "
-            f"no active employee found in department '{department}'.", level="warning")
+            f"no active primary-contact supervisor configured for department '{department}'.",
+            level="warning")
+    else:
+        task_id = result["event"]["task_id"]
+        auto_evt = effort_engine.auto_assigned_event(task_id)
+        if auto_evt:
+            await _emit(auto_evt)
 
 
 # ── Command bus dispatch table — see cluster_bus.py's module docstring.
@@ -443,7 +532,17 @@ async def _handle_extend_task(payload: dict) -> dict:
 
 async def _handle_reassign_task(payload: dict) -> dict:
     """Reassigns the ASSIGNEE (who's doing the task) — distinct from
-    reassign_zone above, which is about coverage, not this workflow."""
+    reassign_zone above, which is about coverage, not this workflow.
+
+    new_assignee may be ANY employee in the directory — supervisor or
+    line staff, not restricted — per the spec's delegation requirement:
+    the primary-contact supervisor an auto-assigned task lands on must
+    be able to hand it to whoever should actually do the work. Only
+    existence/active-status is validated here; role is deliberately
+    unchecked."""
+    new_employee = employee_directory.get(payload["new_assignee"])
+    if new_employee is None or not new_employee.get("active", True):
+        return {"error": f"employee '{payload['new_assignee']}' not found or inactive"}
     evt = effort_engine.reassign_task(payload["task_id"], payload["new_assignee"],
                                        supervisor_id=payload.get("supervisor_id", "supervisor"))
     if evt is None:
@@ -465,8 +564,11 @@ async def _handle_sms_reply(payload: dict) -> dict:
 
     action, code = parse_sms_command(payload["body"])
     if action is None:
-        return {"reply": "Reply START, DONE, MORE, or REVIEW "
+        return {"reply": "Reply START, DONE, MORE, REVIEW, or REASSIGN <employee number> "
                           "(add the task code too if you have more than one open task)."}
+
+    if action == "REASSIGN":
+        return await _handle_sms_reassign(employee, code)
 
     task, reason = effort_engine.resolve_task_reference(employee["employee_number"], code)
     if task is None:
@@ -488,6 +590,40 @@ async def _handle_sms_reply(payload: dict) -> dict:
         "REVIEW": f'Noted — a supervisor will review "{task.task_name}".',
     }[action]
     return {"reply": reply_text}
+
+
+async def _handle_sms_reassign(sender_employee: dict, remainder: str | None) -> dict:
+    """The employee-side reassignment/delegation path (Conflict 2's
+    resolution) — an assignee texts "REASSIGN <employee number>"
+    (optionally plus a task code if they have more than one open task)
+    to hand their task off to anyone else in the directory, supervisor
+    or line staff. Authenticated purely by the sender's phone number
+    already having resolved to `sender_employee` above — same trust
+    model as START/DONE/MORE/REVIEW, no Bearer token involved (line
+    employees have no login accounts to hold one)."""
+    if not remainder:
+        return {"reply": "Reply REASSIGN <employee number> to hand off your task "
+                          "(add the task code too if you have more than one open task)."}
+    parts = remainder.split(None, 1)
+    target_employee_number = parts[0]
+    task_code = re.sub(r"[^A-Za-z0-9]", "", parts[1]).upper() if len(parts) > 1 else None
+
+    target = employee_directory.get(target_employee_number)
+    if target is None or not target.get("active", True):
+        return {"reply": f"Employee {target_employee_number} not found or inactive — "
+                          f"check the number and try again."}
+
+    task, reason = effort_engine.resolve_task_reference(sender_employee["employee_number"], task_code)
+    if task is None:
+        return {"reply": reason}
+
+    evt = effort_engine.reassign_task(task.task_id, target_employee_number,
+                                       supervisor_id=f"employee:{sender_employee['employee_number']}")
+    if evt is None:
+        return {"reply": f'Could not reassign "{task.task_name}" — it may have already changed status.'}
+    await _emit(evt)
+    await _notify_assignee(task.task_id)  # sends the new assignee their own assignment message
+    return {"reply": f'Done — "{task.task_name}" handed off to employee {target_employee_number}.'}
 
 
 async def _handle_complete_task(payload: dict) -> dict:
@@ -912,11 +1048,24 @@ class AddEmployeeRequest(BaseModel):
     department: str
     phone: str
     account_username: str | None = None  # links to a floorwatch_users login, if the person has one
+    channel: str | None = None  # "sms" | "fcm" — Feature 1; omit to use the deployment default
+    fcm_token: str | None = None  # required if channel="fcm"
+    is_primary_contact: bool = False  # Feature 2 — must be a "supervisor"; see validate_primary_contact
 
 
 @app.get("/api/admin/employees")
 async def list_employees(department: str | None = None, user=Depends(require_supervisor)):
     return {"employees": employee_directory.list_all(department=department)}
+
+
+@app.get("/api/admin/employees/suggest")
+async def suggest_employee(department: str, user=Depends(require_supervisor)):
+    """The least-loaded-employee logic that used to run auto-assignment
+    directly, before Feature 2 — now a suggestion a primary-contact
+    supervisor's delegation UI can offer when reassigning an
+    auto-assigned task, not something that runs unattended."""
+    suggestion = await asyncio.to_thread(_least_loaded_employee, department)
+    return {"suggested_employee_number": suggestion}
 
 
 @app.post("/api/admin/employees")
@@ -931,11 +1080,22 @@ async def add_employee(body: AddEmployeeRequest, user=Depends(require_supervisor
         return JSONResponse(status_code=400, content={"error": "role must be 'employee' or 'supervisor'"})
     if not body.department.strip():
         return JSONResponse(status_code=400, content={"error": "department is required"})
+    ok, reason = validate_channel(body.channel)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    if body.channel == "fcm" and not body.fcm_token:
+        return JSONResponse(status_code=400, content={
+            "error": "fcm_token is required when channel is 'fcm'"})
+    ok, reason = validate_primary_contact(body.role, body.is_primary_contact)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
     await asyncio.to_thread(
         employee_directory.add, body.employee_number, body.name, body.role, body.department,
-        body.phone, account_username=body.account_username, created_by=user["sub"])
+        body.phone, account_username=body.account_username, created_by=user["sub"],
+        channel=body.channel, fcm_token=body.fcm_token, is_primary_contact=body.is_primary_contact)
     log(f"'{user['sub']}' added directory entry for employee {body.employee_number} "
-        f"({body.role}, {body.department})")
+        f"({body.role}, {body.department}"
+        f"{', primary contact' if body.is_primary_contact else ''})")
     return {"ok": True}
 
 

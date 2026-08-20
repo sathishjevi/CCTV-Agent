@@ -28,6 +28,31 @@ from floorwatch_logging import get_logger
 _log = get_logger("rules-engine.employee_directory")
 
 DIRECTORY_ROLES = {"employee", "supervisor"}
+NOTIFY_CHANNELS = {"sms", "fcm"}
+
+
+def validate_channel(channel: Optional[str]):
+    """None/"" is valid — means "no per-employee override, fall back to
+    the deployment's global NOTIFY_CHANNEL default" (see main.py's
+    _resolve_channel()). Anything non-empty must be one of NOTIFY_CHANNELS."""
+    if not channel:
+        return True, None
+    if channel not in NOTIFY_CHANNELS:
+        return False, f"channel must be one of {sorted(NOTIFY_CHANNELS)} (or omitted)"
+    return True, None
+
+
+def validate_primary_contact(role: str, is_primary_contact: bool):
+    """The primary contact for a department is always a supervisor —
+    never a line employee (see employee_directory.py's module docstring
+    and PHASE_2_NOTES.md's auto-assignment section). Rejecting this at
+    write time, rather than silently allowing it, is what keeps
+    auto-assignment's Global Constraint 2 reasoning ("only a supervisor's
+    identity is ever auto-used") actually true in practice, not just in
+    the design doc."""
+    if is_primary_contact and role != "supervisor":
+        return False, "is_primary_contact can only be set on a 'supervisor' record"
+    return True, None
 
 
 def validate_employee_number(employee_number: str):
@@ -78,6 +103,16 @@ class PostgresEmployeeDirectory:
             created_by TEXT
         );
     """
+    # ADD COLUMN IF NOT EXISTS, not folded into SCHEMA_SQL above — this
+    # table may already exist (and hold real rows) from before Feature
+    # 1/2 shipped; CREATE TABLE IF NOT EXISTS alone would silently skip
+    # adding these columns to an already-created table.
+    MIGRATION_SQL = [
+        "ALTER TABLE floorwatch_employees ADD COLUMN IF NOT EXISTS channel TEXT;",
+        "ALTER TABLE floorwatch_employees ADD COLUMN IF NOT EXISTS fcm_token TEXT;",
+        "ALTER TABLE floorwatch_employees ADD COLUMN IF NOT EXISTS "
+        "is_primary_contact BOOLEAN NOT NULL DEFAULT false;",
+    ]
     INDEX_SQL = [
         "CREATE INDEX IF NOT EXISTS floorwatch_employees_dept_idx "
         "ON floorwatch_employees (department);",
@@ -90,6 +125,8 @@ class PostgresEmployeeDirectory:
         self.dsn = dsn
         with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as conn:
             conn.execute(self.SCHEMA_SQL)
+            for stmt in self.MIGRATION_SQL:
+                conn.execute(stmt)
             for stmt in self.INDEX_SQL:
                 conn.execute(stmt)
 
@@ -101,25 +138,38 @@ class PostgresEmployeeDirectory:
     def _row_to_dict(r) -> dict:
         return {"employee_number": r[0], "name": r[1], "role": r[2], "department": r[3],
                 "phone": r[4], "active": r[5], "account_username": r[6],
-                "created_at": r[7].isoformat() if r[7] else None, "created_by": r[8]}
+                "created_at": r[7].isoformat() if r[7] else None, "created_by": r[8],
+                "channel": r[9], "fcm_token": r[10], "is_primary_contact": r[11]}
 
     _COLUMNS = ("employee_number, name, role, department, phone, active, "
-                "account_username, created_at, created_by")
+                "account_username, created_at, created_by, channel, fcm_token, is_primary_contact")
 
     def add(self, employee_number: str, name: str, role: str, department: str, phone: str,
-            account_username: Optional[str] = None, created_by: Optional[str] = None):
+            account_username: Optional[str] = None, created_by: Optional[str] = None,
+            channel: Optional[str] = None, fcm_token: Optional[str] = None,
+            is_primary_contact: bool = False):
         if role not in DIRECTORY_ROLES:
             raise ValueError(f"invalid directory role: {role!r}")
+        ok, reason = validate_channel(channel)
+        if not ok:
+            raise ValueError(reason)
+        ok, reason = validate_primary_contact(role, is_primary_contact)
+        if not ok:
+            raise ValueError(reason)
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO floorwatch_employees "
-                "(employee_number, name, role, department, phone, active, account_username, created_by) "
-                "VALUES (%s,%s,%s,%s,%s,true,%s,%s) "
+                "(employee_number, name, role, department, phone, active, account_username, "
+                "created_by, channel, fcm_token, is_primary_contact) "
+                "VALUES (%s,%s,%s,%s,%s,true,%s,%s,%s,%s,%s) "
                 "ON CONFLICT (employee_number) DO UPDATE SET "
                 "name=EXCLUDED.name, role=EXCLUDED.role, department=EXCLUDED.department, "
-                "phone=EXCLUDED.phone, account_username=EXCLUDED.account_username",
+                "phone=EXCLUDED.phone, account_username=EXCLUDED.account_username, "
+                "channel=EXCLUDED.channel, fcm_token=EXCLUDED.fcm_token, "
+                "is_primary_contact=EXCLUDED.is_primary_contact",
                 (employee_number, name, role, department, normalize_phone(phone),
-                 account_username, created_by),
+                 account_username, created_by, channel or None, fcm_token or None,
+                 is_primary_contact),
             )
 
     def get(self, employee_number: str) -> Optional[dict]:
@@ -182,9 +232,17 @@ class JsonEmployeeDirectory:
         self.path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def add(self, employee_number: str, name: str, role: str, department: str, phone: str,
-            account_username: Optional[str] = None, created_by: Optional[str] = None):
+            account_username: Optional[str] = None, created_by: Optional[str] = None,
+            channel: Optional[str] = None, fcm_token: Optional[str] = None,
+            is_primary_contact: bool = False):
         if role not in DIRECTORY_ROLES:
             raise ValueError(f"invalid directory role: {role!r}")
+        ok, reason = validate_channel(channel)
+        if not ok:
+            raise ValueError(reason)
+        ok, reason = validate_primary_contact(role, is_primary_contact)
+        if not ok:
+            raise ValueError(reason)
         from datetime import datetime, timezone
         data = self._load()
         existing = data.get(employee_number, {})
@@ -195,6 +253,8 @@ class JsonEmployeeDirectory:
             "account_username": account_username,
             "created_at": existing.get("created_at") or datetime.now(timezone.utc).isoformat(),
             "created_by": existing.get("created_by") or created_by,
+            "channel": channel or None, "fcm_token": fcm_token or None,
+            "is_primary_contact": is_primary_contact,
         }
         self._save(data)
 

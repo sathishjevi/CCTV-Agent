@@ -318,7 +318,10 @@
           <option value="zone_escalated">zone_escalated</option>
           <option value="zone_resolved">zone_resolved</option>
           <option value="task_assigned">task_assigned</option>
+          <option value="task_auto_assigned">task_auto_assigned</option>
+          <option value="task_reassigned">task_reassigned</option>
           <option value="task_low_effort_nudge">task_low_effort_nudge</option>
+          <option value="task_status_nudge">task_status_nudge</option>
           <option value="task_flag">task_flag</option>
           <option value="task_resolved">task_resolved</option>
         </select>
@@ -783,11 +786,21 @@
         break;
       case 'task_workflow_update':
       case 'task_status_nudge':
+      case 'task_reassigned':
         if(tasks[evt.task_id]){
           tasks[evt.task_id].workflowStatus = evt.workflow_status;
           tasks[evt.task_id].assignedTo = evt.assigned_to || tasks[evt.task_id].assignedTo;
         }
         logEvent('eff', escapeHtml(evt.message || `Task workflow update: ${evt.workflow_status}`));
+        break;
+      case 'task_auto_assigned':
+        // task_assigned (emitted just before this) already set assignedTo/
+        // workflowStatus for a fresh task — this is purely an additional,
+        // separately-auditable log line marking that the assignment was
+        // automatic (to a department's primary-contact supervisor), not
+        // a person's manual choice.
+        if(tasks[evt.task_id]) tasks[evt.task_id].assignedTo = evt.assigned_to || tasks[evt.task_id].assignedTo;
+        logEvent('eff', escapeHtml(evt.message || `Task auto-assigned to ${evt.assigned_to || 'nobody'}.`));
         break;
       case 'task_active_time_update':
         if(tasks[evt.task_id]) tasks[evt.task_id].activeMin = evt.active_minutes;
@@ -1235,10 +1248,11 @@
 
   function historyEventKind(evt){
     switch(evt.event_type){
-      case 'zone_nudge_sent': case 'task_low_effort_nudge': return 'warn';
+      case 'zone_nudge_sent': case 'task_low_effort_nudge': case 'task_status_nudge': return 'warn';
       case 'zone_supervisor_command': case 'zone_escalated': return 'crit';
       case 'zone_resolved': return evt.resolved_by === 'auto' ? 'ok' : 'info';
-      case 'task_assigned': case 'task_flag': case 'task_resolved': return 'eff';
+      case 'task_assigned': case 'task_auto_assigned': case 'task_reassigned':
+      case 'task_flag': case 'task_resolved': return 'eff';
       default: return 'info';
     }
   }
