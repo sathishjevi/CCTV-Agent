@@ -448,6 +448,19 @@
   ];
 
   let counters = {nudges:0, cmds:0, effortFlags:0};
+  // "Effort flags raised" and the task half of "Supervisor Actions" are
+  // deduped per task_id, not raw event counts — a task that gets
+  // reopened (confirmed) and flagged again is still the SAME flag being
+  // worked through, not a second one, and a dismissed flag turns out to
+  // have never really been one (false alarm), so it's removed from the
+  // flagged set entirely and never counted as a supervisor action.
+  // zoneSupervisorActions stays a plain running count — a zone can
+  // legitimately be approved/reassigned multiple times in a shift and
+  // each is a genuine distinct action, unlike a task flag cycle.
+  let flaggedTaskIds = new Set();
+  let taskSupervisorActionIds = new Set();
+  let zoneSupervisorActions = 0;
+  function recomputeCmds(){ counters.cmds = zoneSupervisorActions + taskSupervisorActionIds.size; }
   let zoneState = {};
   ZONES.forEach(z=>{ zoneState[z.id] = {state:'covered'}; });
   let tasks = {};
@@ -769,7 +782,7 @@
       case 'zone_resolved':
         zoneState[evt.zone_id].state = 'covered';
         delete pendingCommands[evt.zone_id];
-        counters.cmds += (evt.resolved_by && evt.resolved_by.startsWith('supervisor:')) ? 1 : 0;
+        if(evt.resolved_by && evt.resolved_by.startsWith('supervisor:')){ zoneSupervisorActions++; recomputeCmds(); }
         logEvent(evt.resolved_by === 'auto' ? 'ok' : 'info',
           evt.resolved_by === 'auto'
             ? `${escapeHtml(zoneLabel(evt))} self-resolved.`
@@ -813,15 +826,24 @@
         break;
       case 'task_flag':
         if(tasks[evt.task_id]){ tasks[evt.task_id].status = 'flagged'; tasks[evt.task_id].activeMin = evt.active_minutes; tasks[evt.task_id].elapsedMin = tasks[evt.task_id].assignedMin; }
-        counters.effortFlags++;
+        // deduped by task_id — a task reopened (confirmed) and flagged
+        // again is still the same flag being worked through, not a
+        // second one. See flaggedTaskIds' declaration above.
+        flaggedTaskIds.add(evt.task_id);
+        counters.effortFlags = flaggedTaskIds.size;
         logEvent('eff', `<b>"${escapeHtml(evt.task_name)}" flagged</b> — ${escapeHtml(evt.message || 'active time below expected for this task type.')}`);
         break;
       case 'task_resolved':
         if(tasks[evt.task_id]){ tasks[evt.task_id].status = 'resolved'; tasks[evt.task_id].activeMin = evt.active_minutes; }
-        // a supervisor confirming/dismissing a flag is a supervisor
-        // action just like approving/reassigning a zone directive — it
-        // just never counted here before (only zone_resolved did).
-        counters.cmds += (evt.resolved_by && evt.resolved_by.startsWith('supervisor:')) ? 1 : 0;
+        if(evt.action_type === 'dismissed'){
+          // a dismissed flag turned out to be a false alarm — it never
+          // really was one, so it's removed from the flagged count
+          // entirely, and dismissing itself is NOT counted as a
+          // supervisor action (unlike confirming, which is real
+          // follow-up work — see task_flag_confirmed below).
+          flaggedTaskIds.delete(evt.task_id);
+          counters.effortFlags = flaggedTaskIds.size;
+        }
         logEvent('eff', evt.resolved_by === 'auto'
           ? `"${escapeHtml(evt.task_name)}" completed — active time met expectations.`
           : `"${escapeHtml(evt.task_name)}" reviewed by ${escapeHtml(evt.resolved_by)}${evt.action_type ? ' ('+escapeHtml(evt.action_type)+')' : ''}.`);
@@ -840,7 +862,13 @@
           t.assignedTo = evt.assigned_to || t.assignedTo;
           t.workflowStatus = evt.workflow_status;
         }
-        counters.cmds += (evt.resolved_by && evt.resolved_by.startsWith('supervisor:')) ? 1 : 0;
+        // deduped by task_id, same reasoning as flaggedTaskIds — a task
+        // confirmed twice across reopen cycles is still one supervisor
+        // action on this one flag, not two.
+        if(evt.resolved_by && evt.resolved_by.startsWith('supervisor:')){
+          taskSupervisorActionIds.add(evt.task_id);
+          recomputeCmds();
+        }
         logEvent('eff', escapeHtml(evt.message || `"${evt.task_name}" flag confirmed — reopened.`));
         break;
       default:
