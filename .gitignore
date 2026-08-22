@@ -62,3 +62,7 @@ skills/detection/floorwatch-ingest/cameras.json
 !skills/detection/floorwatch-ingest/cameras.json.template
 docker/.env
 src/camera/src/.env
+
+# local test scripts/configs that end up holding real API keys or paths
+run_scene_detection_test.bat
+my_test_cameras.json

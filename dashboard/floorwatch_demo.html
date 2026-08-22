@@ -291,6 +291,10 @@
       </div>
       <div class="field" style="margin-bottom:0;min-width:130px;"><label for="newEmpDept">Department</label><input id="newEmpDept" required placeholder="e.g. usher"></div>
       <div class="field" style="margin-bottom:0;min-width:140px;"><label for="newEmpPhone">Phone</label><input id="newEmpPhone" required placeholder="+15551234567"></div>
+      <div class="field" id="newEmpPrimaryContactField" style="margin-bottom:0;display:none;flex-direction:row;align-items:center;gap:6px;">
+        <input type="checkbox" id="newEmpPrimaryContact" style="width:auto;">
+        <label for="newEmpPrimaryContact" style="text-transform:none;font-size:11.5px;">Primary contact for this department</label>
+      </div>
       <button type="submit" class="btn primary" style="width:auto;">Add</button>
     </form>
     <div style="font-family:var(--mono);font-size:10.5px;color:var(--dimmer);margin-top:8px;line-height:1.5;">Department should match the zone's role tag (e.g. "usher", "janitorial", "ticketing") so auto-assignment and manual assignment can find them.</div>
@@ -1242,7 +1246,7 @@
       <tr style="border-bottom:1px solid var(--line);">
         <td style="padding:8px;font-family:var(--mono);">${escapeHtml(e.employee_number)}</td>
         <td style="padding:8px;overflow-wrap:anywhere;">${escapeHtml(e.name)}</td>
-        <td style="padding:8px;font-family:var(--mono);">${escapeHtml(e.role)}</td>
+        <td style="padding:8px;font-family:var(--mono);">${escapeHtml(e.role)}${e.is_primary_contact ? ' <span title="Primary contact for this department" style="color:var(--accent);">★</span>' : ''}</td>
         <td style="padding:8px;">${escapeHtml(e.department)}</td>
         <td style="padding:8px;font-family:var(--mono);font-size:11px;">${escapeHtml(e.phone)}</td>
         <td style="padding:8px;color:${e.active ? 'var(--ok)' : 'var(--red)'};">${e.active ? 'active' : 'deactivated'}</td>
@@ -1276,6 +1280,13 @@
     document.getElementById('manageEmployeesOverlay').style.display = 'none';
   };
 
+  document.getElementById('newEmpRole').onchange = () => {
+    const isSupervisor = document.getElementById('newEmpRole').value === 'supervisor';
+    const field = document.getElementById('newEmpPrimaryContactField');
+    field.style.display = isSupervisor ? 'flex' : 'none';
+    if(!isSupervisor) document.getElementById('newEmpPrimaryContact').checked = false;
+  };
+
   document.getElementById('addEmployeeForm').onsubmit = async (e) => {
     e.preventDefault();
     const errEl = document.getElementById('manageEmployeesError');
@@ -1285,15 +1296,19 @@
     const role = document.getElementById('newEmpRole').value;
     const department = document.getElementById('newEmpDept').value.trim();
     const phone = document.getElementById('newEmpPhone').value.trim();
+    // only meaningful (and only accepted by the backend) for role=supervisor —
+    // the field itself is hidden for role=employee, see the role-change handler below
+    const is_primary_contact = role === 'supervisor' && document.getElementById('newEmpPrimaryContact').checked;
     try {
       const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({employee_number, name, role, department, phone}),
+        body: JSON.stringify({employee_number, name, role, department, phone, is_primary_contact}),
       });
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       document.getElementById('addEmployeeForm').reset();
       document.getElementById('newEmpRole').value = 'employee';
+      document.getElementById('newEmpPrimaryContactField').style.display = 'none';
       loadEmployees();
       loadEmployeesForPicker();
     } catch(err){

@@ -1,0 +1,64 @@
+# Floorwatch Scene-Condition Skill — Configuration Schema
+# Parsed by Aegis skill-registry-service.cjs → parseConfigYaml()
+# Format: params[] with key, type, label, default, description, options
+
+params:
+  - key: auto_start
+    label: Auto Start
+    type: boolean
+    default: false
+    description: "Start this skill automatically when Aegis launches"
+
+  - key: zones_dir
+    label: Zones Directory
+    type: string
+    default: "zones"
+    description: "Reuses floorwatch-coverage's zone calibration files (<camera_id>.json) for camera -> zone_id/role_tag"
+
+  - key: provider
+    label: Vision Provider
+    type: select
+    default: none
+    description: "Which AI vendor judges each frame — pick whichever the client already has an account with"
+    options:
+      - { value: none, label: "None (disabled)" }
+      - { value: openai, label: "OpenAI (e.g. gpt-4o-mini)" }
+      - { value: grok, label: "xAI Grok" }
+      - { value: llama, label: "Llama, via a hosted provider (Together/Fireworks/Groq/...) — requires base_url" }
+      - { value: claude, label: "Anthropic Claude" }
+
+  - key: api_key
+    label: API Key
+    type: string
+    default: ""
+    description: "API key for the selected provider — never logged, never committed"
+
+  - key: model
+    label: Model Name
+    type: string
+    default: ""
+    description: "Exact model id for the selected provider (e.g. gpt-4o-mini, grok-2-vision, claude-haiku-4-5, or a hosted Llama vision model id)"
+
+  - key: base_url
+    label: Base URL
+    type: string
+    default: ""
+    description: "Required for provider=llama (which host is serving the model); optional override for openai/grok"
+
+  - key: check_interval_seconds
+    label: Check Interval (seconds)
+    type: number
+    default: 900
+    description: "Minimum time between vision checks for the SAME camera — controls API cost; a condition like a messy display changes over minutes, not video framerate"
+
+  - key: redis_url
+    label: Redis URL
+    type: string
+    default: ""
+    description: "If set (e.g. redis://redis:6379/0), scene_task_suggested events are published onto the same Redis Stream floorwatch-coverage uses"
+
+  - key: redis_stream
+    label: Redis Stream Name
+    type: string
+    default: "floorwatch:events"
+    description: "Redis Stream key events are XADD'd onto — same stream as floorwatch-coverage by default"
