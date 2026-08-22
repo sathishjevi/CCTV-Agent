@@ -1166,6 +1166,29 @@ async def reactivate_employee(employee_number: str, user=Depends(require_supervi
     return {"ok": True}
 
 
+class SetPrimaryContactRequest(BaseModel):
+    is_primary_contact: bool
+
+
+@app.post("/api/admin/employees/{employee_number}/set-primary-contact")
+async def set_employee_primary_contact(employee_number: str, body: SetPrimaryContactRequest,
+                                        user=Depends(require_supervisor)):
+    """Toggles the flag on an EXISTING record — add_employee() only ever
+    set this at creation time, leaving no way to flag an already-created
+    supervisor as primary contact (or un-flag one) afterward. Same
+    role-must-be-supervisor validation add_employee() does, just against
+    the record's already-stored role rather than a role in the request body."""
+    employee = await asyncio.to_thread(employee_directory.get, employee_number)
+    if employee is None:
+        return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
+    ok, reason = validate_primary_contact(employee["role"], body.is_primary_contact)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    await asyncio.to_thread(employee_directory.set_primary_contact, employee_number, body.is_primary_contact)
+    log(f"'{user['sub']}' set employee {employee_number}'s primary-contact flag to {body.is_primary_contact}")
+    return {"ok": True}
+
+
 # ── Inbound SMS webhook (Twilio) — the employee-reply half of the task
 # workflow. NOT behind require_auth: Twilio has no bearer token to send.
 # X-Twilio-Signature is the ONLY authentication here — see

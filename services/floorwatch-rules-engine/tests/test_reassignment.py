@@ -319,3 +319,47 @@ def test_channel_employee_override_wins_over_global_default(app_client):
 
     assert len(fcm_sender.calls) == 1
     assert len(sms_sender.calls) == 0
+
+
+# ── PATCH /set-primary-contact — flagging an ALREADY-EXISTING supervisor,
+# not just at creation time (the reported gap: a supervisor added before
+# this endpoint existed had no way to be flagged primary contact) ───────
+
+def test_set_primary_contact_on_existing_supervisor(app_client):
+    client, main_module = app_client
+    main_module.employee_directory.add("900", "Jordan Lee", "supervisor", "concession", "+15551230900")
+
+    resp = client.post("/api/admin/employees/900/set-primary-contact", json={"is_primary_contact": True})
+    assert resp.status_code == 200
+    assert main_module.employee_directory.get("900")["is_primary_contact"] is True
+
+    # and can be unset again
+    resp2 = client.post("/api/admin/employees/900/set-primary-contact", json={"is_primary_contact": False})
+    assert resp2.status_code == 200
+    assert main_module.employee_directory.get("900")["is_primary_contact"] is False
+
+
+def test_set_primary_contact_rejects_line_employee(app_client):
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+
+    resp = client.post("/api/admin/employees/101/set-primary-contact", json={"is_primary_contact": True})
+    assert resp.status_code == 400
+    assert main_module.employee_directory.get("101")["is_primary_contact"] is False
+
+
+def test_set_primary_contact_unknown_employee_404s(app_client):
+    client, main_module = app_client
+    resp = client.post("/api/admin/employees/nonexistent/set-primary-contact", json={"is_primary_contact": True})
+    assert resp.status_code == 404
+
+
+def test_set_primary_contact_then_auto_assign_targets_them(app_client):
+    """Confirms the toggle actually feeds the real auto-assign path, not
+    just the stored flag in isolation."""
+    client, main_module = app_client
+    main_module.employee_directory.add("900", "Jordan Lee", "supervisor", "concession", "+15551230900")
+    client.post("/api/admin/employees/900/set-primary-contact", json={"is_primary_contact": True})
+
+    assignee = main_module._primary_contact_for_department("concession")
+    assert assignee == "900"

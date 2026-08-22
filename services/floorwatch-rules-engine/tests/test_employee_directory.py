@@ -157,6 +157,27 @@ def test_json_set_active_unknown_returns_false(tmp_path):
     assert d.set_active("nobody", False) is False
 
 
+def test_json_set_primary_contact_on_existing_supervisor(tmp_path):
+    """The gap directly reported: an already-created supervisor (added
+    before this flag existed, or added without it) had no way to be
+    flagged primary contact afterward except re-running add() with every
+    field again."""
+    d = JsonEmployeeDirectory(tmp_path / "employees.json")
+    d.add("900", "Jordan Lee", "supervisor", "concession", "+15551230900")
+    assert d.get("900")["is_primary_contact"] is False
+
+    assert d.set_primary_contact("900", True) is True
+    assert d.get("900")["is_primary_contact"] is True
+
+    assert d.set_primary_contact("900", False) is True
+    assert d.get("900")["is_primary_contact"] is False
+
+
+def test_json_set_primary_contact_unknown_returns_false(tmp_path):
+    d = JsonEmployeeDirectory(tmp_path / "employees.json")
+    assert d.set_primary_contact("nobody", True) is False
+
+
 def test_json_add_stores_channel_and_fcm_token(tmp_path):
     d = JsonEmployeeDirectory(tmp_path / "employees.json")
     d.add("101", "Pat", "employee", "janitorial", "+15551234567", channel="fcm", fcm_token="tok-abc123")
@@ -242,6 +263,19 @@ def test_postgres_migration_adds_new_columns():
     assert "ADD COLUMN IF NOT EXISTS channel" in all_sql
     assert "ADD COLUMN IF NOT EXISTS fcm_token" in all_sql
     assert "ADD COLUMN IF NOT EXISTS is_primary_contact" in all_sql
+
+
+def test_postgres_set_primary_contact_runs_update():
+    fake_conn = MagicMock()
+    fake_conn.execute.return_value.rowcount = 1
+    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+        d = PostgresEmployeeDirectory("postgresql://fake/dsn")
+        result = d.set_primary_contact("900", True)
+
+    assert result is True
+    call_args = fake_conn.execute.call_args_list[-1]
+    assert "UPDATE floorwatch_employees SET is_primary_contact" in call_args[0][0]
+    assert call_args[0][1] == (True, "900")
 
 
 def test_postgres_add_rejects_invalid_channel():

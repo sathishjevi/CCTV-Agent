@@ -210,6 +210,22 @@ class PostgresEmployeeDirectory:
                 (active, employee_number))
             return cur.rowcount > 0
 
+    def set_primary_contact(self, employee_number: str, is_primary_contact: bool) -> bool:
+        """Toggles the flag on an ALREADY-EXISTING record — add()'s own
+        role validation only ever ran at creation time, so a record
+        created before this field existed (or before this method
+        existed) had no way to have it set after the fact except by
+        resubmitting the entire add() form. Role validation is the
+        caller's (main.py's) responsibility here, same division as
+        add_employee()'s endpoint — this method trusts it's already
+        been checked, matching set_active()'s own no-revalidation
+        pattern."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE floorwatch_employees SET is_primary_contact=%s WHERE employee_number=%s",
+                (is_primary_contact, employee_number))
+            return cur.rowcount > 0
+
 
 class JsonEmployeeDirectory:
     """Local-file fallback when FLOORWATCH_POSTGRES_DSN isn't set — same
@@ -281,6 +297,14 @@ class JsonEmployeeDirectory:
         if employee_number not in data:
             return False
         data[employee_number]["active"] = active
+        self._save(data)
+        return True
+
+    def set_primary_contact(self, employee_number: str, is_primary_contact: bool) -> bool:
+        data = self._load()
+        if employee_number not in data:
+            return False
+        data[employee_number]["is_primary_contact"] = is_primary_contact
         self._save(data)
         return True
 
