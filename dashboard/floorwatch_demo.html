@@ -1251,14 +1251,15 @@
         <td style="padding:8px;font-family:var(--mono);font-size:11px;">${escapeHtml(e.phone)}</td>
         <td style="padding:8px;color:${e.active ? 'var(--ok)' : 'var(--red)'};">${e.active ? 'active' : 'deactivated'}</td>
         <td style="padding:8px;">
-          <div style="display:flex;flex-wrap:wrap;gap:6px;">
+          <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;">
             ${e.active
               ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="deactivate" data-emp="${escapeHtml(e.employee_number)}">Deactivate</button>`
               : `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reactivate" data-emp="${escapeHtml(e.employee_number)}">Reactivate</button>`}
             ${e.role === 'supervisor'
-              ? (e.is_primary_contact
-                  ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="unset-primary" data-emp="${escapeHtml(e.employee_number)}">Remove primary</button>`
-                  : `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="set-primary" data-emp="${escapeHtml(e.employee_number)}">Set primary</button>`)
+              ? `<label style="display:flex;align-items:center;gap:4px;font-size:10.5px;color:var(--dim);cursor:pointer;">
+                   <input type="checkbox" data-primary-toggle data-emp="${escapeHtml(e.employee_number)}" ${e.is_primary_contact ? 'checked' : ''} style="width:auto;">
+                   Primary contact
+                 </label>`
               : ''}
           </div>
         </td>
@@ -1338,17 +1339,30 @@
       } else if(action === 'reactivate'){
         const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees/${encodeURIComponent(employeeNumber)}/reactivate`, {method: 'POST'});
         if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
-      } else if(action === 'set-primary' || action === 'unset-primary'){
-        const is_primary_contact = action === 'set-primary';
-        const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees/${encodeURIComponent(employeeNumber)}/set-primary-contact`, {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({is_primary_contact}),
-        });
-        if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
       }
       loadEmployees();
       loadEmployeesForPicker();
     } catch(err){
+      errEl.textContent = err.message;
+    }
+  });
+
+  document.getElementById('employeesTableBody').addEventListener('change', async (e) => {
+    const box = e.target.closest('input[data-primary-toggle]');
+    if(!box) return;
+    const employeeNumber = box.dataset.emp;
+    const errEl = document.getElementById('manageEmployeesError');
+    errEl.textContent = '';
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees/${encodeURIComponent(employeeNumber)}/set-primary-contact`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({is_primary_contact: box.checked}),
+      });
+      if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+      loadEmployees();
+      loadEmployeesForPicker();
+    } catch(err){
+      box.checked = !box.checked;  // revert the visual state on failure
       errEl.textContent = err.message;
     }
   });
