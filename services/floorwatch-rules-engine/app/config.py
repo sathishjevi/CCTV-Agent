@@ -65,7 +65,8 @@ AUTO_ASSIGN_DEFAULT_MINUTES = float(os.environ.get("FLOORWATCH_AUTO_ASSIGN_DEFAU
 # looks at it would race the human's own decision.
 AUTO_ASSIGN_TRIGGER_EVENT_TYPES = {
     e.strip() for e in os.environ.get(
-        "FLOORWATCH_AUTO_ASSIGN_TRIGGER_EVENT_TYPES", "zone_escalated").split(",") if e.strip()
+        "FLOORWATCH_AUTO_ASSIGN_TRIGGER_EVENT_TYPES",
+        "zone_escalated,scene_task_suggested").split(",") if e.strip()
 }
 
 # Global Constraint 4 — shadow mode before real notifications. Defaults to

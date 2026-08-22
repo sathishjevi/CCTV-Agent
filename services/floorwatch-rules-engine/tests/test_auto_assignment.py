@@ -277,3 +277,105 @@ def test_anonymous_coverage_nudge_events_unaffected_by_primary_contact_logic(app
     assert "assigned_to" not in received
     assert "assigned_by" not in received
     assert not any(t.zone_id == "concession" for t in main_module.effort_engine.tasks.values())
+
+
+# ── scene_task_suggested — a scene-condition detector's judgment call
+# (e.g. "this display looks messy"), distinct from zone_gap/zone_covered
+# occupancy readings. Routes straight to the same primary-contact
+# auto-assign path zone_escalated uses, bypassing Part B's state machine
+# entirely (see main.py's redis_consumer_loop and _maybe_auto_assign). ──
+
+def _publish_scene_suggestion(fake_redis_url, main_module, zone_id="concession", role_tag="concession",
+                               camera_id="lobby_cam_1", task_name="Restock the snack display",
+                               task_type="restock_concession"):
+    publisher = redis.Redis.from_url(fake_redis_url, decode_responses=True)
+    publisher.xadd(main_module.config.REDIS_STREAM, {"data": json.dumps({
+        "camera_id": camera_id, "zone_id": zone_id, "role_tag": role_tag,
+        "entity_ref": None, "event_type": "scene_task_suggested",
+        "task_name": task_name, "task_type": task_type,
+        "message": "Display looks picked-over and disorganized.",
+        "confidence": 0.8, "source_model_version": "floorwatch-scene-condition/0.1.0",
+    })})
+
+
+def test_scene_task_suggested_creates_task_with_detector_supplied_name_and_type(app_client):
+    client, main_module, fake_redis_url = app_client
+    main_module.employee_directory.add(
+        "900", "Jordan Lee", "supervisor", "concession", "+15551230900", is_primary_contact=True)
+
+    _publish_scene_suggestion(fake_redis_url, main_module)
+
+    tasks = []
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        tasks = [t for t in main_module.effort_engine.tasks.values() if t.zone_id == "concession"]
+        if tasks:
+            break
+        time.sleep(0.05)
+
+    assert len(tasks) == 1
+    assert tasks[0].task_name == "Restock the snack display"
+    assert tasks[0].task_type == "restock_concession"
+    assert tasks[0].assigned_to == "900"
+    assert tasks[0].assigned_by == "system:auto_assign"
+
+
+def test_scene_task_suggested_does_not_touch_part_b_occupancy_state(app_client):
+    """The zone's coverage status must stay exactly as it was — this
+    event type never reaches engine.process_detection_event()."""
+    client, main_module, fake_redis_url = app_client
+    main_module.employee_directory.add(
+        "900", "Jordan Lee", "supervisor", "concession", "+15551230900", is_primary_contact=True)
+
+    _publish_scene_suggestion(fake_redis_url, main_module)
+
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        if any(t.zone_id == "concession" for t in main_module.effort_engine.tasks.values()):
+            break
+        time.sleep(0.05)
+
+    assert "concession" not in main_module.engine.zones  # never touched — no zone_gap/zone_covered ever arrived
+
+
+def test_scene_task_suggested_falls_back_to_zone_escalated_dedup_across_trigger_types(app_client):
+    """The dedup guard is scoped by assigned_by=="system:auto_assign",
+    not a specific task_type — a scene suggestion for a zone that
+    already has an open auto-assigned task (from either trigger type)
+    must not create a second one."""
+    client, main_module, fake_redis_url = app_client
+    main_module.employee_directory.add(
+        "900", "Jordan Lee", "supervisor", "concession", "+15551230900", is_primary_contact=True)
+
+    _publish_scene_suggestion(fake_redis_url, main_module)
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        if any(t.zone_id == "concession" for t in main_module.effort_engine.tasks.values()):
+            break
+        time.sleep(0.05)
+
+    _publish_scene_suggestion(fake_redis_url, main_module, task_name="Different suggestion")
+    time.sleep(0.5)  # give it a fair chance to (incorrectly) create a second task
+
+    tasks = [t for t in main_module.effort_engine.tasks.values() if t.zone_id == "concession"]
+    assert len(tasks) == 1
+    assert tasks[0].task_name == "Restock the snack display"  # the first one, unchanged
+
+
+def test_scene_task_suggested_creates_unassigned_task_when_no_primary_contact(app_client):
+    client, main_module, fake_redis_url = app_client
+    # no employees/supervisors in the directory at all
+
+    _publish_scene_suggestion(fake_redis_url, main_module)
+
+    tasks = []
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        tasks = [t for t in main_module.effort_engine.tasks.values() if t.zone_id == "concession"]
+        if tasks:
+            break
+        time.sleep(0.05)
+
+    assert len(tasks) == 1
+    assert tasks[0].assigned_to is None
+    assert tasks[0].task_name == "Restock the snack display"

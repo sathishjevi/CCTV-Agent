@@ -32,6 +32,14 @@ EventType = Literal[
     "task_low_effort_nudge",  # Part A mid-task nudge — reuses the Part B nudge delivery pattern
     "task_flag",
     "task_resolved",
+    # A scene-condition detector's judgment call (e.g. "this display looks
+    # messy") — distinct from zone_gap/zone_covered (occupancy readings):
+    # routes straight to the existing primary-contact auto-assign path
+    # rather than through the Part B occupancy state machine. task_name/
+    # task_type carry the detector's suggestion; both fields already
+    # existed on this schema for task_assigned, reused rather than adding
+    # new ones.
+    "scene_task_suggested",
 ]
 
 Tier = Literal[1, 2, 3]

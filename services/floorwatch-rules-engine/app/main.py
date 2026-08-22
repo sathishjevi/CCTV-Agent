@@ -446,14 +446,26 @@ def _least_loaded_employee(department: str) -> str | None:
 
 
 def _auto_task_already_open_for_zone(zone_id: str) -> bool:
-    """Dedup guard — a zone left unresolved keeps producing zone_escalated
-    on every subsequent tick until a supervisor acts; without this, each
-    tick would spawn a new coverage task for the same gap."""
-    return any(t.status == "open" and t.zone_id == zone_id and t.task_type == "auto_coverage"
+    """Dedup guard — a zone left unresolved keeps producing trigger events
+    (zone_escalated on every subsequent tick, or now a scene-condition
+    suggestion on every subsequent check) until a supervisor acts;
+    without this, each one would spawn a new task for the same
+    underlying condition. Scoped by assigned_by == "system:auto_assign"
+    (any system-auto-created task for this zone), not a specific
+    task_type — covers every auto-assign trigger, not just coverage."""
+    return any(t.status == "open" and t.zone_id == zone_id and t.assigned_by == "system:auto_assign"
                for t in effort_engine.tasks.values())
 
 
 async def _maybe_auto_assign(evt: dict):
+    """Triggered by any event_type in config.AUTO_ASSIGN_TRIGGER_EVENT_TYPES
+    — today that's zone_escalated (Part B, no task_name/task_type on the
+    event, so this falls back to the original "Cover <zone>"/
+    auto_coverage defaults exactly as before) and scene_task_suggested (a
+    scene-condition detector's judgment call, which DOES carry its own
+    task_name/task_type — reused here rather than overridden, so e.g. a
+    "restock the display" suggestion creates a task actually named and
+    typed that way, not a generic "Cover <zone>")."""
     event_type = evt.get("event_type")
     if event_type not in config.AUTO_ASSIGN_TRIGGER_EVENT_TYPES:
         return
@@ -462,22 +474,24 @@ async def _maybe_auto_assign(evt: dict):
         return
     department = evt.get("role_tag", "")
     assignee = _primary_contact_for_department(department)
+    task_name = evt.get("task_name") or f"Cover {effort_engine._zone_label(zone_id)}"
+    task_type = evt.get("task_type") or "auto_coverage"
     payload = {
-        "task_name": f"Cover {effort_engine._zone_label(zone_id)}", "zone_id": zone_id,
-        "assigned_minutes": config.AUTO_ASSIGN_DEFAULT_MINUTES, "task_type": "auto_coverage",
+        "task_name": task_name, "zone_id": zone_id,
+        "assigned_minutes": config.AUTO_ASSIGN_DEFAULT_MINUTES, "task_type": task_type,
         "assigned_to": assignee, "assigned_by": "system:auto_assign",
     }
     result = await _handle_assign_task(payload)
     if result.get("error"):
-        log(f"auto-assign could not create a coverage task for zone '{zone_id}': {result['error']}",
+        log(f"auto-assign could not create a task for zone '{zone_id}': {result['error']}",
             level="warning")
     elif assignee is None:
         # Created, but unassigned — surfaces in /api/tasks with
         # workflow_status "unassigned" so a supervisor can hand-assign
         # it; per the spec's own fallback requirement (no eligible
-        # primary contact should never mean the gap silently goes
+        # primary contact should never mean the condition silently goes
         # untracked).
-        log(f"auto-assign created an unassigned coverage task for zone '{zone_id}' — "
+        log(f"auto-assign created an unassigned task for zone '{zone_id}' — "
             f"no active primary-contact supervisor configured for department '{department}'.",
             level="warning")
     else:
@@ -735,7 +749,17 @@ async def redis_consumer_loop():
                     await client.xack(config.REDIS_STREAM, config.REDIS_CONSUMER_GROUP, entry_id)
                     continue
 
-                out_events = engine.process_detection_event(validated.model_dump())
+                evt_dict = validated.model_dump()
+                if evt_dict.get("event_type") == "scene_task_suggested":
+                    # Not an occupancy reading — Part B's zone_gap/
+                    # zone_covered state machine doesn't apply. Routes
+                    # straight to the same primary-contact auto-assign
+                    # path zone_escalated uses (see _maybe_auto_assign).
+                    await _maybe_auto_assign(evt_dict)
+                    await client.xack(config.REDIS_STREAM, config.REDIS_CONSUMER_GROUP, entry_id)
+                    continue
+
+                out_events = engine.process_detection_event(evt_dict)
                 for evt in out_events:
                     await _emit(evt)
                 await client.xack(config.REDIS_STREAM, config.REDIS_CONSUMER_GROUP, entry_id)
