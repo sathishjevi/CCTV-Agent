@@ -270,7 +270,8 @@ async def _refresh_snapshots():
                   "active_minutes": round(t.active_seconds / 60.0, 2),
                   "elapsed_minutes": round((now - t.start_monotonic) / 60.0, 2),
                   "assigned_to": t.assigned_to, "assigned_by": t.assigned_by,
-                  "workflow_status": t.workflow_status, "short_code": effort_engine.short_code(task_id)}
+                  "workflow_status": t.workflow_status, "short_code": effort_engine.short_code(task_id),
+                  "reopened_for_review": t.reopened_for_review}
         for task_id, t in effort_engine.tasks.items()
     }
     await write_snapshot(cluster_redis, SNAPSHOT_STATE_KEY, state)
@@ -662,6 +663,21 @@ async def _handle_dismiss_flag(payload: dict) -> dict:
     return {"event": evt}
 
 
+async def _handle_resolve_after_review(payload: dict) -> dict:
+    """The direct exit from a confirm_flag()-reopened task — see
+    resolve_after_review()'s docstring for why this exists separately
+    from complete_task(): without it, a reopened task's only way back to
+    the supervisor was re-running the exact check that flagged it,
+    which (with no new motion signal) reflags it every time and sends
+    it right back to the queue."""
+    evt = effort_engine.resolve_after_review(
+        payload["task_id"], supervisor_id=payload.get("supervisor_id", "supervisor"))
+    if evt is None:
+        return {"error": "task not open or was not reopened for review"}
+    await _emit(evt)
+    return {"event": evt}
+
+
 COMMAND_DISPATCH = {
     "approve_zone": _handle_approve_zone,
     "reassign_zone": _handle_reassign_zone,
@@ -669,6 +685,7 @@ COMMAND_DISPATCH = {
     "complete_task": _handle_complete_task,
     "confirm_flag": _handle_confirm_flag,
     "dismiss_flag": _handle_dismiss_flag,
+    "resolve_after_review": _handle_resolve_after_review,
     "extend_task": _handle_extend_task,
     "reassign_task": _handle_reassign_task,
     "sms_reply": _handle_sms_reply,
@@ -1283,6 +1300,16 @@ async def confirm_task_flag(task_id: str, user=Depends(require_supervisor)):
 async def dismiss_task_flag(task_id: str, user=Depends(require_supervisor)):
     reply = await submit_command(cluster_redis, "dismiss_flag", {"task_id": task_id, "supervisor_id": user["sub"]})
     return _command_reply_to_response(reply)
+
+
+@app.post("/api/tasks/{task_id}/resolve-review")
+async def resolve_task_after_review(task_id: str, user=Depends(require_supervisor)):
+    """Closes out a task that was reopened via confirm_flag(), without
+    re-running the effort-flag check — see resolve_after_review()'s
+    docstring in effort_engine.py."""
+    reply = await submit_command(
+        cluster_redis, "resolve_after_review", {"task_id": task_id, "supervisor_id": user["sub"]})
+    return _command_reply_to_response(reply, error_status=400)
 
 
 @app.websocket("/events")

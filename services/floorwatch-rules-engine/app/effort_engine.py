@@ -92,6 +92,9 @@ class TaskRuntime:
     assigned_by: Optional[str] = None      # "auto:<event_type>" or "user:<username>"
     workflow_status: str = "unassigned"
     status_nudge_sent: bool = False        # budget-expiry "what's the status?" nudge — once only
+    reopened_for_review: bool = False      # set by confirm_flag() — lets resolve_after_review()
+                                            # close the task directly without re-running the
+                                            # effort-flag check (see that method's docstring)
 
 
 class EffortEngine:
@@ -416,6 +419,7 @@ class EffortEngine:
             return evt
 
         t.status = "resolved"
+        t.reopened_for_review = False
         evt = self._base_event(t, "task_resolved", active_minutes, action_type="resolved")
         evt["resolved_by"] = "auto"
         return evt
@@ -496,6 +500,7 @@ class EffortEngine:
         t.nudged = False
         t.status_nudge_sent = False
         t.workflow_status = "unassigned"
+        t.reopened_for_review = True
         evt = self._base_event(t, "task_flag_confirmed", 0.0, action_type="confirmed",
             message=f'Supervisor confirmed the effort flag on "{t.task_name}" — reopened, '
                     f"and the employee has been notified to explain or complete it.")
@@ -504,11 +509,46 @@ class EffortEngine:
         evt["workflow_status"] = t.workflow_status
         return evt
 
+    def resolve_after_review(self, task_id: str, supervisor_id: str = "supervisor") -> Optional[dict]:
+        """The direct exit from a confirm_flag()-reopened task — a
+        supervisor who's actually talked to the employee can close it out
+        on their own attestation, WITHOUT going back through
+        complete_task()'s active-time-vs-budget check.
+
+        Why this exists: without it, a reopened task's only path back to
+        the supervisor was "Mark complete" — which re-runs the same
+        check that flagged it the first time. If there's no new motion
+        signal to prove the redo actually happened (shadow mode, a
+        camera blind spot, work that's inherently hard to see), that
+        re-triggers the exact same flag, sending it right back to the
+        supervisor queue in an unbreakable flag -> confirm -> reopen ->
+        re-flag loop that only Dismiss could ever break. This gives a
+        supervisor who's genuinely satisfied after following up a real
+        way to close it — separate from, not a replacement for, Mark
+        complete (which still runs the normal check, in case they'd
+        rather let the system re-evaluate).
+
+        Only usable on a task actually reopened this way (status=='open'
+        AND reopened_for_review) — not a general-purpose "resolve
+        anything" bypass for a task that was never flagged."""
+        t = self.tasks.get(task_id)
+        if t is None or t.status != "open" or not t.reopened_for_review:
+            return None
+        t.status = "resolved"
+        t.workflow_status = "completed"
+        t.reopened_for_review = False
+        evt = self._base_event(t, "task_resolved", t.active_seconds / 60.0,
+            action_type="reviewed",
+            message=f'Supervisor reviewed "{t.task_name}" with the employee — resolved, no further action needed.')
+        evt["resolved_by"] = f"supervisor:{supervisor_id}"
+        return evt
+
     def dismiss_flag(self, task_id: str, supervisor_id: str = "supervisor") -> Optional[dict]:
         t = self.tasks.get(task_id)
         if t is None or t.status != "flagged":
             return None
         t.status = "resolved"
+        t.reopened_for_review = False
         evt = self._base_event(t, "task_resolved", t.active_seconds / 60.0,
                                 action_type="dismissed",
                                 message=f"Supervisor dismissed the effort flag on \"{t.task_name}\" — false alarm (e.g. off-camera prep work).")

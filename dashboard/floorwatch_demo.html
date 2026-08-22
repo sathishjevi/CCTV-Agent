@@ -110,6 +110,10 @@
   .assign-form input[type="text"]{min-width:160px;}
   .assign-form input[type="number"]{width:80px;}
   .taskcard .complete-btn{font-size:10.5px;padding:5px 10px;margin-top:8px;width:100%;}
+  .taskcard .btnrow{display:flex;gap:6px;margin-top:8px;}
+  .taskcard .btnrow .btn{margin-top:0;}
+  .taskcard .review-btn{background:rgba(18,135,90,0.15);border-color:rgba(18,135,90,0.4);color:var(--ok);}
+  .taskcard .review-btn:hover{background:rgba(18,135,90,0.25);}
 
   .stats-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0;}
   .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;}
@@ -657,11 +661,18 @@
         <div class="status ${statusClass}">${statusText}</div>
         ${assigneeText ? `<div class="assignee">Assigned to: ${escapeHtml(assigneeText)}</div>` : ''}
         ${wf ? `<div class="wf-badge ${wf.cls}">${escapeHtml(wf.text)}</div>` : ''}
-        ${(t.status==='ok'||t.status==='low') ? `<button class="btn complete-btn" data-task="${id}">Mark complete</button>` : ''}`;
+        ${(t.status==='ok'||t.status==='low') ? `
+        <div class="btnrow">
+          <button class="btn complete-btn" data-task="${id}">Mark complete</button>
+          ${t.reopenedForReview ? `<button class="btn review-btn" data-review-task="${id}">Reviewed — looks good</button>` : ''}
+        </div>` : ''}`;
       tasksEl.appendChild(div);
     });
     tasksEl.querySelectorAll('button[data-task]').forEach(btn=>{
       btn.onclick = ()=>{ completeTask(btn.dataset.task); };
+    });
+    tasksEl.querySelectorAll('button[data-review-task]').forEach(btn=>{
+      btn.onclick = ()=>{ resolveAfterReview(btn.dataset.reviewTask); };
     });
     document.getElementById('taskCount').textContent = ids.length + ' active';
   }
@@ -673,6 +684,21 @@
       if(!res.ok) throw new Error(`HTTP ${res.status}`);
     } catch(err){
       logEvent('crit', `Failed to complete task ${escapeHtml(taskId)}: ${escapeHtml(err.message)}`);
+    }
+  }
+
+  // Only shown on a task reopened via "Confirm — follow up with
+  // employee" — closes it out on the supervisor's own attestation,
+  // without re-running the active-time check that flagged it the first
+  // time (which, with no new motion signal, would just flag it again
+  // and send it right back to this same queue).
+  async function resolveAfterReview(taskId){
+    const base = restBase(wsUrlInput.value.trim());
+    try {
+      const res = await authFetch(`${base}/api/tasks/${encodeURIComponent(taskId)}/resolve-review`, {method:'POST'});
+      if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+    } catch(err){
+      logEvent('crit', `Failed to resolve task ${escapeHtml(taskId)}: ${escapeHtml(err.message)}`);
     }
   }
 
@@ -834,15 +860,26 @@
         logEvent('eff', `<b>"${escapeHtml(evt.task_name)}" flagged</b> — ${escapeHtml(evt.message || 'active time below expected for this task type.')}`);
         break;
       case 'task_resolved':
-        if(tasks[evt.task_id]){ tasks[evt.task_id].status = 'resolved'; tasks[evt.task_id].activeMin = evt.active_minutes; }
+        if(tasks[evt.task_id]){
+          tasks[evt.task_id].status = 'resolved'; tasks[evt.task_id].activeMin = evt.active_minutes;
+          tasks[evt.task_id].reopenedForReview = false; // terminal either way (auto/dismissed/reviewed)
+        }
         if(evt.action_type === 'dismissed'){
           // a dismissed flag turned out to be a false alarm — it never
           // really was one, so it's removed from the flagged count
           // entirely, and dismissing itself is NOT counted as a
-          // supervisor action (unlike confirming, which is real
-          // follow-up work — see task_flag_confirmed below).
+          // supervisor action (unlike confirming/reviewing, which are
+          // real follow-up work).
           flaggedTaskIds.delete(evt.task_id);
           counters.effortFlags = flaggedTaskIds.size;
+        } else if(evt.action_type === 'reviewed'){
+          // resolve_after_review() — closing a reopened task on the
+          // supervisor's own attestation IS a genuine supervisor
+          // action, deduped by task_id same as confirming.
+          if(evt.resolved_by && evt.resolved_by.startsWith('supervisor:')){
+            taskSupervisorActionIds.add(evt.task_id);
+            recomputeCmds();
+          }
         }
         logEvent('eff', evt.resolved_by === 'auto'
           ? `"${escapeHtml(evt.task_name)}" completed — active time met expectations.`
@@ -861,6 +898,7 @@
           t.status = 'ok'; t.activeMin = 0; t.elapsedMin = 0; t.assignedAtMs = Date.now();
           t.assignedTo = evt.assigned_to || t.assignedTo;
           t.workflowStatus = evt.workflow_status;
+          t.reopenedForReview = true; // unlocks the "Reviewed — looks good" button
         }
         // deduped by task_id, same reasoning as flaggedTaskIds — a task
         // confirmed twice across reopen cycles is still one supervisor
@@ -903,6 +941,7 @@
           assignedMin: t.assigned_minutes, activeMin: t.active_minutes, elapsedMin: t.elapsed_minutes,
           assignedAtMs: Date.now() - t.elapsed_minutes * 60000, status,
           assignedTo: t.assigned_to || null, workflowStatus: t.workflow_status || 'unassigned',
+          reopenedForReview: !!t.reopened_for_review,
         };
       });
 

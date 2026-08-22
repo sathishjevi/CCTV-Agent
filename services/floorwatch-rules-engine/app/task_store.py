@@ -33,7 +33,7 @@ _log = get_logger("rules-engine.task_store")
 _FIELDS = ("task_id", "task_name", "task_type", "zone_id", "camera_id",
            "assigned_minutes", "active_seconds", "status", "workflow_status",
            "assigned_to", "assigned_by", "nudged", "status_nudge_sent",
-           "started_at", "updated_at")
+           "reopened_for_review", "started_at", "updated_at")
 
 
 def task_runtime_to_record(t, started_at_iso: str) -> dict:
@@ -47,6 +47,7 @@ def task_runtime_to_record(t, started_at_iso: str) -> dict:
         "status": t.status, "workflow_status": t.workflow_status,
         "assigned_to": t.assigned_to, "assigned_by": t.assigned_by,
         "nudged": t.nudged, "status_nudge_sent": t.status_nudge_sent,
+        "reopened_for_review": t.reopened_for_review,
         "started_at": started_at_iso,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -79,6 +80,7 @@ def rehydrate_tasks(store, effort_engine, clock) -> int:
             assigned_to=rec.get("assigned_to"), assigned_by=rec.get("assigned_by"),
             nudged=rec.get("nudged", False),
             status_nudge_sent=rec.get("status_nudge_sent", False),
+            reopened_for_review=rec.get("reopened_for_review", False),
         )
         effort_engine.tasks[t.task_id] = t
         restored += 1
@@ -107,6 +109,14 @@ class PostgresTaskStore:
             updated_at TIMESTAMPTZ NOT NULL
         );
     """
+    # ADD COLUMN IF NOT EXISTS, not folded into SCHEMA_SQL — this table
+    # may already exist (and hold real open tasks) from before
+    # reopened_for_review existed; CREATE TABLE IF NOT EXISTS alone
+    # would silently skip adding it to an already-created table.
+    MIGRATION_SQL = [
+        "ALTER TABLE floorwatch_tasks ADD COLUMN IF NOT EXISTS "
+        "reopened_for_review BOOLEAN NOT NULL DEFAULT false;",
+    ]
     INDEX_SQL = [
         "CREATE INDEX IF NOT EXISTS floorwatch_tasks_status_idx ON floorwatch_tasks (status);",
         "CREATE INDEX IF NOT EXISTS floorwatch_tasks_assignee_idx ON floorwatch_tasks (assigned_to);",
@@ -117,6 +127,8 @@ class PostgresTaskStore:
         self.dsn = dsn
         with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as conn:
             conn.execute(self.SCHEMA_SQL)
+            for stmt in self.MIGRATION_SQL:
+                conn.execute(stmt)
             for stmt in self.INDEX_SQL:
                 conn.execute(stmt)
 
@@ -130,14 +142,15 @@ class PostgresTaskStore:
                 "INSERT INTO floorwatch_tasks "
                 "(task_id, task_name, task_type, zone_id, camera_id, assigned_minutes, "
                 " active_seconds, status, workflow_status, assigned_to, assigned_by, "
-                " nudged, status_nudge_sent, started_at, updated_at) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                " nudged, status_nudge_sent, reopened_for_review, started_at, updated_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                 "ON CONFLICT (task_id) DO UPDATE SET "
                 "task_name=EXCLUDED.task_name, assigned_minutes=EXCLUDED.assigned_minutes, "
                 "active_seconds=EXCLUDED.active_seconds, status=EXCLUDED.status, "
                 "workflow_status=EXCLUDED.workflow_status, assigned_to=EXCLUDED.assigned_to, "
                 "assigned_by=EXCLUDED.assigned_by, nudged=EXCLUDED.nudged, "
-                "status_nudge_sent=EXCLUDED.status_nudge_sent, updated_at=EXCLUDED.updated_at",
+                "status_nudge_sent=EXCLUDED.status_nudge_sent, "
+                "reopened_for_review=EXCLUDED.reopened_for_review, updated_at=EXCLUDED.updated_at",
                 tuple(record.get(f) for f in _FIELDS),
             )
 

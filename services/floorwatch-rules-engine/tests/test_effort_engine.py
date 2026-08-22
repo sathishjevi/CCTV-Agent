@@ -271,6 +271,7 @@ def test_confirm_flag_reopens_task_with_supervisor_attribution():
     assert t.active_seconds == 0.0
     assert t.nudged is False
     assert t.status_nudge_sent is False
+    assert t.reopened_for_review is True  # unlocks resolve_after_review()
     assert engine.pending_flags() == []  # no longer flagged
 
 
@@ -310,6 +311,95 @@ def test_confirm_flag_can_be_flagged_and_confirmed_a_second_time():
     second_confirm = engine.confirm_flag(task_id, supervisor_id="bob")
     assert second_confirm["event_type"] == "task_flag_confirmed"
     assert engine.tasks[task_id].status == "open"
+
+
+# ── resolve_after_review — the direct exit from a reopened task,
+# bypassing complete_task()'s effort-flag check (see its docstring:
+# without this, a reopened task with no new motion signal would just
+# re-flag every time "Mark complete" is clicked, an unbreakable loop
+# short of Dismiss) ───────────────────────────────────────────────────
+
+def test_resolve_after_review_closes_a_reopened_task_without_reflagging():
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+    engine.complete_task(task_id)  # -> flagged
+    engine.confirm_flag(task_id, supervisor_id="alice")  # -> reopened
+
+    evt = engine.resolve_after_review(task_id, supervisor_id="alice")
+    assert evt["event_type"] == "task_resolved"
+    assert evt["action_type"] == "reviewed"
+    assert evt["resolved_by"] == "supervisor:alice"
+
+    t = engine.tasks[task_id]
+    assert t.status == "resolved"
+    assert t.workflow_status == "completed"
+    assert t.reopened_for_review is False
+    assert engine.pending_flags() == []
+
+
+def test_resolve_after_review_rejects_a_task_never_reopened():
+    """Not a general-purpose "resolve anything" bypass — only usable on
+    a task that actually went through confirm_flag()."""
+    engine, _ = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+    assert engine.resolve_after_review(task_id, supervisor_id="alice") is None
+
+
+def test_resolve_after_review_rejects_a_still_flagged_task():
+    """Must go through confirm_flag() (reopen) first — can't skip
+    straight from "flagged" to "resolved" via this path."""
+    engine, _ = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+    engine.complete_task(task_id)  # -> flagged, not reopened yet
+    assert engine.resolve_after_review(task_id, supervisor_id="alice") is None
+
+
+def test_resolve_after_review_rejects_after_already_resolved():
+    engine, _ = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+    engine.complete_task(task_id)
+    engine.confirm_flag(task_id, supervisor_id="alice")
+    engine.resolve_after_review(task_id, supervisor_id="alice")
+    assert engine.resolve_after_review(task_id, supervisor_id="alice") is None  # already resolved
+
+
+def test_resolve_after_review_rejects_unknown_task():
+    engine, _ = make_engine(staffed=True, zone_covered=True)
+    assert engine.resolve_after_review("nonexistent-task-id", supervisor_id="alice") is None
+
+
+def test_complete_task_still_works_normally_after_reopen_if_active_time_now_sufficient():
+    """The parallel path stays available — Mark complete still runs the
+    normal check, and if the employee genuinely did the work this time
+    (active time now sufficient), it resolves cleanly without ever
+    needing resolve_after_review at all."""
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+    engine.complete_task(task_id)  # -> flagged
+    engine.confirm_flag(task_id, supervisor_id="alice")  # -> reopened
+
+    t = engine.tasks[task_id]
+    t.active_seconds = 40 * 60  # this time, plenty of active work happened
+    evt = engine.complete_task(task_id)
+    assert evt["event_type"] == "task_resolved"
+    assert evt["resolved_by"] == "auto"
+    assert t.reopened_for_review is False  # cleared on real resolution too
+
+
+def test_dismiss_flag_clears_reopened_for_review():
+    engine, _ = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+    engine.complete_task(task_id)
+    engine.confirm_flag(task_id, supervisor_id="alice")  # reopened_for_review=True
+    engine.complete_task(task_id)  # flagged again
+    engine.dismiss_flag(task_id, supervisor_id="bob")
+    assert engine.tasks[task_id].reopened_for_review is False
 
 
 def test_dismiss_flag_resolves_with_supervisor_attribution():

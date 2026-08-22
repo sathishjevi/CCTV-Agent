@@ -246,6 +246,43 @@ def test_confirm_task_flag_reopens_task_and_notifies_assignee(app_client):
                for e in history)
 
 
+def test_resolve_review_endpoint_closes_reopened_task_without_reflagging(app_client):
+    """The reported gap's second half: a reopened task's only way back
+    to the supervisor used to be "Mark complete," which re-runs the same
+    check that flagged it — with no new motion signal, that just
+    re-flags it and sends it right back to the queue, forever. The new
+    endpoint lets a supervisor close it out directly once they've
+    actually followed up."""
+    client, main_module, _url = app_client
+    resp = client.post("/api/tasks", json={
+        "task_name": "Clean Door", "zone_id": "theatre3", "assigned_minutes": 60, "task_type": "clean_door",
+    })
+    task_id = resp.json()["task_id"]
+    client.post(f"/api/tasks/{task_id}/complete")  # -> flagged
+    client.post(f"/api/queue/task/{task_id}/confirm")  # -> reopened
+
+    resolve_resp = client.post(f"/api/tasks/{task_id}/resolve-review")
+    assert resolve_resp.status_code == 200
+    assert resolve_resp.json()["event_type"] == "task_resolved"
+    assert resolve_resp.json()["action_type"] == "reviewed"
+
+    tasks = client.get("/api/tasks").json()
+    assert tasks[task_id]["status"] == "resolved"
+    assert tasks[task_id]["reopened_for_review"] is False
+    assert client.get("/api/queue/tasks").json() == []
+
+
+def test_resolve_review_endpoint_rejects_task_never_reopened(app_client):
+    client, main_module, _url = app_client
+    resp = client.post("/api/tasks", json={
+        "task_name": "Clean Door", "zone_id": "theatre3", "assigned_minutes": 60, "task_type": "clean_door",
+    })
+    task_id = resp.json()["task_id"]
+
+    resolve_resp = client.post(f"/api/tasks/{task_id}/resolve-review")
+    assert resolve_resp.status_code == 400
+
+
 # ── event history — the durable audit trail (reported missing directly:
 # a supervisor confirmed a flagged task, watched it happen live in the
 # dashboard, and it was never recorded anywhere) ─────────────────────────
