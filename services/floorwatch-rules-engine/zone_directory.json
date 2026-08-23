@@ -1,0 +1,56 @@
+{
+  "concession": {
+    "zone_id": "concession",
+    "name": "Concession Counter",
+    "role_tag": "concession",
+    "camera_id": "lobby_cam_1",
+    "active": true,
+    "created_at": "2026-08-23T17:23:21.870277+00:00",
+    "created_by": "system:seed"
+  },
+  "boxoffice": {
+    "zone_id": "boxoffice",
+    "name": "Box Office",
+    "role_tag": "ticketing",
+    "camera_id": "lobby_cam_1",
+    "active": true,
+    "created_at": "2026-08-23T17:23:21.870972+00:00",
+    "created_by": "system:seed"
+  },
+  "lobby": {
+    "zone_id": "lobby",
+    "name": "Main Lobby",
+    "role_tag": "usher",
+    "camera_id": "lobby_cam_1",
+    "active": true,
+    "created_at": "2026-08-23T17:23:21.871625+00:00",
+    "created_by": "system:seed"
+  },
+  "restroomA": {
+    "zone_id": "restroomA",
+    "name": "Restroom \u00e2\u20ac\u201d Hall A",
+    "role_tag": "janitor",
+    "camera_id": "hall_a_cam_1",
+    "active": true,
+    "created_at": "2026-08-23T17:23:21.872290+00:00",
+    "created_by": "system:seed"
+  },
+  "theatre3": {
+    "zone_id": "theatre3",
+    "name": "Theatre 3 (post-show)",
+    "role_tag": "janitor",
+    "camera_id": "theatre3_cam_1",
+    "active": true,
+    "created_at": "2026-08-23T17:23:21.872993+00:00",
+    "created_by": "system:seed"
+  },
+  "entrance": {
+    "zone_id": "entrance",
+    "name": "Front Entrance",
+    "role_tag": "security",
+    "camera_id": "entrance_cam_1",
+    "active": true,
+    "created_at": "2026-08-23T17:23:21.873639+00:00",
+    "created_by": "system:seed"
+  }
+}

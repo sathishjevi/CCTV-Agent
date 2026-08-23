@@ -40,6 +40,7 @@ from notifications import ContactBook, NotificationDispatcher, _mask_phone, buil
 from roster import Roster  # noqa: E402
 from sms_webhook import parse_sms_command, reply_twiml, validate_signature  # noqa: E402
 from task_store import build_task_store, rehydrate_tasks, task_runtime_to_record  # noqa: E402
+from zone_directory import build_zone_directory, validate_zone_id  # noqa: E402
 
 from floorwatch_auth import (  # noqa: E402
     VALID_ROLES, RevocationStore, build_user_store, issue_token, make_auth_dependency,
@@ -155,7 +156,26 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
-zones_meta = json.loads(config.ZONES_META_PATH.read_text()) if config.ZONES_META_PATH.exists() else {}
+zone_directory = build_zone_directory(config.POSTGRES_DSN, config.ZONE_DIRECTORY_PATH)
+
+# One-time migration: if the zone directory is empty (first boot against
+# this store), seed it from the static zones_meta.json file so existing
+# deployments don't lose their zone labels the moment this ships. After
+# this, the directory — editable from the dashboard — is the source of
+# truth; zones_meta.json is never read again.
+if not zone_directory.list_all():
+    _seed_zones_meta = (json.loads(config.ZONES_META_PATH.read_text())
+                         if config.ZONES_META_PATH.exists() else {})
+    for _zid, _zmeta in _seed_zones_meta.items():
+        if not isinstance(_zmeta, dict):
+            continue  # skips zones_meta.json's own "_comment" string entry
+        zone_directory.add(_zid, _zmeta.get("name", _zid), _zmeta.get("role_tag", "concession"),
+                            _zmeta.get("camera_id"), created_by="system:seed")
+
+zones_meta = {
+    z["zone_id"]: {"name": z["name"], "role_tag": z["role_tag"], "camera_id": z["camera_id"]}
+    for z in zone_directory.list_all(active_only=True)
+}
 task_type_thresholds = (json.loads(config.TASK_TYPE_THRESHOLDS_PATH.read_text())
                          if config.TASK_TYPE_THRESHOLDS_PATH.exists() else {"_default": {"expected_active_ratio": 0.5}})
 roster = Roster(config.ROSTER_PATH)
@@ -1186,6 +1206,63 @@ async def set_employee_primary_contact(employee_number: str, body: SetPrimaryCon
         return JSONResponse(status_code=400, content={"error": reason})
     await asyncio.to_thread(employee_directory.set_primary_contact, employee_number, body.is_primary_contact)
     log(f"'{user['sub']}' set employee {employee_number}'s primary-contact flag to {body.is_primary_contact}")
+    return {"ok": True}
+
+
+# ── Zone directory (see zone_directory.py) — lets a supervisor/admin add
+# a floor section from the dashboard instead of editing zones_meta.json
+# and redeploying. GET is require_auth (a viewer needs zone names to
+# read the coverage board/task list); mutating endpoints are
+# require_supervisor, same split as the employee directory above. ──
+
+class AddZoneRequest(BaseModel):
+    zone_id: str
+    name: str
+    role_tag: str
+    camera_id: str | None = None  # links to floorwatch-coverage/floorwatch-scene-condition's zone calibration
+
+
+@app.get("/api/admin/zones")
+async def list_zones(user=Depends(require_auth)):
+    return {"zones": zone_directory.list_all()}
+
+
+@app.post("/api/admin/zones")
+async def add_zone(body: AddZoneRequest, user=Depends(require_supervisor)):
+    ok, reason = validate_zone_id(body.zone_id)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    if not body.name.strip():
+        return JSONResponse(status_code=400, content={"error": "name is required"})
+    if not body.role_tag.strip():
+        return JSONResponse(status_code=400, content={"error": "role_tag is required"})
+    await asyncio.to_thread(
+        zone_directory.add, body.zone_id, body.name, body.role_tag,
+        camera_id=body.camera_id, created_by=user["sub"])
+    # Live-update the SAME dict object engine.py/effort_engine.py were
+    # constructed with, so a new zone is usable immediately — no restart.
+    zones_meta[body.zone_id] = {"name": body.name, "role_tag": body.role_tag, "camera_id": body.camera_id}
+    log(f"'{user['sub']}' added zone '{body.zone_id}' ({body.name})")
+    return {"ok": True}
+
+
+@app.post("/api/admin/zones/{zone_id}/deactivate")
+async def deactivate_zone(zone_id: str, user=Depends(require_supervisor)):
+    if not await asyncio.to_thread(zone_directory.set_active, zone_id, False):
+        return JSONResponse(status_code=404, content={"error": f"zone '{zone_id}' not found"})
+    zones_meta.pop(zone_id, None)
+    log(f"'{user['sub']}' deactivated zone '{zone_id}'")
+    return {"ok": True}
+
+
+@app.post("/api/admin/zones/{zone_id}/reactivate")
+async def reactivate_zone(zone_id: str, user=Depends(require_supervisor)):
+    if not await asyncio.to_thread(zone_directory.set_active, zone_id, True):
+        return JSONResponse(status_code=404, content={"error": f"zone '{zone_id}' not found"})
+    z = await asyncio.to_thread(next, (z for z in zone_directory.list_all() if z["zone_id"] == zone_id), None)
+    if z:
+        zones_meta[zone_id] = {"name": z["name"], "role_tag": z["role_tag"], "camera_id": z["camera_id"]}
+    log(f"'{user['sub']}' reactivated zone '{zone_id}'")
     return {"ok": True}
 
 

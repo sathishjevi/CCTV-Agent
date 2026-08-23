@@ -49,8 +49,8 @@
   .panel h2 .count{font-family:var(--mono);color:var(--dimmer);text-transform:none;letter-spacing:0;font-weight:400;}
   .panel.partA{border-color:rgba(116,82,200,0.35);}
 
-  .floor{position:relative;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;height:340px;overflow:hidden;}
-  .zone{position:absolute;border-radius:9px;border:1.5px solid var(--line);padding:10px 12px;display:flex;flex-direction:column;justify-content:space-between;transition:box-shadow .3s,border-color .3s,background .3s;background:#FFFFFF;box-shadow:0 1px 2px rgba(16,27,45,0.06);}
+  .floor{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;min-height:340px;overflow:auto;padding:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;align-content:start;}
+  .zone{border-radius:9px;border:1.5px solid var(--line);padding:10px 12px;min-height:96px;display:flex;flex-direction:column;justify-content:space-between;transition:box-shadow .3s,border-color .3s,background .3s;background:#FFFFFF;box-shadow:0 1px 2px rgba(16,27,45,0.06);}
   .zone .zn{font-size:12px;font-weight:700;}
   .zone .zr{font-family:var(--mono);font-size:9.5px;color:var(--dim);text-transform:uppercase;letter-spacing:0.4px;margin-top:1px;}
   .zone .zs{font-family:var(--mono);font-size:10px;margin-top:auto;font-weight:600;letter-spacing:0.3px;display:flex;align-items:center;gap:5px;}
@@ -304,6 +304,51 @@
   </div>
 </div>
 
+<div class="login-overlay" id="manageZonesOverlay" style="display:none;align-items:flex-start;padding:40px 20px;overflow-y:auto;">
+  <div class="login-card" style="width:min(720px,100%);">
+    <div class="brand" style="justify-content:space-between;display:flex;">
+      <div style="display:flex;align-items:center;">
+        <div class="brand-mark" style="display:inline-flex;">FW</div>
+        <strong style="margin-left:8px;font-size:15px;">Manage Zones</strong>
+      </div>
+      <button class="btn" id="closeManageZonesBtn" style="width:auto;padding:6px 12px;">Close</button>
+    </div>
+    <div style="font-family:var(--mono);font-size:10.5px;color:var(--dimmer);margin:-6px 0 16px;line-height:1.5;">
+      The floor sections tracked on the coverage board. Add one per camera-covered area (e.g. a snack counter, a restroom, an entrance) — no code change or redeploy needed.
+    </div>
+
+    <div id="manageZonesError" class="login-error" style="min-height:0;"></div>
+
+    <div style="overflow-x:auto;margin:12px 0 20px;">
+    <table id="zonesTable" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12.5px;">
+      <colgroup>
+        <col style="width:18%;"><col style="width:26%;"><col style="width:18%;"><col style="width:18%;"><col style="width:20%;">
+      </colgroup>
+      <thead>
+        <tr style="text-align:left;color:var(--dim);font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:0.4px;">
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Zone ID</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Name</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Role tag</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Status</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="zonesTableBody"></tbody>
+    </table>
+    </div>
+
+    <h2 style="margin-top:0;">Add a zone</h2>
+    <form id="addZoneForm" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+      <div class="field" style="margin-bottom:0;min-width:110px;"><label for="newZoneId">Zone ID</label><input id="newZoneId" required placeholder="e.g. patio"></div>
+      <div class="field" style="margin-bottom:0;flex:1;min-width:160px;"><label for="newZoneName">Display name</label><input id="newZoneName" required placeholder="e.g. Outdoor Patio"></div>
+      <div class="field" style="margin-bottom:0;min-width:130px;"><label for="newZoneRoleTag">Role tag</label><input id="newZoneRoleTag" required placeholder="e.g. usher"></div>
+      <div class="field" style="margin-bottom:0;min-width:130px;"><label for="newZoneCameraId">Camera ID (optional)</label><input id="newZoneCameraId" placeholder="e.g. patio_cam_1"></div>
+      <button type="submit" class="btn primary" style="width:auto;">Add</button>
+    </form>
+    <div style="font-family:var(--mono);font-size:10.5px;color:var(--dimmer);margin-top:8px;line-height:1.5;">Zone ID is a stable identifier (letters/numbers/hyphens only) used internally and in URLs — pick something short and permanent. Role tag should match employees' Department field so auto-assignment can find who covers this zone.</div>
+  </div>
+</div>
+
 <div class="login-overlay" id="historyOverlay" style="display:none;align-items:flex-start;padding:40px 20px;overflow-y:auto;">
   <div class="login-card" style="width:min(920px,100%);">
     <div class="brand" style="justify-content:space-between;display:flex;">
@@ -367,6 +412,7 @@
       <span class="who" id="userWho"></span>
       <button class="btn" id="manageUsersBtn" style="padding:4px 10px;font-size:11px;display:none;">Manage Users</button>
       <button class="btn" id="manageEmployeesBtn" style="padding:4px 10px;font-size:11px;display:none;">Manage Employees</button>
+      <button class="btn" id="manageZonesBtn" style="padding:4px 10px;font-size:11px;display:none;">Manage Zones</button>
       <button class="btn" id="historyBtn" style="padding:4px 10px;font-size:11px;">History</button>
       <button class="btn" id="changePasswordBtn" style="padding:4px 10px;font-size:11px;">Change password</button>
       <button class="btn" id="logoutBtn" style="padding:4px 10px;font-size:11px;">Log out</button>
@@ -375,8 +421,8 @@
   </div>
 
   <div class="tabs">
-    <span class="tab b">PART B — Coverage: is a zone staffed?</span>
-    <span class="tab a">PART A — Effort: is assigned work actually getting done?</span>
+    <span class="tab b">Coverage: is a zone staffed?</span>
+    <span class="tab a">Effort: is assigned work actually getting done?</span>
   </div>
 
   <div class="connbar">
@@ -397,7 +443,7 @@
 
   <div class="grid">
     <div class="panel">
-      <h2>Floor status — coverage (Part B) <span class="count" id="zoneCount">6 zones</span></h2>
+      <h2>Floor status — coverage <span class="count" id="zoneCount">6 zones</span></h2>
       <div class="floor" id="floor"></div>
       <div class="legend">
         <span><span class="sw" style="background:var(--ok)"></span>Covered</span>
@@ -413,7 +459,7 @@
 
   <div class="grid" style="margin-top:18px;">
     <div class="panel partA">
-      <h2>Assigned tasks — effort tracking (Part A) <span class="count" id="taskCount">0 active</span></h2>
+      <h2>Assigned tasks — effort tracking <span class="count" id="taskCount">0 active</span></h2>
       <div class="assign-form">
         <div class="field"><label for="taskName">Task</label><input type="text" id="taskName" placeholder="e.g. Clean Door — Zone 4"></div>
         <div class="field"><label for="taskZone">Zone</label><select id="taskZone"></select></div>
@@ -440,23 +486,20 @@
 
   <footer>
     FLOORWATCH · Live event stream from the coverage rules engine · No video, no employee identity data processed by this dashboard<br>
-    Part B: Zone Covered → Gap → Nudge → Supervisor Command → Escalated &nbsp;|&nbsp; Part A: Task Assigned → Active-time tracked → Low-effort nudge → Completion vs. active-time flag → Supervisor review
+    Coverage: Zone Covered → Gap → Nudge → Supervisor Command → Escalated &nbsp;|&nbsp; Effort: Task Assigned → Active-time tracked → Low-effort nudge → Completion vs. active-time flag → Supervisor review
   </footer>
 </div>
 
 <script>
 (function(){
   // Static layout metadata (positions on the floor plan). Zone identity,
-  // role, and live state all come from the rules engine over the WebSocket
-  // — this is display-only, matching zones_meta.json on the backend.
-  const ZONES = [
-    {id:'concession', name:'Concession Counter', role:'Snack Service', x:4, y:6, w:30, h:38},
-    {id:'boxoffice', name:'Box Office', role:'Ticketing', x:38, y:6, w:26, h:38},
-    {id:'lobby', name:'Main Lobby', role:'Customer Service', x:68, y:6, w:28, h:38},
-    {id:'restroomA', name:'Restroom — Hall A', role:'Janitorial', x:4, y:48, w:26, h:44},
-    {id:'theatre3', name:'Theatre 3 (post-show)', role:'Janitorial', x:36, y:48, w:26, h:44},
-    {id:'entrance', name:'Front Entrance', role:'Security', x:68, y:48, w:28, h:44},
-  ];
+  // role, and live state all come from the rules engine over the
+  // WebSocket — this is display-only. The zone LIST itself (id/name/
+  // role) comes from the backend's zone directory (GET /api/admin/zones,
+  // see loadZones() below) rather than being hardcoded here, so a
+  // supervisor/admin can add a new floor section from the dashboard
+  // (Manage Zones) without a code change or redeploy.
+  let zones = [];
 
   let counters = {nudges:0, cmds:0, effortFlags:0};
   // "Effort flags raised" and the task half of "Supervisor Actions" are
@@ -473,7 +516,6 @@
   let zoneSupervisorActions = 0;
   function recomputeCmds(){ counters.cmds = zoneSupervisorActions + taskSupervisorActionIds.size; }
   let zoneState = {};
-  ZONES.forEach(z=>{ zoneState[z.id] = {state:'covered'}; });
   let tasks = {};
   let pendingCommands = {}; // zone_id -> {message, ...}
   let employeesById = {}; // employee_number -> {name, role, department, active}
@@ -489,7 +531,40 @@
   const connText = document.getElementById('connText');
   const wsUrlInput = document.getElementById('wsUrl');
   const taskZoneSelect = document.getElementById('taskZone');
-  ZONES.forEach(z=>{ const opt=document.createElement('option'); opt.value=z.id; opt.textContent=z.name; taskZoneSelect.appendChild(opt); });
+
+  // Applies the current `zones` array (from loadZones()) to every piece
+  // of UI that lists zones: the coverage board, the task-creation zone
+  // picker, and the history filter. Called once loadZones()'s fetch
+  // resolves, and again whenever a zone is added/deactivated.
+  function applyZonesToUI(){
+    zones.forEach(z=>{ if(!(z.id in zoneState)) zoneState[z.id] = {state:'covered'}; });
+    const fillSelect = (select) => {
+      const prevValue = select.value;
+      select.innerHTML = zones.map(z=>`<option value="${escapeHtml(z.id)}">${escapeHtml(z.name)}</option>`).join('');
+      if(zones.some(z=>z.id===prevValue)) select.value = prevValue;
+    };
+    fillSelect(taskZoneSelect);
+    const historyZoneSelect = document.getElementById('historyZone');
+    if(historyZoneSelect){
+      const prevValue = historyZoneSelect.value;
+      historyZoneSelect.innerHTML = '<option value="">All zones</option>' +
+        zones.map(z=>`<option value="${escapeHtml(z.id)}">${escapeHtml(z.name)}</option>`).join('');
+      historyZoneSelect.value = prevValue;
+    }
+    renderZones();
+  }
+
+  async function loadZones(){
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/zones`);
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      zones = data.zones.filter(z => z.active).map(z => ({id: z.zone_id, name: z.name, role: z.role_tag}));
+      applyZonesToUI();
+    } catch(err){
+      logEvent('crit', `Could not load zone directory: ${escapeHtml(err.message)}`);
+    }
+  }
 
   // If this page is being served BY the rules engine itself (e.g. hosted
   // on Railway, not opened as a local file), default the login/WS fields
@@ -528,6 +603,8 @@
     document.getElementById('userBadge').style.display = 'flex';
     document.getElementById('manageUsersBtn').style.display = currentAuth.role === 'admin' ? 'inline-block' : 'none';
     document.getElementById('manageEmployeesBtn').style.display =
+      (currentAuth.role === 'admin' || currentAuth.role === 'supervisor') ? 'inline-block' : 'none';
+    document.getElementById('manageZonesBtn').style.display =
       (currentAuth.role === 'admin' || currentAuth.role === 'supervisor') ? 'inline-block' : 'none';
   }
 
@@ -613,18 +690,18 @@
 
   function renderZones(){
     floorEl.innerHTML = '';
-    ZONES.forEach(z=>{
+    if(zones.length === 0){ floorEl.innerHTML = '<div class="empty">No zones configured yet — add one below.</div>'; }
+    zones.forEach(z=>{
       const st = zoneState[z.id] || {state:'covered'};
       const div = document.createElement('div');
       div.className = 'zone state-'+st.state;
-      div.style.left = z.x+'%'; div.style.top = z.y+'%'; div.style.width = z.w+'%'; div.style.height = z.h+'%';
       let label = {covered:'Covered', gap:'Gap detected', nudge:'Nudge sent', command:'Command issued', escalated:'Escalated'}[st.state] || st.state;
       div.innerHTML = `<div><div class="zn">${escapeHtml(z.name)}</div><div class="zr">${escapeHtml(z.role)}</div></div>
         <div class="zs"><span class="sdot"></span>${escapeHtml(label)}</div>`;
       floorEl.appendChild(div);
     });
-    document.getElementById('statCovered').textContent = ZONES.filter(z=>(zoneState[z.id]||{}).state==='covered').length;
-    document.getElementById('zoneCount').textContent = ZONES.length + ' zones';
+    document.getElementById('statCovered').textContent = zones.filter(z=>(zoneState[z.id]||{}).state==='covered').length;
+    document.getElementById('zoneCount').textContent = zones.length + ' zones';
   }
 
   function logEvent(kind, text){
@@ -834,7 +911,7 @@
   }
 
   function zoneLabel(evt){
-    const z = ZONES.find(z=>z.id===evt.zone_id);
+    const z = zones.find(z=>z.id===evt.zone_id);
     return evt.zone_name || (z && z.name) || evt.zone_id;
   }
 
@@ -1007,6 +1084,7 @@
 
       renderZones(); renderQueue(); renderTasks();
       loadEmployeesForPicker();
+      loadZones();
       logEvent('info', 'Loaded current zone and task state from rules engine.');
     } catch(err){
       logEvent('crit', `Could not load initial state: ${escapeHtml(err.message)}`);
@@ -1419,6 +1497,97 @@
     }
   });
 
+  // ── Zone directory (see zone_directory.py) — the floor sections shown
+  // on the coverage board, task-creation zone picker, and history
+  // filter. Mirrors the employee-directory management UI above. ──
+  function renderZonesTable(zoneList){
+    const tbody = document.getElementById('zonesTableBody');
+    if(!zoneList.length){
+      tbody.innerHTML = '<tr><td colspan="5" class="empty">No zones added yet.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = zoneList.map(z => `
+      <tr style="border-bottom:1px solid var(--line);">
+        <td style="padding:8px;font-family:var(--mono);">${escapeHtml(z.zone_id)}</td>
+        <td style="padding:8px;overflow-wrap:anywhere;">${escapeHtml(z.name)}</td>
+        <td style="padding:8px;font-family:var(--mono);">${escapeHtml(z.role_tag)}</td>
+        <td style="padding:8px;color:${z.active ? 'var(--ok)' : 'var(--red)'};">${z.active ? 'active' : 'deactivated'}</td>
+        <td style="padding:8px;">
+          ${z.active
+            ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="deactivate" data-zoneid="${escapeHtml(z.zone_id)}">Deactivate</button>`
+            : `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reactivate" data-zoneid="${escapeHtml(z.zone_id)}">Reactivate</button>`}
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  async function loadZonesForManagement(){
+    const errEl = document.getElementById('manageZonesError');
+    errEl.textContent = '';
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/zones`);
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      renderZonesTable(data.zones);
+    } catch(err){
+      errEl.textContent = `Failed to load zones: ${err.message}`;
+    }
+  }
+
+  document.getElementById('manageZonesBtn').onclick = () => {
+    document.getElementById('manageZonesOverlay').style.display = 'flex';
+    loadZonesForManagement();
+  };
+  document.getElementById('closeManageZonesBtn').onclick = () => {
+    document.getElementById('manageZonesOverlay').style.display = 'none';
+  };
+
+  document.getElementById('addZoneForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('manageZonesError');
+    errEl.textContent = '';
+    const zone_id = document.getElementById('newZoneId').value.trim();
+    const name = document.getElementById('newZoneName').value.trim();
+    const role_tag = document.getElementById('newZoneRoleTag').value.trim();
+    const camera_id = document.getElementById('newZoneCameraId').value.trim() || null;
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/zones`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({zone_id, name, role_tag, camera_id}),
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      document.getElementById('addZoneForm').reset();
+      loadZonesForManagement();
+      loadZones(); // refreshes the coverage board / task zone picker / history filter
+    } catch(err){
+      errEl.textContent = err.message;
+    }
+  };
+
+  document.getElementById('zonesTableBody').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if(!btn) return;
+    const zoneId = btn.dataset.zoneid;
+    const action = btn.dataset.action;
+    const errEl = document.getElementById('manageZonesError');
+    errEl.textContent = '';
+    try {
+      if(action === 'deactivate'){
+        if(!confirm(`Deactivate zone '${zoneId}'? It will drop off the coverage board and task/history pickers.`)) return;
+        const res = await authFetch(`${currentAuth.backendBase}/api/admin/zones/${encodeURIComponent(zoneId)}/deactivate`, {method: 'POST'});
+        if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+      } else if(action === 'reactivate'){
+        const res = await authFetch(`${currentAuth.backendBase}/api/admin/zones/${encodeURIComponent(zoneId)}/reactivate`, {method: 'POST'});
+        if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+      }
+      loadZonesForManagement();
+      loadZones();
+    } catch(err){
+      errEl.textContent = err.message;
+    }
+  });
+
   // ── History — the durable audit trail (GET /api/history), distinct
   // from the live Event Feed above: that panel only ever holds whatever
   // arrived over the WebSocket since the page was last loaded, and a
@@ -1427,9 +1596,6 @@
   // can actually answer "what happened to this task" after the fact —
   // see event_history.py's module docstring for exactly what is and
   // isn't recorded there. ──────────────────────────────────────────────
-  const historyZoneSelect = document.getElementById('historyZone');
-  ZONES.forEach(z=>{ const opt=document.createElement('option'); opt.value=z.id; opt.textContent=z.name; historyZoneSelect.appendChild(opt); });
-
   function historyEventKind(evt){
     switch(evt.event_type){
       case 'zone_nudge_sent': case 'task_low_effort_nudge': case 'task_status_nudge': return 'warn';

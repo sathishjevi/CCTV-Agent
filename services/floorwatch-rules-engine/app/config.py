@@ -25,6 +25,12 @@ REDIS_CONSUMER_NAME = os.environ.get("FLOORWATCH_REDIS_CONSUMER", "rules-engine-
 
 ROSTER_PATH = Path(os.environ.get("FLOORWATCH_ROSTER_PATH", SERVICE_DIR / "roster.json"))
 ZONES_META_PATH = Path(os.environ.get("FLOORWATCH_ZONES_META_PATH", SERVICE_DIR / "zones_meta.json"))
+# Zone directory (see zone_directory.py) — Postgres-if-configured/local-JSON-
+# fallback, same as EMPLOYEE_DIRECTORY_PATH below. Seeded once from
+# ZONES_META_PATH above on first startup if empty, then becomes the source
+# of truth: zones_meta.json stops being read after that seed.
+ZONE_DIRECTORY_PATH = Path(os.environ.get(
+    "FLOORWATCH_ZONE_DIRECTORY_PATH", SERVICE_DIR / "zone_directory.json"))
 DIGEST_PATH = Path(os.environ.get("FLOORWATCH_DIGEST_PATH", SERVICE_DIR / "shift_digest.jsonl"))
 TASK_TYPE_THRESHOLDS_PATH = Path(os.environ.get(
     "FLOORWATCH_TASK_TYPE_THRESHOLDS_PATH", SERVICE_DIR / "task_type_thresholds.json"))
