@@ -114,6 +114,9 @@
   .taskcard .btnrow .btn{margin-top:0;}
   .taskcard .review-btn{background:rgba(18,135,90,0.15);border-color:rgba(18,135,90,0.4);color:var(--ok);}
   .taskcard .review-btn:hover{background:rgba(18,135,90,0.25);}
+  .taskcard .reassign-row{display:flex;gap:6px;margin-top:8px;}
+  .taskcard .reassign-row select{flex:1;font-family:var(--sans);font-size:10.5px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:5px 7px;}
+  .taskcard .reassign-btn{font-size:10.5px;padding:5px 10px;}
 
   .stats-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:18px 0;}
   .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;}
@@ -636,6 +639,12 @@
     const e = employeesById[employeeNumber];
     return e ? `${e.name} (#${employeeNumber})` : `#${employeeNumber}`;
   }
+  function employeeOptionsHtml(selectedValue){
+    return '<option value="">Unassigned</option>' + Object.values(employeesById)
+      .filter(e => e.active)
+      .map(e => `<option value="${escapeHtml(e.employee_number)}" ${e.employee_number===selectedValue ? 'selected' : ''}>${escapeHtml(e.name)} — ${escapeHtml(e.department)} (#${escapeHtml(e.employee_number)})</option>`)
+      .join('');
+  }
 
   function renderTasks(){
     const ids = Object.keys(tasks);
@@ -669,7 +678,11 @@
         <div class="btnrow">
           <button class="btn complete-btn" data-task="${id}">Mark complete</button>
           ${t.reopenedForReview ? `<button class="btn review-btn" data-review-task="${id}">Reviewed — looks good</button>` : ''}
-        </div>` : ''}`;
+        </div>` : ''}
+        <div class="reassign-row">
+          <select data-reassign-select="${id}">${employeeOptionsHtml(t.assignedTo)}</select>
+          <button class="btn reassign-btn" data-reassign-btn="${id}">${t.assignedTo ? 'Reassign' : 'Assign'}</button>
+        </div>`;
       tasksEl.appendChild(div);
     });
     tasksEl.querySelectorAll('button[data-task]').forEach(btn=>{
@@ -678,7 +691,28 @@
     tasksEl.querySelectorAll('button[data-review-task]').forEach(btn=>{
       btn.onclick = ()=>{ resolveAfterReview(btn.dataset.reviewTask); };
     });
+    tasksEl.querySelectorAll('button[data-reassign-btn]').forEach(btn=>{
+      btn.onclick = ()=>{
+        const taskId = btn.dataset.reassignBtn;
+        const select = tasksEl.querySelector(`select[data-reassign-select="${CSS.escape(taskId)}"]`);
+        reassignTask(taskId, select.value);
+      };
+    });
     document.getElementById('taskCount').textContent = ids.length + ' active';
+  }
+
+  async function reassignTask(taskId, employeeNumber){
+    if(!employeeNumber){ logEvent('crit', 'Pick an employee before assigning.'); return; }
+    const base = restBase(wsUrlInput.value.trim());
+    try {
+      const res = await authFetch(`${base}/api/tasks/${encodeURIComponent(taskId)}/reassign`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({new_assignee: employeeNumber}),
+      });
+      if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+    } catch(err){
+      logEvent('crit', `Failed to assign task ${escapeHtml(taskId)}: ${escapeHtml(err.message)}`);
+    }
   }
 
   async function completeTask(taskId){
@@ -1225,11 +1259,7 @@
       data.employees.forEach(e => { employeesById[e.employee_number] = e; });
       const select = document.getElementById('taskAssignee');
       const prevValue = select.value;
-      select.innerHTML = '<option value="">Unassigned</option>' + data.employees
-        .filter(e => e.active)
-        .map(e => `<option value="${escapeHtml(e.employee_number)}">${escapeHtml(e.name)} — ${escapeHtml(e.department)} (#${escapeHtml(e.employee_number)})</option>`)
-        .join('');
-      select.value = prevValue;
+      select.innerHTML = employeeOptionsHtml(prevValue);
       renderTasks(); // now that employeesById is populated, assignee names can resolve
     } catch(err){
       logEvent('crit', `Could not load employee directory: ${escapeHtml(err.message)}`);
