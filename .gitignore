@@ -66,3 +66,5 @@ src/camera/src/.env
 # local test scripts/configs that end up holding real API keys or paths
 run_scene_detection_test.bat
 my_test_cameras.json
+my_messy_cameras.json
+test_footage_messy/

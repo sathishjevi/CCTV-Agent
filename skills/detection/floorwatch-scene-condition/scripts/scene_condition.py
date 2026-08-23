@@ -259,6 +259,7 @@ def main():
         except Exception as e:
             log(f"unexpected error judging frame for camera '{camera_id}': {e}")
             continue
+        log(f"DEBUG judgment for camera '{camera_id}': {judgment}")
         if judgment is None or not judgment.needs_task:
             continue
 
