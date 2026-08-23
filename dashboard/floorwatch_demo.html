@@ -775,8 +775,9 @@
         ${wf ? `<div class="wf-badge ${wf.cls}">${escapeHtml(wf.text)}</div>` : ''}
         ${(t.status==='ok'||t.status==='low') ? `
         <div class="btnrow">
-          <button class="btn complete-btn" data-task="${id}">Mark complete</button>
-          ${t.reopenedForReview ? `<button class="btn review-btn" data-review-task="${id}">Reviewed — looks good</button>` : ''}
+          ${t.reopenedForReview
+            ? `<button class="btn review-btn" data-review-task="${id}">Reviewed — looks good</button>`
+            : `<button class="btn complete-btn" data-task="${id}">Mark complete</button>`}
         </div>` : ''}
         <div class="reassign-row">
           <select data-reassign-select="${id}">${employeeOptionsHtml(t.assignedTo)}</select>
