@@ -761,7 +761,17 @@
       if(t.status==='ok'){ statusText='On track'; statusClass='ok'; }
       else if(t.status==='low'){ statusText='Low active time — nudged'; statusClass='warn'; }
       else if(t.status==='flagged'){ statusText='Flagged for supervisor review'; statusClass='bad'; }
-      else if(t.status==='resolved'){ statusText='Reviewed'; statusClass='ok'; }
+      else if(t.status==='resolved'){
+        // Label reflects HOW the task closed, not just that it did —
+        // "Reviewed" previously showed for every resolved task even when
+        // no one actually reviewed it (e.g. auto-resolved on Mark
+        // complete). See t.resolutionType, set from the task_resolved
+        // event's action_type ("resolved"=auto | "reviewed" | "dismissed").
+        if(t.resolutionType==='reviewed'){ statusText='Reviewed'; }
+        else if(t.resolutionType==='dismissed'){ statusText='Dismissed — false alarm'; }
+        else { statusText='Completed'; }
+        statusClass='ok';
+      }
       const assigneeText = employeeLabel(t.assignedTo);
       const wf = WORKFLOW_LABELS[t.workflowStatus] || null;
       const div = document.createElement('div');
@@ -1001,6 +1011,7 @@
         if(tasks[evt.task_id]){
           tasks[evt.task_id].status = 'resolved'; tasks[evt.task_id].activeMin = evt.active_minutes;
           tasks[evt.task_id].reopenedForReview = false; // terminal either way (auto/dismissed/reviewed)
+          tasks[evt.task_id].resolutionType = evt.action_type || null; // "resolved"|"reviewed"|"dismissed" — picks the status label below
         }
         if(evt.action_type === 'dismissed'){
           // a dismissed flag turned out to be a false alarm — it never
@@ -1079,7 +1090,7 @@
           assignedMin: t.assigned_minutes, activeMin: t.active_minutes, elapsedMin: t.elapsed_minutes,
           assignedAtMs: Date.now() - t.elapsed_minutes * 60000, status,
           assignedTo: t.assigned_to || null, workflowStatus: t.workflow_status || 'unassigned',
-          reopenedForReview: !!t.reopened_for_review,
+          reopenedForReview: !!t.reopened_for_review, resolutionType: t.resolution_type || null,
         };
       });
 

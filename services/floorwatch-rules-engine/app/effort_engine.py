@@ -95,6 +95,12 @@ class TaskRuntime:
     reopened_for_review: bool = False      # set by confirm_flag() — lets resolve_after_review()
                                             # close the task directly without re-running the
                                             # effort-flag check (see that method's docstring)
+    resolution_type: Optional[str] = None  # "resolved" (auto, active time met expectations) |
+                                            # "reviewed" (resolve_after_review — supervisor
+                                            # attested after following up) | "dismissed"
+                                            # (dismiss_flag — false alarm). None until resolved.
+                                            # Distinct from t.status=="resolved": this says HOW,
+                                            # not THAT — see dashboard's per-task status label.
 
 
 class EffortEngine:
@@ -420,6 +426,7 @@ class EffortEngine:
 
         t.status = "resolved"
         t.reopened_for_review = False
+        t.resolution_type = "resolved"
         evt = self._base_event(t, "task_resolved", active_minutes, action_type="resolved")
         evt["resolved_by"] = "auto"
         return evt
@@ -537,6 +544,7 @@ class EffortEngine:
         t.status = "resolved"
         t.workflow_status = "completed"
         t.reopened_for_review = False
+        t.resolution_type = "reviewed"
         evt = self._base_event(t, "task_resolved", t.active_seconds / 60.0,
             action_type="reviewed",
             message=f'Supervisor reviewed "{t.task_name}" with the employee — resolved, no further action needed.')
@@ -549,6 +557,7 @@ class EffortEngine:
             return None
         t.status = "resolved"
         t.reopened_for_review = False
+        t.resolution_type = "dismissed"
         evt = self._base_event(t, "task_resolved", t.active_seconds / 60.0,
                                 action_type="dismissed",
                                 message=f"Supervisor dismissed the effort flag on \"{t.task_name}\" — false alarm (e.g. off-camera prep work).")

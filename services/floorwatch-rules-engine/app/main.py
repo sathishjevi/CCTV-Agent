@@ -291,7 +291,7 @@ async def _refresh_snapshots():
                   "elapsed_minutes": round((now - t.start_monotonic) / 60.0, 2),
                   "assigned_to": t.assigned_to, "assigned_by": t.assigned_by,
                   "workflow_status": t.workflow_status, "short_code": effort_engine.short_code(task_id),
-                  "reopened_for_review": t.reopened_for_review}
+                  "reopened_for_review": t.reopened_for_review, "resolution_type": t.resolution_type}
         for task_id, t in effort_engine.tasks.items()
     }
     await write_snapshot(cluster_redis, SNAPSHOT_STATE_KEY, state)
