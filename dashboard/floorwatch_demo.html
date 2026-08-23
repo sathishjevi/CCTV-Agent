@@ -548,9 +548,31 @@
     return res;
   }
 
+  // Updates only the bar width/color and the elapsed-time text on each
+  // tick, without touching the rest of the card — a full renderTasks()
+  // every second was replacing the <select> element out from under
+  // anyone mid-click on the assign/reassign dropdown, closing it.
+  function updateTaskTimers(){
+    Object.keys(tasks).forEach(id=>{
+      const t = tasks[id];
+      const barEl = tasksEl.querySelector(`[data-bar="${CSS.escape(id)}"]`);
+      if(!barEl) return; // not rendered yet (e.g. before first renderTasks())
+      const elapsedMin = taskElapsedMin(t);
+      const pct = Math.min(100, Math.round((t.activeMin/t.assignedMin)*100));
+      const expectedPct = Math.min(100, Math.round((elapsedMin/t.assignedMin)*100));
+      let barClass = 'good';
+      if(pct < expectedPct - 30) barClass = 'bad';
+      else if(pct < expectedPct - 10) barClass = 'warn';
+      barEl.style.width = pct + '%';
+      barEl.className = `bar ${barClass}`;
+      const statsEl = tasksEl.querySelector(`[data-stats="${CSS.escape(id)}"]`);
+      if(statsEl) statsEl.innerHTML = `<span>Active: ${t.activeMin.toFixed(1)} / ${t.assignedMin} min</span><span>Elapsed: ${elapsedMin.toFixed(1)} / ${t.assignedMin} min</span>`;
+    });
+  }
+
   function tickClock(){
     clockEl.textContent = new Date().toLocaleTimeString('en-US',{hour12:false});
-    renderTasks(); // keep elapsed-time bars live between server updates
+    updateTaskTimers(); // keep elapsed-time bars live between server updates, without rebuilding the DOM
   }
   setInterval(tickClock, 1000); tickClock();
 
@@ -669,8 +691,8 @@
       div.className = 'taskcard';
       div.innerHTML = `
         <div class="hd"><div class="tn">${escapeHtml(t.name)}</div><div class="tz">${escapeHtml(t.zone)}</div></div>
-        <div class="barwrap"><div class="bar ${barClass}" style="width:${pct}%"></div></div>
-        <div class="stats"><span>Active: ${t.activeMin.toFixed(1)} / ${t.assignedMin} min</span><span>Elapsed: ${elapsedMin.toFixed(1)} / ${t.assignedMin} min</span></div>
+        <div class="barwrap"><div class="bar ${barClass}" style="width:${pct}%" data-bar="${id}"></div></div>
+        <div class="stats" data-stats="${id}"><span>Active: ${t.activeMin.toFixed(1)} / ${t.assignedMin} min</span><span>Elapsed: ${elapsedMin.toFixed(1)} / ${t.assignedMin} min</span></div>
         <div class="status ${statusClass}">${statusText}</div>
         ${assigneeText ? `<div class="assignee">Assigned to: ${escapeHtml(assigneeText)}</div>` : ''}
         ${wf ? `<div class="wf-badge ${wf.cls}">${escapeHtml(wf.text)}</div>` : ''}
