@@ -122,6 +122,7 @@
   .stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;}
   .stat .v{font-family:var(--mono);font-size:22px;font-weight:600;}
   .stat .l{font-size:10.5px;color:var(--dim);margin-top:3px;text-transform:uppercase;letter-spacing:0.4px;}
+  .stat .sub{font-size:10.5px;color:var(--ok);margin-top:4px;font-family:var(--mono);}
   .stat.ok .v{color:var(--ok);} .stat.amber .v{color:var(--amber);} .stat.red .v{color:var(--red);} .stat.purple .v{color:var(--purple);}
 
   footer{margin-top:20px;font-family:var(--mono);font-size:10.5px;color:var(--dimmer);text-align:center;line-height:1.6;}
@@ -437,7 +438,7 @@
   <div class="stats-strip">
     <div class="stat ok"><div class="v" id="statCovered">0</div><div class="l">Zones covered</div></div>
     <div class="stat amber"><div class="v" id="statNudges">0</div><div class="l">Coverage nudges</div></div>
-    <div class="stat purple"><div class="v" id="statEffortFlags">0</div><div class="l">Effort flags raised</div></div>
+    <div class="stat purple"><div class="v" id="statEffortFlags">0</div><div class="l">Effort flags raised</div><div class="sub" id="statEffortFlagsResolved">0 resolved</div></div>
     <div class="stat red"><div class="v" id="statCmds">0</div><div class="l">Supervisor actions</div></div>
   </div>
 
@@ -512,6 +513,12 @@
   // legitimately be approved/reassigned multiple times in a shift and
   // each is a genuine distinct action, unlike a task flag cycle.
   let flaggedTaskIds = new Set();
+  // Subset of flaggedTaskIds a supervisor has actually closed out via
+  // "Reviewed — looks good" — lets the tile show "N raised · M resolved"
+  // instead of just N, so a fully-worked-through shift doesn't read as
+  // if flags are still stuck open (the live outstanding count is the
+  // Supervisor Queue panel below, not this top-strip tile).
+  let resolvedFlagTaskIds = new Set();
   let taskSupervisorActionIds = new Set();
   let zoneSupervisorActions = 0;
   function recomputeCmds(){ counters.cmds = zoneSupervisorActions + taskSupervisorActionIds.size; }
@@ -1029,6 +1036,8 @@
             taskSupervisorActionIds.add(evt.task_id);
             recomputeCmds();
           }
+          resolvedFlagTaskIds.add(evt.task_id);
+          document.getElementById('statEffortFlagsResolved').textContent = resolvedFlagTaskIds.size + ' resolved';
         }
         logEvent('eff', evt.resolved_by === 'auto'
           ? `"${escapeHtml(evt.task_name)}" completed — active time met expectations.`
