@@ -47,12 +47,21 @@ class PostgresZoneDirectory:
             created_by TEXT
         );
     """
+    # ADD COLUMN IF NOT EXISTS, not folded into SCHEMA_SQL — this table may
+    # already exist (and hold real zones) from before `staffed` existed;
+    # CREATE TABLE IF NOT EXISTS alone would silently skip adding it to an
+    # already-created table (same pattern as employee_directory.py).
+    MIGRATION_SQL = [
+        "ALTER TABLE floorwatch_zones ADD COLUMN IF NOT EXISTS staffed BOOLEAN NOT NULL DEFAULT true;",
+    ]
 
     def __init__(self, dsn: str):
         import psycopg
         self.dsn = dsn
         with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as conn:
             conn.execute(self.SCHEMA_SQL)
+            for stmt in self.MIGRATION_SQL:
+                conn.execute(stmt)
 
     def _connect(self):
         import psycopg
@@ -61,20 +70,28 @@ class PostgresZoneDirectory:
     @staticmethod
     def _row_to_dict(r) -> dict:
         return {"zone_id": r[0], "name": r[1], "role_tag": r[2], "camera_id": r[3],
-                "active": r[4], "created_at": r[5].isoformat() if r[5] else None, "created_by": r[6]}
+                "active": r[4], "created_at": r[5].isoformat() if r[5] else None, "created_by": r[6],
+                "staffed": r[7]}
 
-    _COLUMNS = "zone_id, name, role_tag, camera_id, active, created_at, created_by"
+    _COLUMNS = "zone_id, name, role_tag, camera_id, active, created_at, created_by, staffed"
 
     def add(self, zone_id: str, name: str, role_tag: str, camera_id: Optional[str] = None,
-            created_by: Optional[str] = None):
+            created_by: Optional[str] = None, staffed: bool = True):
         with self._connect() as conn:
             conn.execute(
-                "INSERT INTO floorwatch_zones (zone_id, name, role_tag, camera_id, active, created_by) "
-                "VALUES (%s,%s,%s,%s,true,%s) "
+                "INSERT INTO floorwatch_zones (zone_id, name, role_tag, camera_id, active, created_by, staffed) "
+                "VALUES (%s,%s,%s,%s,true,%s,%s) "
                 "ON CONFLICT (zone_id) DO UPDATE SET "
                 "name=EXCLUDED.name, role_tag=EXCLUDED.role_tag, camera_id=EXCLUDED.camera_id",
-                (zone_id, name, role_tag, camera_id or None, created_by),
+                (zone_id, name, role_tag, camera_id or None, created_by, staffed),
             )
+
+    def get(self, zone_id: str) -> Optional[dict]:
+        with self._connect() as conn:
+            row = conn.execute(
+                f"SELECT {self._COLUMNS} FROM floorwatch_zones WHERE zone_id=%s", (zone_id,)
+            ).fetchone()
+        return self._row_to_dict(row) if row else None
 
     def list_all(self, active_only: bool = False) -> list:
         where = "WHERE active = true" if active_only else ""
@@ -88,6 +105,12 @@ class PostgresZoneDirectory:
         with self._connect() as conn:
             cur = conn.execute(
                 "UPDATE floorwatch_zones SET active=%s WHERE zone_id=%s", (active, zone_id))
+            return cur.rowcount > 0
+
+    def set_staffed(self, zone_id: str, staffed: bool) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE floorwatch_zones SET staffed=%s WHERE zone_id=%s", (staffed, zone_id))
             return cur.rowcount > 0
 
 
@@ -112,7 +135,7 @@ class JsonZoneDirectory:
         self.path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def add(self, zone_id: str, name: str, role_tag: str, camera_id: Optional[str] = None,
-            created_by: Optional[str] = None):
+            created_by: Optional[str] = None, staffed: bool = True):
         from datetime import datetime, timezone
         data = self._load()
         existing = data.get(zone_id, {})
@@ -121,8 +144,12 @@ class JsonZoneDirectory:
             "active": existing.get("active", True),
             "created_at": existing.get("created_at") or datetime.now(timezone.utc).isoformat(),
             "created_by": existing.get("created_by") or created_by,
+            "staffed": existing.get("staffed", staffed),
         }
         self._save(data)
+
+    def get(self, zone_id: str) -> Optional[dict]:
+        return self._load().get(zone_id)
 
     def list_all(self, active_only: bool = False) -> list:
         entries = sorted(self._load().values(), key=lambda e: e["zone_id"])
@@ -135,6 +162,14 @@ class JsonZoneDirectory:
         if zone_id not in data:
             return False
         data[zone_id]["active"] = active
+        self._save(data)
+        return True
+
+    def set_staffed(self, zone_id: str, staffed: bool) -> bool:
+        data = self._load()
+        if zone_id not in data:
+            return False
+        data[zone_id]["staffed"] = staffed
         self._save(data)
         return True
 

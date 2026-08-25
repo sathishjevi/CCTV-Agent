@@ -178,7 +178,7 @@ zones_meta = {
 }
 task_type_thresholds = (json.loads(config.TASK_TYPE_THRESHOLDS_PATH.read_text())
                          if config.TASK_TYPE_THRESHOLDS_PATH.exists() else {"_default": {"expected_active_ratio": 0.5}})
-roster = Roster(config.ROSTER_PATH)
+roster = Roster(config.ROSTER_PATH, zone_directory)
 digest = DigestStore(config.DIGEST_PATH)
 event_history = build_event_history_store(config.POSTGRES_DSN, config.EVENT_HISTORY_PATH)
 employee_directory = build_employee_directory(config.POSTGRES_DSN, config.EMPLOYEE_DIRECTORY_PATH)
@@ -1220,6 +1220,9 @@ class AddZoneRequest(BaseModel):
     name: str
     role_tag: str
     camera_id: str | None = None  # links to floorwatch-coverage/floorwatch-scene-condition's zone calibration
+    staffed: bool = True  # roster.py's fallback source for zones not listed in the static roster.json —
+                           # see that module's docstring. True by default: adding a zone here is an
+                           # assertion it's a real, currently-covered floor section.
 
 
 @app.get("/api/admin/zones")
@@ -1238,7 +1241,7 @@ async def add_zone(body: AddZoneRequest, user=Depends(require_supervisor)):
         return JSONResponse(status_code=400, content={"error": "role_tag is required"})
     await asyncio.to_thread(
         zone_directory.add, body.zone_id, body.name, body.role_tag,
-        camera_id=body.camera_id, created_by=user["sub"])
+        camera_id=body.camera_id, created_by=user["sub"], staffed=body.staffed)
     # Live-update the SAME dict object engine.py/effort_engine.py were
     # constructed with, so a new zone is usable immediately — no restart.
     zones_meta[body.zone_id] = {"name": body.name, "role_tag": body.role_tag, "camera_id": body.camera_id}
@@ -1263,6 +1266,18 @@ async def reactivate_zone(zone_id: str, user=Depends(require_supervisor)):
     if z:
         zones_meta[zone_id] = {"name": z["name"], "role_tag": z["role_tag"], "camera_id": z["camera_id"]}
     log(f"'{user['sub']}' reactivated zone '{zone_id}'")
+    return {"ok": True}
+
+
+class SetZoneStaffedRequest(BaseModel):
+    staffed: bool
+
+
+@app.post("/api/admin/zones/{zone_id}/set-staffed")
+async def set_zone_staffed(zone_id: str, body: SetZoneStaffedRequest, user=Depends(require_supervisor)):
+    if not await asyncio.to_thread(zone_directory.set_staffed, zone_id, body.staffed):
+        return JSONResponse(status_code=404, content={"error": f"zone '{zone_id}' not found"})
+    log(f"'{user['sub']}' set zone '{zone_id}'s staffed flag to {body.staffed}")
     return {"ok": True}
 
 

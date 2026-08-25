@@ -323,7 +323,7 @@
     <div style="overflow-x:auto;margin:12px 0 20px;">
     <table id="zonesTable" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12.5px;">
       <colgroup>
-        <col style="width:18%;"><col style="width:26%;"><col style="width:18%;"><col style="width:18%;"><col style="width:20%;">
+        <col style="width:15%;"><col style="width:22%;"><col style="width:15%;"><col style="width:13%;"><col style="width:15%;"><col style="width:20%;">
       </colgroup>
       <thead>
         <tr style="text-align:left;color:var(--dim);font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:0.4px;">
@@ -331,6 +331,7 @@
           <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Name</th>
           <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Role tag</th>
           <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Status</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Staffed</th>
           <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Actions</th>
         </tr>
       </thead>
@@ -344,9 +345,13 @@
       <div class="field" style="margin-bottom:0;flex:1;min-width:160px;"><label for="newZoneName">Display name</label><input id="newZoneName" required placeholder="e.g. Outdoor Patio"></div>
       <div class="field" style="margin-bottom:0;min-width:130px;"><label for="newZoneRoleTag">Role tag</label><input id="newZoneRoleTag" required placeholder="e.g. usher"></div>
       <div class="field" style="margin-bottom:0;min-width:130px;"><label for="newZoneCameraId">Camera ID (optional)</label><input id="newZoneCameraId" placeholder="e.g. patio_cam_1"></div>
+      <div class="field" style="margin-bottom:0;flex-direction:row;align-items:center;gap:6px;min-width:0;">
+        <input type="checkbox" id="newZoneStaffed" checked style="width:auto;">
+        <label for="newZoneStaffed" style="margin:0;">Staffed</label>
+      </div>
       <button type="submit" class="btn primary" style="width:auto;">Add</button>
     </form>
-    <div style="font-family:var(--mono);font-size:10.5px;color:var(--dimmer);margin-top:8px;line-height:1.5;">Zone ID is a stable identifier (letters/numbers/hyphens only) used internally and in URLs — pick something short and permanent. Role tag should match employees' Department field so auto-assignment can find who covers this zone.</div>
+    <div style="font-family:var(--mono);font-size:10.5px;color:var(--dimmer);margin-top:8px;line-height:1.5;">Zone ID is a stable identifier (letters/numbers/hyphens only) used internally and in URLs — pick something short and permanent. Role tag should match employees' Department field so auto-assignment can find who covers this zone. "Staffed" must be checked for a zone to accept task assignments — this is Global Constraint 5's roster cross-check, not just a display flag; uncheck it for a zone that exists on the floor plan but has nobody covering it right now.</div>
   </div>
 </div>
 
@@ -1534,6 +1539,11 @@
         <td style="padding:8px;font-family:var(--mono);">${escapeHtml(z.role_tag)}</td>
         <td style="padding:8px;color:${z.active ? 'var(--ok)' : 'var(--red)'};">${z.active ? 'active' : 'deactivated'}</td>
         <td style="padding:8px;">
+          <label style="display:flex;align-items:center;gap:4px;font-size:10.5px;color:var(--dim);cursor:pointer;">
+            <input type="checkbox" data-staffed-toggle data-zoneid="${escapeHtml(z.zone_id)}" ${z.staffed ? 'checked' : ''} style="width:auto;">
+          </label>
+        </td>
+        <td style="padding:8px;">
           ${z.active
             ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="deactivate" data-zoneid="${escapeHtml(z.zone_id)}">Deactivate</button>`
             : `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reactivate" data-zoneid="${escapeHtml(z.zone_id)}">Reactivate</button>`}
@@ -1571,10 +1581,11 @@
     const name = document.getElementById('newZoneName').value.trim();
     const role_tag = document.getElementById('newZoneRoleTag').value.trim();
     const camera_id = document.getElementById('newZoneCameraId').value.trim() || null;
+    const staffed = document.getElementById('newZoneStaffed').checked;
     try {
       const res = await authFetch(`${currentAuth.backendBase}/api/admin/zones`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({zone_id, name, role_tag, camera_id}),
+        body: JSON.stringify({zone_id, name, role_tag, camera_id, staffed}),
       });
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -1605,6 +1616,24 @@
       loadZonesForManagement();
       loadZones();
     } catch(err){
+      errEl.textContent = err.message;
+    }
+  });
+
+  document.getElementById('zonesTableBody').addEventListener('change', async (e) => {
+    const box = e.target.closest('input[data-staffed-toggle]');
+    if(!box) return;
+    const zoneId = box.dataset.zoneid;
+    const errEl = document.getElementById('manageZonesError');
+    errEl.textContent = '';
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/zones/${encodeURIComponent(zoneId)}/set-staffed`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({staffed: box.checked}),
+      });
+      if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+    } catch(err){
+      box.checked = !box.checked;  // revert the visual state on failure
       errEl.textContent = err.message;
     }
   });
