@@ -9,7 +9,7 @@ ultralytics>=8.3.0        # YOLOv11/v10/v8 inference
 # confirms this combination there.
 numpy>=2.0.2
 opencv-python-headless>=4.8.0
-Pillow>=10.0.0
+Pillow>=12.3.0
 supervision>=0.24         # sv.Detections — shared detection format, tracker input/output
 trackers>=2.0              # ByteTrackTracker — persistent track_id across frames (supervision's
                             # own ByteTrack is deprecated since 0.28, removed in 0.31)
