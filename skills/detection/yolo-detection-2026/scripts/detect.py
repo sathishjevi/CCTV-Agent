@@ -20,6 +20,7 @@ import json
 import argparse
 import signal
 import time
+from datetime import datetime
 from pathlib import Path
 
 # Prevent ultralytics from auto-installing packages (e.g. onnxruntime-gpu on ROCm)
@@ -97,6 +98,75 @@ PERF_STATS_INTERVAL = 50
 
 
 # ───────────────────────────────────────────────────────────────────────────────
+# Tracking — assigns a persistent track_id to each detection across frames, one
+# tracker per camera_id (tracks must never cross cameras). Adds `supervision`/
+# `trackers` as real dependencies (see requirements.txt), but every call here
+# degrades gracefully rather than crashing frame processing on any failure —
+# same never-raises discipline as notifications.py/vision_providers.py
+# elsewhere in this codebase: a tracking failure means detections are emitted
+# without track_id, not that detection itself stops working.
+# ───────────────────────────────────────────────────────────────────────────────
+
+try:
+    import numpy as _np
+    import supervision as _sv
+    from trackers import ByteTrackTracker as _ByteTrackTracker
+    _TRACKING_AVAILABLE = True
+except ImportError:
+    _TRACKING_AVAILABLE = False
+
+
+class TrackerRegistry:
+    """One ByteTrackTracker per camera_id, built lazily on first use.
+    `frame_rate` is set from this skill's actual --fps (sampling rate, not the
+    source camera's native fps) — ByteTrack's lost-track-buffer math is
+    calibrated around continuous ~15-30fps video, so at this skill's much
+    lower sampling rate a track survives proportionally fewer real seconds
+    of occlusion/gap unless frame_rate reflects the true sampling interval.
+    update() also gets each frame's own timestamp, so track aging follows
+    real elapsed wall-clock time rather than assumed frame_rate alone."""
+
+    def __init__(self, fps: float):
+        self.fps = max(fps, 0.1)  # guard against div-by-zero / degenerate configs
+        self._trackers: dict[str, "_ByteTrackTracker"] = {}
+
+    def _tracker_for(self, camera_id: str):
+        tracker = self._trackers.get(camera_id)
+        if tracker is None:
+            tracker = _ByteTrackTracker(frame_rate=self.fps)
+            self._trackers[camera_id] = tracker
+        return tracker
+
+    def track(self, camera_id: str, objects: list, timestamp: str, class_ids: dict) -> None:
+        """Mutates `objects` in place, adding an int `track_id` to each dict
+        (a fresh, not-yet-activated track's id is -1 until it's confirmed
+        across `minimum_consecutive_frames` — see ByteTrackTracker's default).
+        Never raises: on any failure, objects are left without track_id."""
+        if not _TRACKING_AVAILABLE or not objects:
+            return
+        try:
+            xyxy = _np.array([o["bbox"] for o in objects], dtype=_np.float64)
+            confidence = _np.array([o["confidence"] for o in objects], dtype=_np.float64)
+            class_id = _np.array(
+                [class_ids.setdefault(o["class"], len(class_ids)) for o in objects], dtype=_np.int64)
+            detections = _sv.Detections(xyxy=xyxy, confidence=confidence, class_id=class_id)
+
+            ts = None
+            if timestamp:
+                try:
+                    ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp()
+                except ValueError:
+                    ts = None
+
+            tracked = self._tracker_for(camera_id).update(detections, timestamp=ts)
+            for obj, track_id in zip(objects, tracked.tracker_id):
+                obj["track_id"] = int(track_id)
+        except Exception as e:
+            log(f"tracking error for camera '{camera_id}': {e} — emitting this frame's "
+                f"detections without track_id")
+
+
+# ───────────────────────────────────────────────────────────────────────────────
 # Performance tracker — collects per-frame timings, emits aggregate stats
 # ───────────────────────────────────────────────────────────────────────────────
 
@@ -118,6 +188,7 @@ class PerfTracker:
             "file_read":    [],
             "inference":    [],
             "postprocess":  [],
+            "tracking":     [],
             "emit":         [],
             "total":        [],
         }
@@ -271,10 +342,16 @@ def main():
         }
         if hasattr(env, 'compute_units') and env.backend == "mps":
             ready_event["compute_units"] = env.compute_units
+        ready_event["tracking_available"] = _TRACKING_AVAILABLE
         emit(ready_event)
+        if not _TRACKING_AVAILABLE:
+            log("supervision/trackers not installed — detections will be emitted without track_id")
     except Exception as e:
         emit({"event": "error", "message": f"Failed to load model: {e}", "retriable": False})
         sys.exit(1)
+
+    tracker_registry = TrackerRegistry(fps=fps)
+    track_class_ids: dict = {}  # stable class-name -> int id mapping, shared across every camera/frame
 
     # Graceful shutdown — exit immediately with code 0.
     # The stdin read loop blocks, so setting a flag doesn't work;
@@ -341,6 +418,10 @@ def main():
                                 "bbox": [int(x1), int(y1), int(x2), int(y2)],
                             })
                 perf.record("postprocess", (time.perf_counter() - t0) * 1000)
+
+                t0 = time.perf_counter()
+                tracker_registry.track(camera_id, objects, timestamp, track_class_ids)
+                perf.record("tracking", (time.perf_counter() - t0) * 1000)
 
                 t0 = time.perf_counter()
                 emit({

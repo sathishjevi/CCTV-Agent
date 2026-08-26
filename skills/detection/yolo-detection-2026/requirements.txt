@@ -2,9 +2,17 @@
 # Install: pip install -r requirements.txt
 
 ultralytics>=8.3.0        # YOLOv11/v10/v8 inference
-numpy>=1.24.0,<2.0.0
+# numpy>=2.0.2 is trackers' own floor (see below) — verified against a real
+# inference + tracking run (ultralytics 8.4.129, opencv 5.0.0, numpy 2.5.2)
+# on CPU. NOT verified on MPS (Apple Silicon) — requirements_mps.txt keeps
+# its own numpy<2.0 pin and does not get supervision/trackers until someone
+# confirms this combination there.
+numpy>=2.0.2
 opencv-python-headless>=4.8.0
 Pillow>=10.0.0
+supervision>=0.24         # sv.Detections — shared detection format, tracker input/output
+trackers>=2.0              # ByteTrackTracker — persistent track_id across frames (supervision's
+                            # own ByteTrack is deprecated since 0.28, removed in 0.31)
 # GPU inference — install ONE of these (not both!):
 # AMD ROCm:  pip install onnxruntime-rocm  (do NOT install onnxruntime alongside)
 # NVIDIA:    handled by ultralytics (tensorrt)

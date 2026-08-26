@@ -151,9 +151,9 @@ Communicates via **JSON lines** over stdin/stdout.
 
 ### Skill → Aegis (stdout)
 ```jsonl
-{"event": "ready", "model": "yolo2026n", "device": "mps", "backend": "mps", "format": "coreml", "gpu": "Apple M3", "classes": 80, "fps": 5}
+{"event": "ready", "model": "yolo2026n", "device": "mps", "backend": "mps", "format": "coreml", "gpu": "Apple M3", "classes": 80, "fps": 5, "tracking_available": true}
 {"event": "detections", "frame_id": 42, "camera_id": "front_door", "timestamp": "...", "objects": [
-  {"class": "person", "confidence": 0.92, "bbox": [100, 50, 300, 400]}
+  {"class": "person", "confidence": 0.92, "bbox": [100, 50, 300, 400], "track_id": 3}
 ]}
 {"event": "perf_stats", "total_frames": 50, "timings_ms": {"inference": {"avg": 3.4}}}
 {"event": "error", "message": "...", "retriable": true}
@@ -161,6 +161,22 @@ Communicates via **JSON lines** over stdin/stdout.
 
 ### Bounding Box Format
 `[x_min, y_min, x_max, y_max]` — pixel coordinates (xyxy).
+
+### Tracking (`track_id`)
+Each object carries a `track_id` — a persistent identity assigned by
+`trackers.ByteTrackTracker` (see `scripts/detect.py`'s `TrackerRegistry`),
+one tracker per `camera_id` so identities never cross cameras. This lets a
+downstream skill (e.g. floorwatch-coverage) tell "the same person still
+standing here" apart from "a different person just walked through" —
+critical for dwell-time-based logic, not just point-in-time occupancy.
+
+Two things to know before relying on it:
+- **A fresh track is `-1` for its first sighting**, and only gets a real
+  id once it's been seen in `minimum_consecutive_frames` (default: 2)
+  consecutive frames — a single flickering detection never gets a stable id.
+- **`track_id` is optional and may be absent** if `supervision`/`trackers`
+  aren't installed (`tracking_available: false` in the `ready` event) —
+  detection itself still works either way; never assume the field is present.
 
 ### Stop Command
 ```jsonl

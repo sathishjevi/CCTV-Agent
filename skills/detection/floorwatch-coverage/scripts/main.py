@@ -27,7 +27,10 @@ from pathlib import Path
 
 _script_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(_script_dir))
-from zone_utils import load_all_zones, bbox_anchor, point_in_polygon  # noqa: E402
+import numpy as np
+import supervision as sv
+
+from zone_utils import load_all_zones, build_polygon_zone  # noqa: E402
 from debounce import DebouncerRegistry  # noqa: E402
 
 # Locate skills/lib/floorwatch_schema.py — same multi-candidate pattern
@@ -118,8 +121,30 @@ def make_redis_publisher(redis_url: str, stream: str):
     return publish
 
 
-def compute_zone_occupancy(msg: dict, zones_by_camera: dict, person_class: str, min_confidence: float):
-    """Reduce one detections event into per-zone (occupied, confidence, entity_ref) observations."""
+# One sv.PolygonZone per (zone_id, polygon, anchor) — safe and worthwhile to
+# reuse across every frame rather than rebuild per call (see build_polygon_zone()'s
+# docstring for why reuse is correct, not just an optimization).
+_polygon_zone_cache: dict = {}
+
+
+def _get_polygon_zone(zone, anchor: str):
+    key = (zone.zone_id, tuple(tuple(p) for p in zone.polygon), anchor)
+    cached = _polygon_zone_cache.get(key)
+    if cached is None:
+        cached = build_polygon_zone(zone, anchor)
+        _polygon_zone_cache[key] = cached
+    return cached
+
+
+def compute_zone_occupancy(msg: dict, zones_by_camera: dict, person_class: str, min_confidence: float,
+                            anchor: str = "bottom_center"):
+    """Reduce one detections event into per-zone (occupied, confidence, entity_ref) observations.
+
+    Zone-membership testing is sv.PolygonZone (see zone_utils.build_polygon_zone) —
+    each zone is tested independently against the same detections batch, but a
+    person is only ever counted toward the FIRST zone (in zones' list order) that
+    contains them, matching this function's original point-in-polygon behavior
+    (relevant if calibrated zones ever overlap)."""
     camera_id = msg.get("camera_id", "unknown")
     timestamp = msg.get("timestamp", "")
     objects = msg.get("objects", [])
@@ -134,13 +159,18 @@ def compute_zone_occupancy(msg: dict, zones_by_camera: dict, person_class: str, 
     ]
 
     occupants_by_zone = {z.zone_id: [] for z in zones}
-    for idx, person in enumerate(persons):
-        anchor = bbox_anchor(person["bbox"], "bottom_center")
-        entity_ref = f"track_{idx}"
-        for zone in zones:
-            if point_in_polygon(anchor, zone.polygon):
-                occupants_by_zone[zone.zone_id].append((entity_ref, person.get("confidence", 0.0)))
-                break
+    if persons:
+        xyxy = np.array([p["bbox"] for p in persons], dtype=np.float64)
+        confidences = [p.get("confidence", 0.0) for p in persons]
+        detections = sv.Detections(xyxy=xyxy)
+        masks = [_get_polygon_zone(zone, anchor).trigger(detections) for zone in zones]
+
+        for idx in range(len(persons)):
+            entity_ref = f"track_{idx}"
+            for mask, zone in zip(masks, zones):
+                if mask[idx]:
+                    occupants_by_zone[zone.zone_id].append((entity_ref, confidences[idx]))
+                    break
 
     observations = []
     for zone in zones:
@@ -160,10 +190,10 @@ def compute_zone_occupancy(msg: dict, zones_by_camera: dict, person_class: str, 
 
 
 def process_detections(msg: dict, zones_by_camera: dict, registry: DebouncerRegistry,
-                        person_class: str, min_confidence: float):
+                        person_class: str, min_confidence: float, anchor: str = "bottom_center"):
     """Map one detections event into zero or more schema-validated zone_covered/zone_gap events."""
     events = []
-    for obs in compute_zone_occupancy(msg, zones_by_camera, person_class, min_confidence):
+    for obs in compute_zone_occupancy(msg, zones_by_camera, person_class, min_confidence, anchor):
         debouncer = registry.get(obs["camera_id"], obs["zone_id"])
         transition = debouncer.update(obs["occupied"], obs["confidence"], obs["entity_ref"], obs["timestamp"])
         if transition is None:
@@ -199,6 +229,7 @@ def main():
         zones_dir = _script_dir.parent / zones_dir_raw
     person_class = config.get("person_class", "person")
     min_confidence = config.get("min_confidence", 0.5)
+    anchor_point = config.get("anchor_point", "bottom_center")
     gap_confidence_threshold = config.get("gap_confidence_threshold", 0.8)
     debounce_seconds = config.get("debounce_seconds", 60.0)
     shadow_mode = config.get("shadow_mode", True)
@@ -255,7 +286,8 @@ def main():
 
         if msg.get("event") == "detections":
             try:
-                for evt in process_detections(msg, zones_by_camera, registry, person_class, min_confidence):
+                for evt in process_detections(msg, zones_by_camera, registry, person_class, min_confidence,
+                                               anchor_point):
                     emit(evt)
                     if publish:
                         publish(evt)

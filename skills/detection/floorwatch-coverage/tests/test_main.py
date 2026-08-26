@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / "lib"))
 
-from zone_utils import point_in_polygon, bbox_anchor, Zone  # noqa: E402
+from zone_utils import build_polygon_zone, Zone  # noqa: E402
 from debounce import ZoneDebouncer, DebouncerRegistry  # noqa: E402
 from main import process_detections, compute_zone_occupancy  # noqa: E402
 
@@ -22,17 +22,30 @@ def _t(seconds_offset):
 
 
 # ── zone_utils ──────────────────────────────────────────────────────────
+# Zone-membership testing itself is supervision.PolygonZone — battle-tested
+# upstream, not re-tested here. These two cases confirm build_polygon_zone()
+# wires our polygon format + bottom_center anchor into it correctly, i.e.
+# a person's bbox anchored at their feet is classified as inside/outside
+# the SAME square this module used to test with a hand-rolled ray-casting
+# function (removed — see this file's diff history / build_polygon_zone's
+# docstring for why).
 
-def test_point_in_polygon_inside():
-    assert point_in_polygon((200, 200), SQUARE) is True
+def test_build_polygon_zone_bottom_center_inside():
+    import numpy as np
+    import supervision as sv
+    zone = build_polygon_zone(Zone(zone_id="z1", role_tag="concession", polygon=SQUARE), "bottom_center")
+    # bbox [100,100,200,300] -> bottom_center anchor (150, 300), on the square's edge/inside
+    detections = sv.Detections(xyxy=np.array([[100, 100, 200, 300]], dtype=np.float64))
+    assert bool(zone.trigger(detections)[0]) is True
 
 
-def test_point_in_polygon_outside():
-    assert point_in_polygon((50, 50), SQUARE) is False
-
-
-def test_bbox_anchor_bottom_center():
-    assert bbox_anchor([100, 100, 200, 300], "bottom_center") == (150, 300)
+def test_build_polygon_zone_bottom_center_outside():
+    import numpy as np
+    import supervision as sv
+    zone = build_polygon_zone(Zone(zone_id="z1", role_tag="concession", polygon=SQUARE), "bottom_center")
+    # bbox anchored well outside the square
+    detections = sv.Detections(xyxy=np.array([[0, 0, 20, 20]], dtype=np.float64))
+    assert bool(zone.trigger(detections)[0]) is False
 
 
 # ── debounce ────────────────────────────────────────────────────────────

@@ -137,4 +137,4 @@ See `tests/test_main.py` for zone-mapping, debounce, and event-schema unit tests
 ./deploy.sh
 ```
 
-Pure-Python — no GPU/ML dependencies. Requires `pydantic` (schema validation) and `redis` (optional event bus publish), installed via `requirements.txt`.
+No GPU/ML model of its own — still only consumes another skill's detection output. Requires `pydantic` (schema validation), `redis` (optional event bus publish), and `numpy`/`supervision` (zone-membership testing via `sv.PolygonZone` — see `zone_utils.build_polygon_zone`), installed via `requirements.txt`.

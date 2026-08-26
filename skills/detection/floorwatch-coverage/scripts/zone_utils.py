@@ -1,11 +1,20 @@
-"""Zone loading and point-in-polygon helpers for Floorwatch coverage.
+"""Zone loading and zone-membership helpers for Floorwatch coverage.
 
-Pure stdlib — no numpy/shapely dependency needed for this pilot's polygon sizes.
+Zone-membership testing (point-in-polygon) is delegated to `supervision`'s
+`PolygonZone` (see build_polygon_zone() below) rather than a hand-rolled
+ray-casting implementation — same math, but maintained/tested upstream
+instead of by us. See the adoption analysis this replaced: the anchor
+computation (bottom_center/center) that used to live here as bbox_anchor()
+is now handled internally by PolygonZone's `triggering_anchors`, so it's
+gone too rather than kept as dead code.
 """
 
 import json
 from pathlib import Path
 from typing import NamedTuple
+
+import numpy as np
+import supervision as sv
 
 
 class Zone(NamedTuple):
@@ -47,31 +56,17 @@ def load_all_zones(zones_dir: Path) -> dict:
     return result
 
 
-def bbox_anchor(bbox: list, mode: str = "bottom_center") -> tuple:
-    """Reduce an [x1,y1,x2,y2] bbox to a single (x,y) point for zone testing."""
-    x1, y1, x2, y2 = bbox
-    if mode == "center":
-        return ((x1 + x2) / 2, (y1 + y2) / 2)
-    # bottom_center: approximates where the person is standing (feet)
-    return ((x1 + x2) / 2, y2)
+_ANCHOR_POSITIONS = {
+    "bottom_center": sv.Position.BOTTOM_CENTER,
+    "center": sv.Position.CENTER,
+}
 
 
-def point_in_polygon(point: tuple, polygon: list) -> bool:
-    """Ray-casting point-in-polygon test. polygon is [[x,y], ...]."""
-    x, y = point
-    n = len(polygon)
-    inside = False
-    x1, y1 = polygon[0]
-    for i in range(1, n + 1):
-        x2, y2 = polygon[i % n]
-        if y > min(y1, y2):
-            if y <= max(y1, y2):
-                if x <= max(x1, x2):
-                    if y1 != y2:
-                        x_intersect = (y - y1) * (x2 - x1) / (y2 - y1) + x1
-                    else:
-                        x_intersect = x1
-                    if x1 == x2 or x <= x_intersect:
-                        inside = not inside
-        x1, y1 = x2, y2
-    return inside
+def build_polygon_zone(zone: Zone, anchor: str = "bottom_center") -> sv.PolygonZone:
+    """One sv.PolygonZone per calibrated zone — safe to build once and reuse
+    across every frame for that zone's lifetime (it holds no per-frame state
+    that would make reuse incorrect; `trigger()` is a pure function of the
+    detections batch passed to it each call)."""
+    position = _ANCHOR_POSITIONS.get(anchor, sv.Position.BOTTOM_CENTER)
+    return sv.PolygonZone(polygon=np.array(zone.polygon, dtype=np.int64),
+                           triggering_anchors=(position,))
