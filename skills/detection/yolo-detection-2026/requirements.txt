@@ -8,7 +8,7 @@ ultralytics>=8.3.0        # YOLOv11/v10/v8 inference
 # its own numpy<2.0 pin and does not get supervision/trackers until someone
 # confirms this combination there.
 numpy>=2.0.2
-opencv-python-headless>=4.8.0
+opencv-python-headless>=5.0.0.93
 Pillow>=10.0.0
 supervision>=0.24         # sv.Detections — shared detection format, tracker input/output
 trackers>=2.0              # ByteTrackTracker — persistent track_id across frames (supervision's
