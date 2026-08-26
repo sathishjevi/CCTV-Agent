@@ -1,6 +1,6 @@
 # Floorwatch Coverage — zone geometry via supervision.PolygonZone (no ML model,
 # no GPU — this skill still only consumes another skill's detection output).
 pydantic>=2.0
-redis>=5.0
+redis>=8.1.0
 numpy>=1.24
 supervision>=0.24
