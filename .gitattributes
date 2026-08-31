@@ -1,2 +1,10 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Windows batch files MUST be CRLF. cmd.exe misparses LF-only .bat files —
+# it drops the first character of lines inside parenthesized blocks (an
+# `echo` becomes `cho`, a `set` becomes `et`), which breaks any script using
+# for/if blocks. Without this rule `* text=auto` above normalizes them to LF
+# and the Windows deploy scripts silently stop working.
+*.bat text eol=crlf
+*.cmd text eol=crlf

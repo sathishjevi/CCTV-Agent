@@ -33,7 +33,7 @@ _log = get_logger("rules-engine.task_store")
 _FIELDS = ("task_id", "task_name", "task_type", "zone_id", "camera_id",
            "assigned_minutes", "active_seconds", "status", "workflow_status",
            "assigned_to", "assigned_by", "nudged", "status_nudge_sent",
-           "reopened_for_review", "started_at", "updated_at")
+           "reopened_for_review", "resolution_type", "started_at", "updated_at")
 
 
 def task_runtime_to_record(t, started_at_iso: str) -> dict:
@@ -48,6 +48,11 @@ def task_runtime_to_record(t, started_at_iso: str) -> dict:
         "assigned_to": t.assigned_to, "assigned_by": t.assigned_by,
         "nudged": t.nudged, "status_nudge_sent": t.status_nudge_sent,
         "reopened_for_review": t.reopened_for_review,
+        # HOW a task closed (auto "resolved" / supervisor "reviewed" /
+        # "dismissed" false alarm), not just THAT it did — `status` alone
+        # collapses all three into "resolved", so a report built on this
+        # table couldn't tell a genuine review from a dismissed false alarm.
+        "resolution_type": t.resolution_type,
         "started_at": started_at_iso,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -81,6 +86,7 @@ def rehydrate_tasks(store, effort_engine, clock) -> int:
             nudged=rec.get("nudged", False),
             status_nudge_sent=rec.get("status_nudge_sent", False),
             reopened_for_review=rec.get("reopened_for_review", False),
+            resolution_type=rec.get("resolution_type"),
         )
         effort_engine.tasks[t.task_id] = t
         restored += 1
@@ -116,6 +122,11 @@ class PostgresTaskStore:
     MIGRATION_SQL = [
         "ALTER TABLE floorwatch_tasks ADD COLUMN IF NOT EXISTS "
         "reopened_for_review BOOLEAN NOT NULL DEFAULT false;",
+        # Nullable with no default — NULL means "not resolved yet", which is
+        # exactly right for every already-open row this migration touches, and
+        # for historical rows closed before this column existed (their real
+        # resolution_type is genuinely unknown, not "resolved").
+        "ALTER TABLE floorwatch_tasks ADD COLUMN IF NOT EXISTS resolution_type TEXT;",
     ]
     INDEX_SQL = [
         "CREATE INDEX IF NOT EXISTS floorwatch_tasks_status_idx ON floorwatch_tasks (status);",
@@ -142,15 +153,17 @@ class PostgresTaskStore:
                 "INSERT INTO floorwatch_tasks "
                 "(task_id, task_name, task_type, zone_id, camera_id, assigned_minutes, "
                 " active_seconds, status, workflow_status, assigned_to, assigned_by, "
-                " nudged, status_nudge_sent, reopened_for_review, started_at, updated_at) "
-                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                " nudged, status_nudge_sent, reopened_for_review, resolution_type, "
+                " started_at, updated_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                 "ON CONFLICT (task_id) DO UPDATE SET "
                 "task_name=EXCLUDED.task_name, assigned_minutes=EXCLUDED.assigned_minutes, "
                 "active_seconds=EXCLUDED.active_seconds, status=EXCLUDED.status, "
                 "workflow_status=EXCLUDED.workflow_status, assigned_to=EXCLUDED.assigned_to, "
                 "assigned_by=EXCLUDED.assigned_by, nudged=EXCLUDED.nudged, "
                 "status_nudge_sent=EXCLUDED.status_nudge_sent, "
-                "reopened_for_review=EXCLUDED.reopened_for_review, updated_at=EXCLUDED.updated_at",
+                "reopened_for_review=EXCLUDED.reopened_for_review, "
+                "resolution_type=EXCLUDED.resolution_type, updated_at=EXCLUDED.updated_at",
                 tuple(record.get(f) for f in _FIELDS),
             )
 
