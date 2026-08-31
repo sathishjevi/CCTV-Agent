@@ -2,5 +2,5 @@
 # no GPU — this skill still only consumes another skill's detection output).
 pydantic>=2.0
 redis>=5.0
-numpy>=1.24
+numpy>=2.5.2
 supervision>=0.24
