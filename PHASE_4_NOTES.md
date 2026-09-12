@@ -46,3 +46,54 @@ Built per your request. Important scoping note first: this service has **two sep
 
 1. **Firebase credentials** (`FLOORWATCH_FCM_CREDENTIALS_PATH`) if any employee is meant to actually receive FCM push — same "no real Firebase project in this sandbox" caveat as the original Phase 4 notes above; only exercised against a real-shaped mocked sender in tests.
 2. **A decision on what `channel` new employees default to** when added without specifying one — currently mirrors `FLOORWATCH_NOTIFY_CHANNEL`, which may not be the right default once employees have a genuine mix of smartphone/feature-phone staff.
+
+## Addendum 2 — Swappable SMS gateway (MSG91 / Fast2SMS, alongside Twilio)
+
+Built per your request: Twilio's per-SMS pricing is higher for India-market
+sends than MSG91 or Fast2SMS, so a deployment should be able to pick the
+cheaper gateway without any code change.
+
+- New `FLOORWATCH_SMS_PROVIDER` env var (`twilio` default | `msg91` |
+  `fast2sms`) — `build_sender()` now treats the `"twilio"` and `"sms"`
+  channel strings as one and the same ("the SMS channel"), dispatched to
+  whichever concrete gateway this variable names. Nothing else changes:
+  `FLOORWATCH_NOTIFY_CHANNEL`, `employee_directory`'s per-employee
+  `"sms"`/`"fcm"` channel field, and `TASK_CHANNEL_SENDERS`' keys in
+  `main.py` are all untouched.
+- New senders in `notifications.py`: `Msg91SmsSender` (MSG91's Flow API)
+  and `Fast2SmsSender` (Fast2SMS's DLT route). Same never-tested-against-
+  a-real-account caveat as Twilio/FCM above.
+- **A real architectural constraint surfaced by this work, not specific
+  to either provider**: India's TRAI DLT regulation requires SMS content
+  to Indian numbers to come from a pre-approved template on *any*
+  gateway. Rather than mapping every message kind this service can
+  produce (assignment, nudge, flag-confirmed, ...) to its own template —
+  which would mean keeping code in sync with whatever the customer gets
+  DLT-approved — both new senders send this service's already-built
+  free-text message as the single value of one generic, customer-
+  registered catch-all template (e.g. `"Floorwatch: {#var#}"`).
+- **Inbound replies (START/DONE/MORE/REVIEW) are NOT wired up for either
+  new provider.** MSG91's two-way SMS is a separate purchased product
+  (a Virtual Number/Long Code + "inbox balance"), and Fast2SMS's inbound-
+  SMS webhook support isn't clearly documented as covering plain SMS
+  (their public docs describe an `incoming_message` webhook specifically
+  for WhatsApp/RCS replies). Switching `FLOORWATCH_SMS_PROVIDER` away
+  from `twilio` changes OUTBOUND sends only — only Twilio's inbound
+  webhook (`/api/webhooks/twilio-sms`) exists today, so an employee's
+  ability to text back still depends on the Twilio number being reachable
+  regardless of which provider sends the original assignment message.
+
+### What's needed from you for this addendum
+
+1. **A real MSG91 or Fast2SMS account** (whichever you pick) — an
+   `authkey`/API key, and a DLT-approved single-variable template
+   registered on that account, to plug into
+   `FLOORWATCH_MSG91_AUTH_KEY`/`FLOORWATCH_MSG91_TEMPLATE_ID` or
+   `FLOORWATCH_FAST2SMS_API_KEY`/`FLOORWATCH_FAST2SMS_SENDER_ID`/
+   `FLOORWATCH_FAST2SMS_MESSAGE_ID`.
+2. **A decision on the inbound-reply gap above** before switching away
+   from Twilio in a real deployment — either keep Twilio's number as the
+   inbound path while using the cheaper gateway only for messages that
+   don't need a reply, purchase MSG91's two-way product, or confirm
+   Fast2SMS's inbound behavior directly with their support before relying
+   on it.

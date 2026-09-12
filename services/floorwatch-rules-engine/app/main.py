@@ -394,10 +394,18 @@ async def _notify_assignee(task_id: str):
     t = effort_engine.tasks.get(task_id)
     if t is None or not t.assigned_to:
         return
+    # Kept to a single 160-char GSM-7 SMS segment (TRAI DLT templates are
+    # registered per-segment; a longer message either gets rejected or
+    # silently splits across segments a registered template doesn't
+    # cover) — no em-dashes/curly quotes, which aren't in the GSM-7
+    # alphabet and would drop the segment limit to 70 chars anyway. Task
+    # name is the one unbounded field (supervisor-typed), so it's
+    # truncated to whatever's left after the fixed text and worst-case
+    # minutes/code widths.
+    task_name = effort_engine.truncate_for_sms(t.task_name, 95)
     message = (
-        f'Floorwatch: you are assigned "{t.task_name}" — {t.assigned_minutes:.0f} min allocated. '
-        f"Reply START to begin, DONE when finished, MORE if you need extra time, "
-        f"or REVIEW to ask a supervisor to check in. Task code: {effort_engine.short_code(task_id)}."
+        f'Floorwatch: "{task_name}" ({t.assigned_minutes:.0f}m). '
+        f"Reply START/DONE/MORE/REVIEW. Code {effort_engine.short_code(task_id)}."
     )
     result = await asyncio.to_thread(_send_task_notification, t.assigned_to, message)
     if result.get("sent") or result.get("channel") == "shadow_mode_suppressed":

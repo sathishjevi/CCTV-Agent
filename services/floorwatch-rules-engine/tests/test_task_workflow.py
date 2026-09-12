@@ -164,7 +164,12 @@ def test_budget_expiry_emits_status_nudge_and_awaiting_update():
 
     nudges = [e for e in events if e["event_type"] == "task_status_nudge"]
     assert len(nudges) == 1
-    assert "waiting for update from employee" in nudges[0]["message"].lower()
+    # Message wording (not just semantics) is asserted directly in
+    # test_effort_engine.py's test_status_nudge_message_never_exceeds_...
+    # test, which also checks the 160-char/GSM-7 constraint this exact
+    # text was rewritten to meet — kept loose here to what this test is
+    # actually about: no reply came in, and the employee is told so.
+    assert "no update" in nudges[0]["message"].lower()
     assert engine.tasks[task_id].workflow_status == "awaiting_update"
 
 

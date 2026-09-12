@@ -13,12 +13,14 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "skills" / "lib"))
 
 from notifications import (  # noqa: E402
-    ContactBook, NoOpSender, NotificationDispatcher, TwilioSmsSender, build_sender,
-    _mask_context, _mask_phone, _mask_token,
+    ContactBook, Fast2SmsSender, Msg91SmsSender, NoOpSender, NotificationDispatcher,
+    TwilioSmsSender, build_sender, _mask_context, _mask_phone, _mask_token,
 )
 
 
@@ -65,6 +67,7 @@ def test_notifications_log_never_contains_full_phone_number():
     mock_client.messages.create.return_value = MagicMock(sid="SM123")
     sender._client = mock_client
     sender.from_number = "+15559999999"
+    sender.dlt_template = None
 
     buf = io.StringIO()
     with contextlib.redirect_stderr(buf):
@@ -144,6 +147,82 @@ def test_twilio_sender_handles_api_error_gracefully():
         assert "invalid number" in result.detail
 
 
+# ── TwilioSmsSender DLT wrapping (config.SMS_COUNTRY == "IN") ────────────
+
+def test_twilio_sender_sends_freeform_when_no_dlt_template_set():
+    """Default behavior, unchanged from before SMS_COUNTRY existed."""
+    with patch("twilio.rest.Client") as MockClient:
+        mock_instance = MockClient.return_value
+        mock_instance.messages.create.return_value = MagicMock(sid="SM123")
+        sender = TwilioSmsSender("ACxxxx", "authtoken", "+15550009999")  # dlt_template defaults to None
+        sender.send({"phone": "+15551234567"}, "Zone needs coverage")
+        mock_instance.messages.create.assert_called_once_with(
+            to="+15551234567", from_="+15550009999", body="Zone needs coverage")
+
+
+def test_twilio_sender_wraps_message_through_dlt_template_when_set():
+    with patch("twilio.rest.Client") as MockClient:
+        mock_instance = MockClient.return_value
+        mock_instance.messages.create.return_value = MagicMock(sid="SM123")
+        sender = TwilioSmsSender("ACxxxx", "authtoken", "+15550009999",
+                                  dlt_template="Floorwatch: {message}")
+        sender.send({"phone": "+919876543210"}, "task assigned")
+        mock_instance.messages.create.assert_called_once_with(
+            to="+919876543210", from_="+15550009999", body="Floorwatch: task assigned")
+
+
+def test_build_sender_twilio_applies_dlt_template_when_country_is_india():
+    class FakeConfig:
+        TWILIO_ACCOUNT_SID = "ACxxxx"
+        TWILIO_AUTH_TOKEN = "authtoken"
+        TWILIO_FROM_NUMBER = "+15550009999"
+        SMS_COUNTRY = "IN"
+        DLT_REQUIRED_COUNTRIES = {"IN"}
+        TWILIO_DLT_TEMPLATE = "Floorwatch: {message}"
+    with patch("twilio.rest.Client") as MockClient:
+        mock_instance = MockClient.return_value
+        mock_instance.messages.create.return_value = MagicMock(sid="SM123")
+        sender = build_sender("twilio", FakeConfig())
+        assert isinstance(sender, TwilioSmsSender)
+        sender.send({"phone": "+919876543210"}, "task assigned")
+        mock_instance.messages.create.assert_called_once_with(
+            to="+919876543210", from_="+15550009999", body="Floorwatch: task assigned")
+
+
+def test_build_sender_twilio_sends_freeform_when_country_is_not_india():
+    class FakeConfig:
+        TWILIO_ACCOUNT_SID = "ACxxxx"
+        TWILIO_AUTH_TOKEN = "authtoken"
+        TWILIO_FROM_NUMBER = "+15550009999"
+        SMS_COUNTRY = "US"
+        DLT_REQUIRED_COUNTRIES = {"IN"}
+        TWILIO_DLT_TEMPLATE = "Floorwatch: {message}"
+    with patch("twilio.rest.Client") as MockClient:
+        mock_instance = MockClient.return_value
+        mock_instance.messages.create.return_value = MagicMock(sid="SM123")
+        sender = build_sender("twilio", FakeConfig())
+        sender.send({"phone": "+15551234567"}, "task assigned")
+        mock_instance.messages.create.assert_called_once_with(
+            to="+15551234567", from_="+15550009999", body="task assigned")  # unwrapped
+
+
+def test_build_sender_twilio_missing_country_attrs_defaults_to_freeform():
+    """A config predating this feature (no SMS_COUNTRY/DLT_REQUIRED_COUNTRIES/
+    TWILIO_DLT_TEMPLATE attrs at all) must not raise, and must keep sending
+    freeform — the exact behavior it had before this feature existed."""
+    class FakeConfig:
+        TWILIO_ACCOUNT_SID = "ACxxxx"
+        TWILIO_AUTH_TOKEN = "authtoken"
+        TWILIO_FROM_NUMBER = "+15550009999"
+    with patch("twilio.rest.Client") as MockClient:
+        mock_instance = MockClient.return_value
+        mock_instance.messages.create.return_value = MagicMock(sid="SM123")
+        sender = build_sender("twilio", FakeConfig())
+        sender.send({"phone": "+15551234567"}, "task assigned")
+        mock_instance.messages.create.assert_called_once_with(
+            to="+15551234567", from_="+15550009999", body="task assigned")
+
+
 # ── build_sender fallback behavior ───────────────────────────────────────
 
 def test_build_sender_none_channel_returns_noop():
@@ -169,6 +248,143 @@ def test_build_sender_twilio_with_bad_config_falls_back_to_noop():
     # but if it does, build_sender must never propagate the exception.
     sender = build_sender("twilio", FakeConfig())
     assert sender is not None  # never raises
+
+
+def test_build_sender_missing_sms_provider_attr_defaults_to_twilio():
+    """A config object that predates FLOORWATCH_SMS_PROVIDER (e.g. this
+    minimal FakeConfig, matching the test above) must not raise — this
+    caught a real bug during development: an unconditional
+    config.SMS_PROVIDER access broke build_sender's own never-raises
+    contract for exactly this shape of config object."""
+    class FakeConfig:
+        TWILIO_ACCOUNT_SID = ""
+        TWILIO_AUTH_TOKEN = ""
+        TWILIO_FROM_NUMBER = ""
+    sender = build_sender("sms", FakeConfig())
+    assert sender is not None
+
+
+# ── MSG91Sender / Fast2SmsSender (mocked HTTP) — SMS_PROVIDER dispatch ────
+
+def test_msg91_sender_sends_via_mocked_http():
+    with patch("httpx.post") as mock_post:
+        mock_post.return_value = MagicMock(
+            status_code=200, content=b"{}", json=lambda: {"type": "success", "message": "req-123"})
+        sender = Msg91SmsSender("authkey123", "tmpl456", "var")
+        result = sender.send({"phone": "+919876543210"}, "Floorwatch: task assigned")
+
+        assert result.sent is True
+        assert result.channel == "msg91_sms"
+        _, kwargs = mock_post.call_args
+        assert kwargs["headers"]["authkey"] == "authkey123"
+        assert kwargs["json"]["template_id"] == "tmpl456"
+        assert kwargs["json"]["recipients"] == [{"mobiles": "919876543210", "var": "Floorwatch: task assigned"}]
+
+
+def test_msg91_sender_skips_send_when_no_phone_on_file():
+    sender = Msg91SmsSender("authkey123", "tmpl456", "var")
+    result = sender.send({"phone": None}, "message")
+    assert result.sent is False
+    assert "no phone" in result.detail
+
+
+def test_msg91_sender_handles_error_response_gracefully():
+    with patch("httpx.post") as mock_post:
+        mock_post.return_value = MagicMock(
+            status_code=200, content=b"{}", json=lambda: {"type": "error", "message": "invalid template_id"})
+        sender = Msg91SmsSender("authkey123", "tmpl456", "var")
+        result = sender.send({"phone": "+919876543210"}, "message")
+        assert result.sent is False
+        assert "invalid template_id" in result.detail
+
+
+def test_msg91_sender_missing_credentials_raises_at_construction():
+    # build_sender() is what's required to catch this — the class itself
+    # should fail loudly at construction so a bad config is diagnosable.
+    with pytest.raises(ValueError):
+        Msg91SmsSender("", "", "var")
+
+
+def test_fast2sms_sender_sends_via_mocked_http_strips_country_code():
+    with patch("httpx.post") as mock_post:
+        mock_post.return_value = MagicMock(
+            status_code=200, content=b"{}", json=lambda: {"return": True, "request_id": "req-789"})
+        sender = Fast2SmsSender("apikey123", "FLOORW", "tmpl456")
+        result = sender.send({"phone": "+919876543210"}, "Floorwatch: task assigned")
+
+        assert result.sent is True
+        assert result.channel == "fast2sms_sms"
+        _, kwargs = mock_post.call_args
+        assert kwargs["headers"]["Authorization"] == "apikey123"
+        assert kwargs["json"]["numbers"] == "9876543210"  # +91 country code stripped
+        assert kwargs["json"]["variables_values"] == "Floorwatch: task assigned"
+        assert kwargs["json"]["message"] == "tmpl456"
+
+
+def test_fast2sms_sender_skips_send_when_no_phone_on_file():
+    sender = Fast2SmsSender("apikey123", "FLOORW", "tmpl456")
+    result = sender.send({"phone": None}, "message")
+    assert result.sent is False
+    assert "no phone" in result.detail
+
+
+def test_fast2sms_sender_missing_credentials_raises_at_construction():
+    with pytest.raises(ValueError):
+        Fast2SmsSender("", "", "")
+
+
+def test_build_sender_dispatches_sms_channel_to_msg91_when_configured():
+    class FakeConfig:
+        SMS_PROVIDER = "msg91"
+        MSG91_AUTH_KEY = "authkey123"
+        MSG91_TEMPLATE_ID = "tmpl456"
+        MSG91_VARIABLE_NAME = "var"
+    sender = build_sender("sms", FakeConfig())
+    assert isinstance(sender, Msg91SmsSender)
+
+
+def test_build_sender_dispatches_sms_channel_to_fast2sms_when_configured():
+    class FakeConfig:
+        SMS_PROVIDER = "fast2sms"
+        FAST2SMS_API_KEY = "apikey123"
+        FAST2SMS_SENDER_ID = "FLOORW"
+        FAST2SMS_MESSAGE_ID = "tmpl456"
+    sender = build_sender("sms", FakeConfig())
+    assert isinstance(sender, Fast2SmsSender)
+
+
+def test_build_sender_twilio_channel_alias_also_honors_sms_provider():
+    """The "twilio" and "sms" channel strings are interchangeable — an
+    existing deployment that still passes "twilio" (e.g.
+    TASK_CHANNEL_SENDERS in main.py) still gets whichever provider
+    SMS_PROVIDER names, not hardcoded Twilio."""
+    class FakeConfig:
+        SMS_PROVIDER = "msg91"
+        MSG91_AUTH_KEY = "authkey123"
+        MSG91_TEMPLATE_ID = "tmpl456"
+        MSG91_VARIABLE_NAME = "var"
+    sender = build_sender("twilio", FakeConfig())
+    assert isinstance(sender, Msg91SmsSender)
+
+
+def test_build_sender_msg91_bad_config_falls_back_to_noop():
+    class FakeConfig:
+        SMS_PROVIDER = "msg91"
+        MSG91_AUTH_KEY = ""
+        MSG91_TEMPLATE_ID = ""
+        MSG91_VARIABLE_NAME = "var"
+    sender = build_sender("sms", FakeConfig())
+    assert isinstance(sender, NoOpSender)
+
+
+def test_build_sender_fast2sms_bad_config_falls_back_to_noop():
+    class FakeConfig:
+        SMS_PROVIDER = "fast2sms"
+        FAST2SMS_API_KEY = ""
+        FAST2SMS_SENDER_ID = ""
+        FAST2SMS_MESSAGE_ID = ""
+    sender = build_sender("sms", FakeConfig())
+    assert isinstance(sender, NoOpSender)
 
 
 # ── NotificationDispatcher ────────────────────────────────────────────────

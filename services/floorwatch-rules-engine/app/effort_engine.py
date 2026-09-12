@@ -395,10 +395,14 @@ class EffortEngine:
                     and t.workflow_status in ("notified", "in_progress")):
                 t.status_nudge_sent = True
                 t.workflow_status = "awaiting_update"
+                # Same 160-char single-GSM-7-segment / no-em-dash
+                # discipline as _notify_assignee's assignment message in
+                # main.py — this event's `message` field IS the SMS body
+                # main.py sends, not just a log line.
+                task_name = self.truncate_for_sms(t.task_name, 80)
                 evt = self._workflow_event(t, "status_nudge",
-                    f'"{t.task_name}" allocated time ({t.assigned_minutes:.0f} min) has elapsed '
-                    f"with no status from employee {t.assigned_to} — status update requested. "
-                    f"Pending — waiting for update from employee.")
+                    f'Floorwatch: "{task_name}" ({t.assigned_minutes:.0f}m) - no update from '
+                    f"#{t.assigned_to}. Reply DONE/MORE/REVIEW.")
                 evt["event_type"] = "task_status_nudge"
                 out.append(evt)
         return out
@@ -440,6 +444,24 @@ class EffortEngine:
         6 hex chars is unique enough across a floor's concurrently-open
         tasks; resolve_task_reference() below handles the reply side."""
         return task_id.replace("-", "")[-6:].upper()
+
+    @staticmethod
+    def truncate_for_sms(text: str, max_len: int) -> str:
+        """Bounds a supervisor-typed free-text field (task_name today) so
+        the SMS templates that embed it — see main.py's _notify_assignee
+        and this class's status-nudge message — stay under a single
+        160-char GSM-7 segment even in the worst case, regardless of how
+        long a task name someone types. Not a general string utility:
+        `max_len` is caller-computed as 160 minus that specific
+        template's fixed text and its other worst-case field widths.
+        Truncation marker is "..." (three ASCII periods), not a single
+        "…" character — the latter isn't in the GSM-7 alphabet and would
+        silently flip the whole message to UCS-2 encoding (70 chars per
+        segment instead of 160), the exact problem this method exists to
+        avoid in the first place."""
+        if len(text) <= max_len:
+            return text
+        return text[:max(0, max_len - 3)].rstrip() + "..."
 
     def open_tasks_for(self, employee_number: str) -> list:
         return [t for t in self.tasks.values()

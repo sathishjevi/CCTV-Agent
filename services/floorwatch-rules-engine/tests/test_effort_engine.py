@@ -417,3 +417,65 @@ def test_confirm_flag_on_non_flagged_task_returns_none():
     engine, _ = make_engine(staffed=True)
     task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
     assert engine.confirm_flag(task_evt["task_id"]) is None
+
+
+# ── truncate_for_sms / TRAI DLT 160-char single-segment discipline ───────
+# GSM-7's single-segment limit is 160 chars; using any character outside
+# the GSM-7 alphabet (a curly quote, an em-dash, "…") silently drops that
+# to 70 (UCS-2 mode) instead. Both constraints matter for a DLT-registered
+# template, which is why these tests check for GSM-7-safe characters too,
+# not just length.
+
+_GSM7_BASIC = set(
+    "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞ\x1bÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?"
+    "¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà"
+)
+
+
+def _is_gsm7_safe(text: str) -> bool:
+    return all(c in _GSM7_BASIC for c in text)
+
+
+def test_truncate_for_sms_leaves_short_text_untouched():
+    assert EffortEngine.truncate_for_sms("Clean Door", 95) == "Clean Door"
+
+
+def test_truncate_for_sms_truncates_and_marks_with_ascii_ellipsis():
+    long_name = "A" * 150
+    result = EffortEngine.truncate_for_sms(long_name, 20)
+    assert len(result) == 20
+    assert result.endswith("...")  # three ASCII periods, not "…"
+    assert _is_gsm7_safe(result)
+
+
+def test_assignment_message_never_exceeds_160_chars_even_with_a_long_task_name():
+    """The actual template built in main.py's _notify_assignee, exercised
+    here against a deliberately oversized task name (a supervisor really
+    can type one this long) and worst-case-width minutes/code."""
+    task_name = "Deep-clean and fully restock the entire east-wing concession counter and back room" * 2
+    short_code = "AAAAAA"  # short_code() is always exactly 6 hex chars
+    truncated = EffortEngine.truncate_for_sms(task_name, 95)
+    message = (
+        f'Floorwatch: "{truncated}" ({999:.0f}m). '
+        f"Reply START/DONE/MORE/REVIEW. Code {short_code}."
+    )
+    assert len(message) <= 160
+    assert _is_gsm7_safe(message)
+
+
+def test_status_nudge_message_never_exceeds_160_chars_even_with_a_long_task_name():
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    long_name = "Deep-clean and fully restock the entire east-wing concession counter and back room" * 2
+    task_evt = engine.assign_task(long_name, "theatre3", 1, task_type="clean_door",
+                                   assigned_to="1234567890", assigned_by="user:admin")
+    task_id = task_evt["task_id"]
+    engine.mark_notified(task_id)
+    clock.advance(120)  # past the 1-minute budget with no reply
+
+    events = engine.tick()
+    nudges = [e for e in events if e.get("event_type") == "task_status_nudge"]
+    assert len(nudges) == 1
+    message = nudges[0]["message"]
+    assert len(message) <= 160
+    assert _is_gsm7_safe(message)
+    assert "DONE" in message and "MORE" in message and "REVIEW" in message

@@ -138,6 +138,68 @@ PUBLIC_BASE_URL = os.environ.get("FLOORWATCH_PUBLIC_BASE_URL", "")
 
 FCM_CREDENTIALS_PATH = os.environ.get("FLOORWATCH_FCM_CREDENTIALS_PATH", "")
 
+# Which concrete SMS gateway backs the "twilio"/"sms" channel — lets a
+# deployment switch providers (e.g. for India-market pricing: MSG91/
+# Fast2SMS are commonly cheaper than Twilio there) without touching
+# NOTIFY_CHANNEL, employee_directory's per-employee "sms" channel value,
+# or TASK_CHANNEL_SENDERS' keys anywhere else in this codebase — only
+# build_sender() reads this. "twilio" (default) | "msg91" | "fast2sms".
+SMS_PROVIDER = os.environ.get("FLOORWATCH_SMS_PROVIDER", "twilio").lower()
+
+# MSG91 (Flow API — https://control.msg91.com/api/v5/flow). India's TRAI
+# DLT regulation requires SMS content to come from a pre-approved template
+# regardless of which gateway sends it (this is not an MSG91-specific
+# restriction) — MSG91_TEMPLATE_ID is that template's id from the MSG91
+# dashboard, and MSG91_VARIABLE_NAME is whatever the customer named that
+# template's single variable when creating it (MSG91 lets the variable be
+# named anything, wrapped in ##...##, e.g. ##var##). This codebase always
+# sends its already-built message text as that one variable's value — see
+# notifications.py's module docstring for why one generic passthrough
+# template, not a template per message kind.
+MSG91_AUTH_KEY = os.environ.get("FLOORWATCH_MSG91_AUTH_KEY", "")
+MSG91_TEMPLATE_ID = os.environ.get("FLOORWATCH_MSG91_TEMPLATE_ID", "")
+MSG91_VARIABLE_NAME = os.environ.get("FLOORWATCH_MSG91_VARIABLE_NAME", "var")
+
+# Fast2SMS (DLT route — https://www.fast2sms.com/dev/bulkV2). Same DLT
+# template requirement as MSG91 above. sender_id is the approved 6-letter
+# DLT header; message_id is the approved template's id (Fast2SMS's
+# "message" field name for this is confusingly the template id, not
+# message text — see Fast2SmsSender).
+FAST2SMS_API_KEY = os.environ.get("FLOORWATCH_FAST2SMS_API_KEY", "")
+FAST2SMS_SENDER_ID = os.environ.get("FLOORWATCH_FAST2SMS_SENDER_ID", "")
+FAST2SMS_MESSAGE_ID = os.environ.get("FLOORWATCH_FAST2SMS_MESSAGE_ID", "")
+
+# Which country's SMS regulations this deployment's recipients fall under —
+# ISO 3166-1 alpha-2, e.g. "IN" for India. "" (default/unset) means no
+# country-specific constraint is enforced. Only India is a recognized
+# value today (DLT_REQUIRED_COUNTRIES below); add to that set if another
+# country later needs the same treatment.
+#
+# MSG91/Fast2SMS are India-specific gateways and are ALWAYS template-only
+# by construction (see MSG91_TEMPLATE_ID/FAST2SMS_MESSAGE_ID above) —
+# SMS_COUNTRY does not change their behavior. It matters for TWILIO,
+# which can send either freeform text (most countries) or must be
+# restricted to a single DLT-safe template pattern (India) — see
+# TWILIO_DLT_TEMPLATE below and notifications.py's TwilioSmsSender.
+SMS_COUNTRY = os.environ.get("FLOORWATCH_SMS_COUNTRY", "").strip().upper()
+DLT_REQUIRED_COUNTRIES = {"IN"}
+
+# The fixed pattern Twilio sends when SMS_COUNTRY requires DLT — {message}
+# is substituted with this codebase's already-built dynamic text (task
+# name, minutes, etc.), so the ACTUAL text Twilio transmits stays a single
+# predictable shape, matching what the customer registers with their DLT
+# entity/carrier — never the fully free-form sentence build_sender's
+# other callers see.
+#
+# Default is a plain passthrough ("{message}", no added wrapper text) —
+# deliberately NOT branded (e.g. NOT "Floorwatch: {message}"), because
+# every message this codebase builds already starts with "Floorwatch: "
+# itself (see _notify_assignee in main.py); a branded default here would
+# double it up into "Floorwatch: Floorwatch: ...". Set this to whatever
+# your real Twilio/DLT entity registration actually approved — the
+# `{message}` placeholder is required, everything else is yours to define.
+TWILIO_DLT_TEMPLATE = os.environ.get("FLOORWATCH_TWILIO_DLT_TEMPLATE", "{message}")
+
 # ── Authentication (see skills/lib/floorwatch_auth.py) ─────────────────
 # Set FLOORWATCH_AUTH_SECRET explicitly in any real deployment. Left unset,
 # a secret is auto-generated once and persisted to a shared file so this
@@ -225,4 +287,5 @@ from floorwatch_secrets_guard import check_file_permissions, install_stderr_reda
 
 check_file_permissions(REPO_ROOT / "config" / "secrets.env")
 check_file_permissions(Path(os.environ.get("FLOORWATCH_AUTH_SECRET_PATH", REPO_ROOT / "services" / ".floorwatch_auth_secret")))
-install_stderr_redaction([TWILIO_AUTH_TOKEN, TWILIO_ACCOUNT_SID, AUTH_SECRET, POSTGRES_DSN, ADMIN_PASSWORD])
+install_stderr_redaction([TWILIO_AUTH_TOKEN, TWILIO_ACCOUNT_SID, AUTH_SECRET, POSTGRES_DSN, ADMIN_PASSWORD,
+                          MSG91_AUTH_KEY, FAST2SMS_API_KEY])
