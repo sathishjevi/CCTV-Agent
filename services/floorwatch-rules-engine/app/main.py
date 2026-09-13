@@ -31,9 +31,10 @@ import config  # noqa: E402 (also inserts skills/lib onto sys.path — see confi
 from digest_store import DigestStore  # noqa: E402
 from effort_engine import EffortEngine  # noqa: E402
 from employee_directory import (  # noqa: E402
-    build_employee_directory, validate_channel, validate_employee_number,
+    build_employee_directory, normalize_phone, validate_channel, validate_employee_number,
     validate_phone, validate_primary_contact,
 )
+from otp_store import OtpStore  # noqa: E402
 from event_history import build_event_history_store  # noqa: E402
 from engine import RulesEngine  # noqa: E402
 from notifications import ContactBook, NotificationDispatcher, _mask_phone, build_sender  # noqa: E402
@@ -44,7 +45,7 @@ from zone_directory import build_zone_directory, validate_zone_id  # noqa: E402
 
 from floorwatch_auth import (  # noqa: E402
     VALID_ROLES, RevocationStore, build_user_store, issue_token, make_auth_dependency,
-    validate_password_strength, validate_username, verify_ws_token,
+    make_employee_auth_dependency, validate_password_strength, validate_username, verify_ws_token,
 )
 from floorwatch_logging import get_logger  # noqa: E402
 from floorwatch_rate_limit import RateLimiter  # noqa: E402
@@ -182,6 +183,16 @@ roster = Roster(config.ROSTER_PATH, zone_directory)
 digest = DigestStore(config.DIGEST_PATH)
 event_history = build_event_history_store(config.POSTGRES_DSN, config.EVENT_HISTORY_PATH)
 employee_directory = build_employee_directory(config.POSTGRES_DSN, config.EMPLOYEE_DIRECTORY_PATH)
+
+# ── Employee mobile-app auth (Phase 1 of the mobile app — see
+# dazzling-hopping-comet.md) — a separate identity/dependency from the
+# dashboard's require_auth/require_supervisor/require_admin above; see
+# make_employee_auth_dependency()'s own docstring for why these are kept
+# structurally distinct rather than folded into the same role ladder.
+require_employee = make_employee_auth_dependency(
+    config.AUTH_SECRET, employee_directory, revocation_store=revocation_store)
+otp_store = OtpStore(cluster_redis)
+otp_rate_limiter = RateLimiter(config.OTP_RATE_LIMIT_PER_PHONE_PER_MINUTE, window_seconds=60.0)
 task_store = build_task_store(config.POSTGRES_DSN, config.TASK_STORE_PATH)
 
 # TaskRuntime only holds a MONOTONIC start (meaningless across a
@@ -943,6 +954,26 @@ app.add_middleware(
 install_security_headers(app)  # DP-M2 — see floorwatch_security_headers.py
 
 
+@app.middleware("http")
+async def _log_disallowed_cors_origin(request: Request, call_next):
+    """CORSMiddleware itself fails SILENTLY from the server's point of
+    view — a disallowed Origin just gets no Access-Control-Allow-Origin
+    header, the browser blocks the JS from reading the response, and
+    the server logs a normal 200 either way. Reported directly: a
+    "NetworkError when attempting to fetch resource" in the browser with
+    zero corresponding error in Railway's logs — this middleware closes
+    that visibility gap by logging, server-side, exactly when a request
+    arrives from an Origin that CORS_ALLOWED_ORIGINS doesn't cover.
+    Observability only — never blocks or alters the response; enforcement
+    stays entirely CORSMiddleware's job."""
+    origin = request.headers.get("origin")
+    if origin and origin not in config.CORS_ALLOWED_ORIGINS:
+        log(f"Request from disallowed CORS origin {origin!r} on {request.method} {request.url.path} — "
+            f"browser will block the response. Add it to FLOORWATCH_CORS_ALLOWED_ORIGINS if this is "
+            f"legitimate.", level="warning")
+    return await call_next(request)
+
+
 COVERAGE_UI_PATH = config.REPO_ROOT / "dashboard" / "floorwatch_demo.html"
 
 
@@ -1180,6 +1211,55 @@ async def add_employee(body: AddEmployeeRequest, user=Depends(require_supervisor
     return {"ok": True}
 
 
+class EditEmployeeRequest(BaseModel):
+    name: str
+    role: str  # "employee" | "supervisor"
+    department: str
+    phone: str
+    account_username: str | None = None
+    is_primary_contact: bool = False
+
+
+@app.put("/api/admin/employees/{employee_number}")
+async def edit_employee(employee_number: str, body: EditEmployeeRequest, user=Depends(require_supervisor)):
+    """Fixes a real gap: employee_directory.add()'s upsert means
+    resubmitting the same employee_number technically already updates a
+    record, but nothing in the dashboard exposed that — the Add form
+    only ever created new rows, so a typo'd phone/name/department on an
+    existing employee had no fix short of deactivating and re-adding
+    under a new number (breaking every task/history reference to the
+    old one). This endpoint is that same upsert, gated on the record
+    already existing (404 otherwise — this is edit, not create) and
+    used from a real "Edit" control in Manage Employees.
+
+    Deliberately does NOT accept channel/fcm_token — those are set by
+    the employee's own mobile-app device registration (see
+    POST /api/employee/device-token) or at initial creation; this form
+    explicitly preserves whatever's already on file for both rather
+    than risk a dashboard edit silently wiping a registered device's
+    push token."""
+    existing = await asyncio.to_thread(employee_directory.get, employee_number)
+    if existing is None:
+        return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
+    ok, reason = validate_phone(body.phone)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    if body.role not in ("employee", "supervisor"):
+        return JSONResponse(status_code=400, content={"error": "role must be 'employee' or 'supervisor'"})
+    if not body.department.strip():
+        return JSONResponse(status_code=400, content={"error": "department is required"})
+    ok, reason = validate_primary_contact(body.role, body.is_primary_contact)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    await asyncio.to_thread(
+        employee_directory.add, employee_number, body.name, body.role, body.department,
+        body.phone, account_username=body.account_username, created_by=existing.get("created_by"),
+        channel=existing.get("channel"), fcm_token=existing.get("fcm_token"),
+        is_primary_contact=body.is_primary_contact)
+    log(f"'{user['sub']}' edited directory entry for employee {employee_number}")
+    return {"ok": True}
+
+
 @app.post("/api/admin/employees/{employee_number}/deactivate")
 async def deactivate_employee(employee_number: str, user=Depends(require_supervisor)):
     if not await asyncio.to_thread(employee_directory.set_active, employee_number, False):
@@ -1286,6 +1366,191 @@ async def set_zone_staffed(zone_id: str, body: SetZoneStaffedRequest, user=Depen
     if not await asyncio.to_thread(zone_directory.set_staffed, zone_id, body.staffed):
         return JSONResponse(status_code=404, content={"error": f"zone '{zone_id}' not found"})
     log(f"'{user['sub']}' set zone '{zone_id}'s staffed flag to {body.staffed}")
+    return {"ok": True}
+
+
+# ── Employee mobile-app API (Phase 1/2 of the mobile app — see
+# dazzling-hopping-comet.md). An employee has no password; they log in
+# with phone + a one-time code (OtpStore), then everything below is
+# gated by require_employee, which resolves the Bearer token to a live
+# employee_directory record (payload["employee"]) — see that
+# dependency's own docstring for why it's separate from the dashboard's
+# require_auth/require_supervisor/require_admin.
+#
+# Every write endpoint here calls the SAME effort_engine methods and
+# _emit() path the SMS-reply flow already uses (_handle_sms_reply/
+# _handle_sms_reassign above) — that's what makes the web dashboard sync
+# automatically with app-driven actions, not something built separately.
+
+class RequestOtpRequest(BaseModel):
+    phone: str
+
+
+@app.post("/api/employee/auth/request-otp")
+async def request_otp(body: RequestOtpRequest):
+    phone = normalize_phone(body.phone)
+    if not otp_rate_limiter.allow(phone):
+        retry_after = otp_rate_limiter.retry_after_seconds(phone)
+        return JSONResponse(
+            status_code=429, content={"error": "Too many code requests for this number — try again shortly."},
+            headers={"Retry-After": str(int(retry_after) + 1)},
+        )
+    employee = await asyncio.to_thread(employee_directory.get_by_phone, phone)
+    # Same no-enumeration shape regardless of whether the number is on
+    # file — a generic "sent if valid" response either way, so this
+    # endpoint can't be used to probe which phone numbers are employees.
+    if employee is not None:
+        code = await otp_store.issue(phone)
+        sender = TASK_CHANNEL_SENDERS.get("sms")
+        if sender is not None:
+            # Bypasses _send_task_notification's shadow-mode gate
+            # deliberately — shadow mode suppresses OPERATIONAL task
+            # notifications for the pilot's safety brief (Global
+            # Constraint 4); a login code isn't an operational
+            # notification; suppressing it would make login impossible.
+            await asyncio.to_thread(
+                sender.send, {"phone": phone}, f"Floorwatch: your login code is {code}. Expires in 5 min.")
+    return {"ok": True, "message": "If that number is registered, a code has been sent."}
+
+
+class VerifyOtpRequest(BaseModel):
+    phone: str
+    code: str
+
+
+@app.post("/api/employee/auth/verify-otp")
+async def verify_otp(body: VerifyOtpRequest):
+    phone = normalize_phone(body.phone)
+    employee = await asyncio.to_thread(employee_directory.get_by_phone, phone)
+    if employee is None:
+        return JSONResponse(status_code=401, content={"error": "Invalid code"})
+    if not await otp_store.verify(phone, body.code.strip()):
+        return JSONResponse(status_code=401, content={"error": "Invalid or expired code"})
+    token = issue_token(config.AUTH_SECRET, employee["employee_number"], "employee",
+                         ttl_seconds=config.TOKEN_TTL_SECONDS)
+    return {
+        "token": token, "employee_number": employee["employee_number"], "name": employee["name"],
+        "expires_in": config.TOKEN_TTL_SECONDS,
+    }
+
+
+def _employee_number(user: dict) -> str:
+    return user["employee"]["employee_number"]
+
+
+def _own_task_or_403(task_id: str, employee_number: str):
+    """Shared ownership check for every employee task-action endpoint
+    below — an employee may only act on a task currently assigned to
+    them. Returns the TaskRuntime, or None (caller returns 404/403)."""
+    t = effort_engine.tasks.get(task_id)
+    if t is None:
+        return None, JSONResponse(status_code=404, content={"error": "task not found"})
+    if t.assigned_to != employee_number:
+        return None, JSONResponse(status_code=403, content={"error": "this task is not assigned to you"})
+    return t, None
+
+
+@app.get("/api/employee/tasks")
+async def employee_tasks(user=Depends(require_employee)):
+    employee_number = _employee_number(user)
+    now = effort_engine._clock()
+    tasks = [
+        {
+            "task_id": t.task_id, "task_name": t.task_name, "task_type": t.task_type,
+            "zone_id": t.zone_id, "zone_name": effort_engine._zone_label(t.zone_id),
+            "assigned_minutes": t.assigned_minutes,
+            "active_minutes": round(t.active_seconds / 60.0, 2),
+            "elapsed_minutes": round((now - t.start_monotonic) / 60.0, 2),
+            "workflow_status": t.workflow_status, "short_code": effort_engine.short_code(t.task_id),
+        }
+        for t in effort_engine.open_tasks_for(employee_number)
+    ]
+    return {"tasks": tasks}
+
+
+@app.post("/api/employee/tasks/{task_id}/start")
+async def employee_start_task(task_id: str, user=Depends(require_employee)):
+    t, err = _own_task_or_403(task_id, _employee_number(user))
+    if err:
+        return err
+    evt = effort_engine.mark_started(task_id)
+    if evt is None:
+        return JSONResponse(status_code=400, content={"error": "task could not be started from its current state"})
+    await _emit(evt)
+    return {"event": evt}
+
+
+@app.post("/api/employee/tasks/{task_id}/complete")
+async def employee_complete_task(task_id: str, user=Depends(require_employee)):
+    t, err = _own_task_or_403(task_id, _employee_number(user))
+    if err:
+        return err
+    evt = effort_engine.complete_task(task_id)
+    if evt is None:
+        return JSONResponse(status_code=400, content={"error": "task could not be completed from its current state"})
+    await _emit(evt)
+    return {"event": evt}
+
+
+@app.post("/api/employee/tasks/{task_id}/request-extension")
+async def employee_request_extension(task_id: str, user=Depends(require_employee)):
+    t, err = _own_task_or_403(task_id, _employee_number(user))
+    if err:
+        return err
+    evt = effort_engine.request_extension(task_id)
+    if evt is None:
+        return JSONResponse(status_code=400, content={"error": "extension could not be requested"})
+    await _emit(evt)
+    return {"event": evt}
+
+
+@app.post("/api/employee/tasks/{task_id}/request-review")
+async def employee_request_review(task_id: str, user=Depends(require_employee)):
+    t, err = _own_task_or_403(task_id, _employee_number(user))
+    if err:
+        return err
+    evt = effort_engine.request_review(task_id)
+    if evt is None:
+        return JSONResponse(status_code=400, content={"error": "review could not be requested"})
+    await _emit(evt)
+    return {"event": evt}
+
+
+class EmployeeReassignRequest(BaseModel):
+    new_assignee: str
+
+
+@app.post("/api/employee/tasks/{task_id}/reassign")
+async def employee_reassign_task(task_id: str, body: EmployeeReassignRequest, user=Depends(require_employee)):
+    employee_number = _employee_number(user)
+    t, err = _own_task_or_403(task_id, employee_number)
+    if err:
+        return err
+    target = await asyncio.to_thread(employee_directory.get, body.new_assignee)
+    if target is None or not target.get("active", True):
+        return JSONResponse(status_code=404, content={"error": f"employee '{body.new_assignee}' not found or inactive"})
+    evt = effort_engine.reassign_task(task_id, body.new_assignee, supervisor_id=f"employee:{employee_number}")
+    if evt is None:
+        return JSONResponse(status_code=400, content={"error": "task could not be reassigned from its current state"})
+    await _emit(evt)
+    await _notify_assignee(task_id)  # sends the new assignee their own assignment message
+    return {"event": evt}
+
+
+class DeviceTokenRequest(BaseModel):
+    fcm_token: str
+
+
+@app.post("/api/employee/device-token")
+async def employee_register_device_token(body: DeviceTokenRequest, user=Depends(require_employee)):
+    employee = user["employee"]
+    await asyncio.to_thread(employee_directory.set_fcm_token, employee["employee_number"], body.fcm_token)
+    if not employee.get("channel"):
+        # First-time app registration switches this employee over to
+        # push automatically — see dazzling-hopping-comet.md's "Deferred"
+        # section for the (not yet built) dashboard control to switch
+        # back to SMS.
+        await asyncio.to_thread(employee_directory.set_channel, employee["employee_number"], "fcm")
     return {"ok": True}
 
 

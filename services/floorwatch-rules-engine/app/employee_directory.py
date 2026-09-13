@@ -226,6 +226,27 @@ class PostgresEmployeeDirectory:
                 (is_primary_contact, employee_number))
             return cur.rowcount > 0
 
+    def set_fcm_token(self, employee_number: str, fcm_token: str) -> bool:
+        """Lets an employee register their OWN device token after their
+        record already exists — add()'s own upsert overwrites every
+        column unconditionally, so calling it with just a token (and
+        whatever stale/default values for name/role/department/phone the
+        caller happened to have) would silently corrupt the rest of the
+        record. Same partial-update pattern as set_primary_contact()/
+        set_staffed() (zone_directory.py) above."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE floorwatch_employees SET fcm_token=%s WHERE employee_number=%s",
+                (fcm_token, employee_number))
+            return cur.rowcount > 0
+
+    def set_channel(self, employee_number: str, channel: Optional[str]) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE floorwatch_employees SET channel=%s WHERE employee_number=%s",
+                (channel, employee_number))
+            return cur.rowcount > 0
+
 
 class JsonEmployeeDirectory:
     """Local-file fallback when FLOORWATCH_POSTGRES_DSN isn't set — same
@@ -305,6 +326,22 @@ class JsonEmployeeDirectory:
         if employee_number not in data:
             return False
         data[employee_number]["is_primary_contact"] = is_primary_contact
+        self._save(data)
+        return True
+
+    def set_fcm_token(self, employee_number: str, fcm_token: str) -> bool:
+        data = self._load()
+        if employee_number not in data:
+            return False
+        data[employee_number]["fcm_token"] = fcm_token
+        self._save(data)
+        return True
+
+    def set_channel(self, employee_number: str, channel: Optional[str]) -> bool:
+        data = self._load()
+        if employee_number not in data:
+            return False
+        data[employee_number]["channel"] = channel
         self._save(data)
         return True
 

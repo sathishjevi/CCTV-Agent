@@ -363,3 +363,88 @@ def test_set_primary_contact_then_auto_assign_targets_them(app_client):
 
     assignee = main_module._primary_contact_for_department("concession")
     assert assignee == "900"
+
+
+# ── PUT /api/admin/employees/{employee_number} (edit) ────────────────────
+
+def test_edit_employee_updates_name_department_phone(app_client):
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+
+    resp = client.put("/api/admin/employees/101", json={
+        "name": "Alexandra Chen", "role": "employee", "department": "usher", "phone": "+15559009999",
+        "is_primary_contact": False,
+    })
+    assert resp.status_code == 200
+
+    updated = main_module.employee_directory.get("101")
+    assert updated["name"] == "Alexandra Chen"
+    assert updated["department"] == "usher"
+    assert updated["phone"] == "+15559009999"
+
+
+def test_edit_employee_unknown_employee_404s(app_client):
+    client, _ = app_client
+    resp = client.put("/api/admin/employees/nonexistent", json={
+        "name": "Nobody", "role": "employee", "department": "usher", "phone": "+15550000000",
+        "is_primary_contact": False,
+    })
+    assert resp.status_code == 404
+
+
+def test_edit_employee_rejects_invalid_phone(app_client):
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+
+    resp = client.put("/api/admin/employees/101", json={
+        "name": "Alex Chen", "role": "employee", "department": "janitor", "phone": "not-a-phone",
+        "is_primary_contact": False,
+    })
+    assert resp.status_code == 400
+    assert main_module.employee_directory.get("101")["phone"] == "+15559000101"  # unchanged
+
+
+def test_edit_employee_rejects_primary_contact_on_line_employee(app_client):
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+
+    resp = client.put("/api/admin/employees/101", json={
+        "name": "Alex Chen", "role": "employee", "department": "janitor", "phone": "+15559000101",
+        "is_primary_contact": True,
+    })
+    assert resp.status_code == 400
+
+
+def test_edit_employee_preserves_active_status(app_client):
+    """Editing must not accidentally reactivate a deactivated employee —
+    add()'s upsert doesn't touch `active` on conflict, but this pins
+    that behavior against regression."""
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+    main_module.employee_directory.set_active("101", False)
+
+    resp = client.put("/api/admin/employees/101", json={
+        "name": "Alex Chen", "role": "employee", "department": "usher", "phone": "+15559000101",
+        "is_primary_contact": False,
+    })
+    assert resp.status_code == 200
+    assert main_module.employee_directory.get("101")["active"] is False
+
+
+def test_edit_employee_preserves_channel_and_fcm_token(app_client):
+    """The edit form doesn't expose channel/fcm_token — this proves
+    editing other fields doesn't silently wipe a device token an
+    employee already registered via the mobile app."""
+    client, main_module = app_client
+    main_module.employee_directory.add(
+        "101", "Alex Chen", "employee", "janitor", "+15559000101",
+        channel="fcm", fcm_token="device-token-abc123")
+
+    resp = client.put("/api/admin/employees/101", json={
+        "name": "Alex Chen", "role": "employee", "department": "usher", "phone": "+15559000101",
+        "is_primary_contact": False,
+    })
+    assert resp.status_code == 200
+    updated = main_module.employee_directory.get("101")
+    assert updated["channel"] == "fcm"
+    assert updated["fcm_token"] == "device-token-abc123"

@@ -178,6 +178,37 @@ def test_json_set_primary_contact_unknown_returns_false(tmp_path):
     assert d.set_primary_contact("nobody", True) is False
 
 
+def test_json_set_fcm_token_on_existing_employee_preserves_other_fields(tmp_path):
+    """The gap this exists to fix: add()'s own upsert overwrites every
+    column, so registering a device token by calling add() again with
+    only a token would silently blank out name/role/department/phone."""
+    d = JsonEmployeeDirectory(tmp_path / "employees.json")
+    d.add("101", "Pat", "employee", "janitorial", "+15551234567")
+    assert d.set_fcm_token("101", "tok-xyz789") is True
+    entry = d.get("101")
+    assert entry["fcm_token"] == "tok-xyz789"
+    assert entry["name"] == "Pat"
+    assert entry["role"] == "employee"
+    assert entry["department"] == "janitorial"
+
+
+def test_json_set_fcm_token_unknown_returns_false(tmp_path):
+    d = JsonEmployeeDirectory(tmp_path / "employees.json")
+    assert d.set_fcm_token("nobody", "tok-xyz789") is False
+
+
+def test_json_set_channel_on_existing_employee(tmp_path):
+    d = JsonEmployeeDirectory(tmp_path / "employees.json")
+    d.add("101", "Pat", "employee", "janitorial", "+15551234567", channel="sms")
+    assert d.set_channel("101", "fcm") is True
+    assert d.get("101")["channel"] == "fcm"
+
+
+def test_json_set_channel_unknown_returns_false(tmp_path):
+    d = JsonEmployeeDirectory(tmp_path / "employees.json")
+    assert d.set_channel("nobody", "fcm") is False
+
+
 def test_json_add_stores_channel_and_fcm_token(tmp_path):
     d = JsonEmployeeDirectory(tmp_path / "employees.json")
     d.add("101", "Pat", "employee", "janitorial", "+15551234567", channel="fcm", fcm_token="tok-abc123")
@@ -276,6 +307,32 @@ def test_postgres_set_primary_contact_runs_update():
     call_args = fake_conn.execute.call_args_list[-1]
     assert "UPDATE floorwatch_employees SET is_primary_contact" in call_args[0][0]
     assert call_args[0][1] == (True, "900")
+
+
+def test_postgres_set_fcm_token_runs_update():
+    fake_conn = MagicMock()
+    fake_conn.execute.return_value.rowcount = 1
+    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+        d = PostgresEmployeeDirectory("postgresql://fake/dsn")
+        result = d.set_fcm_token("101", "tok-xyz789")
+
+    assert result is True
+    call_args = fake_conn.execute.call_args_list[-1]
+    assert "UPDATE floorwatch_employees SET fcm_token" in call_args[0][0]
+    assert call_args[0][1] == ("tok-xyz789", "101")
+
+
+def test_postgres_set_channel_runs_update():
+    fake_conn = MagicMock()
+    fake_conn.execute.return_value.rowcount = 1
+    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+        d = PostgresEmployeeDirectory("postgresql://fake/dsn")
+        result = d.set_channel("101", "fcm")
+
+    assert result is True
+    call_args = fake_conn.execute.call_args_list[-1]
+    assert "UPDATE floorwatch_employees SET channel" in call_args[0][0]
+    assert call_args[0][1] == ("fcm", "101")
 
 
 def test_postgres_add_rejects_invalid_channel():

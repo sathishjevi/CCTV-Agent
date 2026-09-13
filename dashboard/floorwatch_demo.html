@@ -305,6 +305,37 @@
   </div>
 </div>
 
+<div class="login-overlay" id="editEmployeeOverlay" style="display:none;align-items:flex-start;padding:40px 20px;overflow-y:auto;">
+  <div class="login-card" style="width:min(520px,100%);">
+    <div class="brand" style="justify-content:space-between;display:flex;">
+      <div style="display:flex;align-items:center;">
+        <div class="brand-mark" style="display:inline-flex;">FW</div>
+        <strong style="margin-left:8px;font-size:15px;">Edit employee <span id="editEmpNumberLabel" style="color:var(--dim);"></span></strong>
+      </div>
+      <button class="btn" id="closeEditEmployeeBtn" style="width:auto;padding:6px 12px;">Close</button>
+    </div>
+    <div id="editEmployeeError" class="login-error" style="min-height:0;"></div>
+    <form id="editEmployeeForm" style="display:flex;flex-direction:column;gap:12px;margin-top:12px;">
+      <input type="hidden" id="editEmpNumber">
+      <div class="field" style="margin-bottom:0;"><label for="editEmpName">Name</label><input id="editEmpName" required></div>
+      <div class="field" style="margin-bottom:0;">
+        <label for="editEmpRole">Role</label>
+        <select id="editEmpRole" style="width:100%;box-sizing:border-box;font-family:var(--sans);font-size:13px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:9px 10px;">
+          <option value="employee">employee</option>
+          <option value="supervisor">supervisor</option>
+        </select>
+      </div>
+      <div class="field" style="margin-bottom:0;"><label for="editEmpDept">Department</label><input id="editEmpDept" required></div>
+      <div class="field" style="margin-bottom:0;"><label for="editEmpPhone">Phone</label><input id="editEmpPhone" required></div>
+      <div class="field" id="editEmpPrimaryContactField" style="margin-bottom:0;display:none;flex-direction:row;align-items:center;gap:6px;">
+        <input type="checkbox" id="editEmpPrimaryContact" style="width:auto;">
+        <label for="editEmpPrimaryContact" style="text-transform:none;font-size:11.5px;">Primary contact for this department</label>
+      </div>
+      <button type="submit" class="btn primary" style="width:auto;align-self:flex-start;">Save changes</button>
+    </form>
+  </div>
+</div>
+
 <div class="login-overlay" id="manageZonesOverlay" style="display:none;align-items:flex-start;padding:40px 20px;overflow-y:auto;">
   <div class="login-card" style="width:min(720px,100%);">
     <div class="brand" style="justify-content:space-between;display:flex;">
@@ -1408,6 +1439,7 @@
         <td style="padding:8px;color:${e.active ? 'var(--ok)' : 'var(--red)'};">${e.active ? 'active' : 'deactivated'}</td>
         <td style="padding:8px;">
           <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;">
+            <button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="edit" data-emp="${escapeHtml(e.employee_number)}">Edit</button>
             ${e.active
               ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="deactivate" data-emp="${escapeHtml(e.employee_number)}">Deactivate</button>`
               : `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reactivate" data-emp="${escapeHtml(e.employee_number)}">Reactivate</button>`}
@@ -1423,6 +1455,12 @@
     `).join('');
   }
 
+  // Populated by loadEmployees() below, read by the Edit modal to
+  // pre-fill its form — kept separate from employeesById (used by the
+  // task-assignment picker) since the two loads happen independently
+  // and one being stale shouldn't silently feed the other.
+  let manageEmployeesByNumber = {};
+
   async function loadEmployees(){
     const errEl = document.getElementById('manageEmployeesError');
     errEl.textContent = '';
@@ -1430,6 +1468,8 @@
       const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees`);
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      manageEmployeesByNumber = {};
+      data.employees.forEach(e => { manageEmployeesByNumber[e.employee_number] = e; });
       renderEmployeesTable(data.employees);
     } catch(err){
       errEl.textContent = `Failed to load employees: ${err.message}`;
@@ -1488,7 +1528,10 @@
     const errEl = document.getElementById('manageEmployeesError');
     errEl.textContent = '';
     try {
-      if(action === 'deactivate'){
+      if(action === 'edit'){
+        openEditEmployeeModal(employeeNumber);
+        return;
+      } else if(action === 'deactivate'){
         if(!confirm(`Deactivate employee #${employeeNumber}? They will no longer be assignable to new tasks.`)) return;
         const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees/${encodeURIComponent(employeeNumber)}/deactivate`, {method: 'POST'});
         if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
@@ -1502,6 +1545,55 @@
       errEl.textContent = err.message;
     }
   });
+
+  // ── Edit employee modal ──────────────────────────────────────────────
+  function openEditEmployeeModal(employeeNumber){
+    const e = manageEmployeesByNumber[employeeNumber];
+    if(!e) return;
+    document.getElementById('editEmpNumber').value = e.employee_number;
+    document.getElementById('editEmpNumberLabel').textContent = `#${e.employee_number}`;
+    document.getElementById('editEmpName').value = e.name;
+    document.getElementById('editEmpRole').value = e.role;
+    document.getElementById('editEmpDept').value = e.department;
+    document.getElementById('editEmpPhone').value = e.phone;
+    document.getElementById('editEmpPrimaryContact').checked = !!e.is_primary_contact;
+    document.getElementById('editEmpPrimaryContactField').style.display = e.role === 'supervisor' ? 'flex' : 'none';
+    document.getElementById('editEmployeeError').textContent = '';
+    document.getElementById('editEmployeeOverlay').style.display = 'flex';
+  }
+  document.getElementById('closeEditEmployeeBtn').onclick = () => {
+    document.getElementById('editEmployeeOverlay').style.display = 'none';
+  };
+  document.getElementById('editEmpRole').onchange = () => {
+    const isSupervisor = document.getElementById('editEmpRole').value === 'supervisor';
+    const field = document.getElementById('editEmpPrimaryContactField');
+    field.style.display = isSupervisor ? 'flex' : 'none';
+    if(!isSupervisor) document.getElementById('editEmpPrimaryContact').checked = false;
+  };
+  document.getElementById('editEmployeeForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('editEmployeeError');
+    errEl.textContent = '';
+    const employeeNumber = document.getElementById('editEmpNumber').value;
+    const name = document.getElementById('editEmpName').value.trim();
+    const role = document.getElementById('editEmpRole').value;
+    const department = document.getElementById('editEmpDept').value.trim();
+    const phone = document.getElementById('editEmpPhone').value.trim();
+    const is_primary_contact = role === 'supervisor' && document.getElementById('editEmpPrimaryContact').checked;
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees/${encodeURIComponent(employeeNumber)}`, {
+        method: 'PUT', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name, role, department, phone, is_primary_contact}),
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      document.getElementById('editEmployeeOverlay').style.display = 'none';
+      loadEmployees();
+      loadEmployeesForPicker();
+    } catch(err){
+      errEl.textContent = err.message;
+    }
+  };
 
   document.getElementById('employeesTableBody').addEventListener('change', async (e) => {
     const box = e.target.closest('input[data-primary-toggle]');

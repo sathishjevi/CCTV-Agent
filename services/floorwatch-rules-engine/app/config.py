@@ -229,6 +229,13 @@ LOGIN_RATE_LIMIT_PER_USERNAME_PER_MINUTE = int(
 # token from bulk-creating/enumerating accounts unbounded.
 ADMIN_RATE_LIMIT_PER_MINUTE = int(os.environ.get("FLOORWATCH_ADMIN_RATE_LIMIT_PER_MINUTE", 30))
 
+# Employee mobile-app OTP requests — same per-phone throttling rationale
+# as LOGIN_RATE_LIMIT_PER_USERNAME_PER_MINUTE above (bound repeated code
+# sends to one number), and this is also the real cost lever: an
+# unthrottled request-otp endpoint is a way to run up someone else's SMS
+# bill by spamming a number with codes it never asked for.
+OTP_RATE_LIMIT_PER_PHONE_PER_MINUTE = int(os.environ.get("FLOORWATCH_OTP_RATE_LIMIT_PER_PHONE_PER_MINUTE", 3))
+
 # Account storage — see skills/lib/floorwatch_auth.py's build_user_store().
 # Empty falls back to the local users.json (dev/pilot only — doesn't
 # survive a Railway redeploy without a volume). Point this at the SAME

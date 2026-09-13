@@ -1,0 +1,73 @@
+import 'package:flutter/material.dart';
+
+import 'services/push_service.dart';
+import 'services/token_storage.dart';
+import 'screens/phone_entry_screen.dart';
+import 'screens/task_list_screen.dart';
+
+void main() {
+  runApp(const FloorwatchApp());
+}
+
+class FloorwatchApp extends StatelessWidget {
+  const FloorwatchApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Floorwatch',
+      theme: ThemeData(
+        useMaterial3: true,
+        colorSchemeSeed: const Color(0xFF2F6FED), // matches the web dashboard's accent blue
+      ),
+      home: const _StartupGate(),
+    );
+  }
+}
+
+/// Decides where to land on cold start: already logged in -> task list,
+/// otherwise -> phone entry. A stored token isn't re-validated here (an
+/// expired/revoked one just 401s on the first API call, and every
+/// screen already handles ApiException) — this is purely "skip the
+/// login screen if we plausibly don't need it."
+class _StartupGate extends StatefulWidget {
+  const _StartupGate();
+
+  @override
+  State<_StartupGate> createState() => _StartupGateState();
+}
+
+class _StartupGateState extends State<_StartupGate> {
+  bool _checked = false;
+  bool _loggedIn = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  Future<void> _check() async {
+    final token = await TokenStorage.instance.readToken();
+    if (token != null) {
+      // Best-effort — see push_service.dart's docstring for what's
+      // required before this actually delivers anything.
+      try {
+        await PushService.instance.initialize();
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() {
+      _loggedIn = token != null;
+      _checked = true;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_checked) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    return _loggedIn ? const TaskListScreen() : const PhoneEntryScreen();
+  }
+}

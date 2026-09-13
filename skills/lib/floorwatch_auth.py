@@ -70,8 +70,18 @@ from floorwatch_retention import parse_timestamp  # noqa: E402
 PBKDF2_ITERATIONS = 200_000
 DEFAULT_TOKEN_TTL_SECONDS = 12 * 3600
 
-VALID_ROLES = {"admin", "supervisor", "viewer", "service"}
+VALID_ROLES = {"admin", "supervisor", "viewer", "service", "employee"}
 ROLE_RANK = {"viewer": 0, "service": 0, "supervisor": 1, "admin": 2}
+# "employee" is deliberately absent from ROLE_RANK, not merely low-ranked —
+# make_auth_dependency()'s hierarchical check does ROLE_RANK.get(role, -1),
+# so an unlisted role always fails any required_role check on the DASHBOARD
+# ladder above. That's intentional: an employee token identifies a phone-
+# verified floor worker (subject = employee_number, from employee_directory
+# — never a dashboard username, never any password), a fundamentally
+# different kind of identity than admin/supervisor/viewer/service. It
+# should never satisfy a dashboard permission check by accident, in either
+# direction — see make_employee_auth_dependency() below for its own,
+# separate (non-hierarchical, exact-match) verification path.
 
 # ── Password policy (DATA_PROTECTION_SECURITY_ANALYSIS.md DP-M1) ────────
 # Deliberately NOT requiring arbitrary character-class complexity
@@ -653,6 +663,49 @@ def make_auth_dependency(secret: str, required_role: Optional[str] = None,
             raise HTTPException(status_code=401, detail="Token revoked — please log in again")
         if required_rank is not None and ROLE_RANK.get(payload.get("role"), -1) < required_rank:
             raise HTTPException(status_code=403, detail=f"{required_role.capitalize()} role required")
+        return payload
+
+    return _dependency
+
+
+def make_employee_auth_dependency(secret: str, employee_directory, revocation_store: Optional[RevocationStore] = None):
+    """Builds a FastAPI dependency for the employee mobile-app API —
+    distinct from make_auth_dependency() above, not a thin wrapper around
+    it: an employee token's `sub` is an employee_number (from
+    employee_directory), never a dashboard username, and this dependency
+    does an EXACT role=="employee" match rather than the dashboard's
+    hierarchical admin>supervisor>viewer check (see VALID_ROLES/ROLE_RANK's
+    comments for why those two identity kinds must never satisfy each
+    other's checks).
+
+    Also re-checks employee_directory on every request (payload["sub"]
+    must resolve to a currently-active record) rather than trusting the
+    token's role claim alone for the token's full TTL — deactivating an
+    employee (or someone leaving) should take effect immediately, the
+    same live-recheck discipline this codebase already applies to roster/
+    zone staffing (see roster.py), not deferred to next token expiry.
+
+    Returns the JWT payload with the resolved employee record attached
+    under payload["employee"], so route handlers get both without a
+    second lookup."""
+    from fastapi import Header, HTTPException
+
+    async def _dependency(authorization: str = Header(default="")):
+        if not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Missing or malformed Authorization header")
+        token = authorization[len("Bearer "):]
+        payload = verify_token(secret, token)
+        if payload is None:
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+        if payload.get("role") != "employee":
+            raise HTTPException(status_code=403, detail="Employee role required")
+        if revocation_store is not None and await revocation_store.is_revoked(payload["sub"], payload["iat"]):
+            raise HTTPException(status_code=401, detail="Token revoked — please log in again")
+        import asyncio
+        employee = await asyncio.to_thread(employee_directory.get, payload["sub"])
+        if employee is None or not employee.get("active", True):
+            raise HTTPException(status_code=401, detail="Employee account not found or deactivated")
+        payload["employee"] = employee
         return payload
 
     return _dependency
