@@ -1490,6 +1490,16 @@ async def employee_login(body: EmployeeLoginRequest, request: Request):
         or not employee.get("active", True)
     ):
         return JSONResponse(status_code=401, content={"error": "Invalid phone or password"})
+    if not employee.get("channel"):
+        # Logging in with a password IS proof this employee is on the
+        # app — switch them off SMS now rather than waiting for a real
+        # push token to register (POST /api/employee/device-token does
+        # the same auto-switch, but push isn't fully wired up yet — see
+        # push_service.dart's docstring — so that path never fires today
+        # and every assignment kept retrying, and failing, Twilio). Once
+        # channel="fcm", _send_task_notification skips cleanly with "no
+        # fcm token on file" instead of attempting SMS at all.
+        await asyncio.to_thread(employee_directory.set_channel, employee["employee_number"], "fcm")
     token = issue_token(config.AUTH_SECRET, employee["employee_number"], "employee",
                          ttl_seconds=config.TOKEN_TTL_SECONDS)
     return {

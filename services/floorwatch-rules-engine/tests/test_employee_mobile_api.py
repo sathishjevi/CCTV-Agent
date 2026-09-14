@@ -213,6 +213,31 @@ def test_login_rate_limited_per_phone(app_client):
     assert resp.status_code == 429
 
 
+def test_login_switches_unset_channel_to_fcm(app_client):
+    """A password login is proof the employee is on the app — should
+    stop trying Twilio SMS from then on, same auto-switch device-token
+    registration already does, without waiting for a real push token
+    (push isn't fully wired up yet)."""
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+    client.post("/api/admin/employees/101/set-password", json={"password": "correct-horse-battery"})
+
+    client.post("/api/employee/auth/login", json={"phone": "+15559000101", "password": "correct-horse-battery"})
+
+    assert main_module.employee_directory.get("101")["channel"] == "fcm"
+
+
+def test_login_does_not_override_explicit_channel(app_client):
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+    main_module.employee_directory.set_channel("101", "sms")
+    client.post("/api/admin/employees/101/set-password", json={"password": "correct-horse-battery"})
+
+    client.post("/api/employee/auth/login", json={"phone": "+15559000101", "password": "correct-horse-battery"})
+
+    assert main_module.employee_directory.get("101")["channel"] == "sms"
+
+
 def test_setting_password_does_not_wipe_fcm_token(app_client):
     """set_password_hash uses the same targeted-UPDATE pattern as
     set_fcm_token/set_channel — a regression here would silently
