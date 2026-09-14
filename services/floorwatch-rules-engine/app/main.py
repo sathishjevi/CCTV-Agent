@@ -1399,17 +1399,34 @@ async def request_otp(body: RequestOtpRequest):
     # Same no-enumeration shape regardless of whether the number is on
     # file — a generic "sent if valid" response either way, so this
     # endpoint can't be used to probe which phone numbers are employees.
-    if employee is not None:
+    # That deliberately hides the real outcome from the CLIENT — but it
+    # was ALSO hiding it from the server logs, which was never the
+    # intent: a real send failure (or a phone that doesn't match any
+    # employee record byte-for-byte after normalization) produced zero
+    # trace anywhere, making "I never got the code" undiagnosable. Log
+    # server-side either way; the HTTP response shape is unchanged.
+    if employee is None:
+        log(f"OTP requested for {_mask_phone(phone)} — no employee matches this number "
+            f"(check it's stored with the same country-code format the app sent)", level="warning")
+    else:
         code = await otp_store.issue(phone)
         sender = TASK_CHANNEL_SENDERS.get("sms")
-        if sender is not None:
+        if sender is None:
+            log(f"OTP requested for employee {employee['employee_number']} but no SMS sender is "
+                f"configured (TASK_CHANNEL_SENDERS['sms'] is None) — code not sent", level="warning")
+        else:
             # Bypasses _send_task_notification's shadow-mode gate
             # deliberately — shadow mode suppresses OPERATIONAL task
             # notifications for the pilot's safety brief (Global
             # Constraint 4); a login code isn't an operational
             # notification; suppressing it would make login impossible.
-            await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 sender.send, {"phone": phone}, f"Floorwatch: your login code is {code}. Expires in 5 min.")
+            if result.sent:
+                log(f"OTP sent to employee {employee['employee_number']} via {result.channel}")
+            else:
+                log(f"OTP send FAILED for employee {employee['employee_number']} via "
+                    f"{result.channel}: {result.detail}", level="warning")
     return {"ok": True, "message": "If that number is registered, a code has been sent."}
 
 
