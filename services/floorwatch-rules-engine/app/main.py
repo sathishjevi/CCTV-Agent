@@ -360,8 +360,19 @@ def _resolve_task_channel(employee: dict) -> str | None:
     which mirrors whatever the deployment's global NOTIFY_CHANNEL already
     meant before per-employee channels existed — see the comment above
     TASK_CHANNEL_SENDERS' definition. Returns None if there's no channel
-    to use at all (no override AND no usable global default)."""
-    return employee.get("channel") or DEFAULT_TASK_CHANNEL
+    to use at all (no override AND no usable global default).
+
+    An employee with a password_hash set has proven they're on the
+    mobile app — the /api/employee/auth/login endpoint sets channel="fcm"
+    the moment that happens, but only ON that login call. A device that
+    already held a valid token from before that fix (or before password
+    login existed at all) never calls /login again and so never gets
+    that write — leaving `channel` unset and every assignment retrying,
+    and failing, Twilio indefinitely. Falling back to "fcm" here (ahead
+    of DEFAULT_TASK_CHANNEL) makes "has a password → never SMS" true
+    regardless of when/whether that record's channel column was ever
+    actually written."""
+    return employee.get("channel") or ("fcm" if employee.get("password_hash") else None) or DEFAULT_TASK_CHANNEL
 
 
 def _send_task_notification(employee_number, message) -> dict:

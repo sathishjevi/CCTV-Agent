@@ -306,6 +306,28 @@ def test_channel_defaults_to_global_notify_channel_mapping_when_unset(app_client
     assert len(fcm_sender.calls) == 0
 
 
+def test_channel_defaults_to_fcm_for_app_employee_with_no_channel_written_yet(app_client):
+    """A password-login employee proves they're on the app, but the
+    channel="fcm" write only happens ON that /login call — a device
+    already holding a valid token from before password login existed
+    (or before that write was added) never calls /login again, so
+    `channel` can stay unset indefinitely even though this employee is
+    clearly not an SMS user. Falling back to global NOTIFY_CHANNEL
+    (sms) in that gap is what produced repeated failing Twilio sends in
+    production; password_hash being set must short-circuit that."""
+    client, main_module = app_client
+    sms_sender, fcm_sender = _install_recording_senders(main_module)
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")  # no channel
+    main_module.employee_directory.set_password_hash("101", "irrelevant-hash-value")
+
+    result = main_module._send_task_notification("101", "hello")
+
+    assert result["sent"] is False
+    assert result["channel"] == "fcm"
+    assert "no fcm_token on file" in result["detail"]
+    assert len(sms_sender.calls) == 0  # never fell back to Twilio just because channel was unset
+
+
 def test_channel_employee_override_wins_over_global_default(app_client):
     client, main_module = app_client
     sms_sender, fcm_sender = _install_recording_senders(main_module)
