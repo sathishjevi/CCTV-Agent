@@ -236,6 +236,14 @@ ADMIN_RATE_LIMIT_PER_MINUTE = int(os.environ.get("FLOORWATCH_ADMIN_RATE_LIMIT_PE
 # bill by spamming a number with codes it never asked for.
 OTP_RATE_LIMIT_PER_PHONE_PER_MINUTE = int(os.environ.get("FLOORWATCH_OTP_RATE_LIMIT_PER_PHONE_PER_MINUTE", 3))
 
+# Employee mobile-app password login — same per-IP/per-identifier pairing
+# as LOGIN_RATE_LIMIT_PER_IP/USERNAME above, since employees had no
+# brute-force protection at all before password login existed.
+EMPLOYEE_LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE = int(
+    os.environ.get("FLOORWATCH_EMPLOYEE_LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE", 10))
+EMPLOYEE_LOGIN_RATE_LIMIT_PER_PHONE_PER_MINUTE = int(
+    os.environ.get("FLOORWATCH_EMPLOYEE_LOGIN_RATE_LIMIT_PER_PHONE_PER_MINUTE", 5))
+
 # Account storage — see skills/lib/floorwatch_auth.py's build_user_store().
 # Empty falls back to the local users.json (dev/pilot only — doesn't
 # survive a Railway redeploy without a volume). Point this at the SAME

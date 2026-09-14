@@ -142,6 +142,93 @@ def test_request_otp_unknown_phone_still_returns_200_no_enumeration(app_client):
     assert fake.sent == []  # but nothing was actually sent
 
 
+# ── Password login (primary mechanism — OTP kept above for future 2FA) ──
+
+def test_set_password_then_login_issues_employee_token(app_client):
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+
+    resp = client.post("/api/admin/employees/101/set-password", json={"password": "correct-horse-battery"})
+    assert resp.status_code == 200, resp.text
+
+    resp = client.post("/api/employee/auth/login", json={"phone": "+15559000101", "password": "correct-horse-battery"})
+    assert resp.status_code == 200, resp.text
+    token = resp.json()["token"]
+    assert resp.json()["employee_number"] == "101"
+
+    resp = client.get("/api/employee/tasks", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    assert resp.json() == {"tasks": []}
+
+
+def test_login_wrong_password_returns_401(app_client):
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+    client.post("/api/admin/employees/101/set-password", json={"password": "correct-horse-battery"})
+
+    resp = client.post("/api/employee/auth/login", json={"phone": "+15559000101", "password": "wrong-password-here"})
+    assert resp.status_code == 401
+
+
+def test_login_unknown_phone_returns_401(app_client):
+    client, _ = app_client
+    resp = client.post("/api/employee/auth/login", json={"phone": "+15559999999", "password": "whatever-password"})
+    assert resp.status_code == 401
+
+
+def test_login_before_password_set_returns_401(app_client):
+    """An employee created before this feature existed has no
+    password_hash at all — must not be treated as "any password works"."""
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+
+    resp = client.post("/api/employee/auth/login", json={"phone": "+15559000101", "password": "anything-at-all"})
+    assert resp.status_code == 401
+
+
+def test_set_password_rejects_weak_password(app_client):
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+
+    resp = client.post("/api/admin/employees/101/set-password", json={"password": "short"})
+    assert resp.status_code == 400
+
+
+def test_set_password_unknown_employee_returns_404(app_client):
+    client, _ = app_client
+    resp = client.post("/api/admin/employees/nonexistent/set-password", json={"password": "correct-horse-battery"})
+    assert resp.status_code == 404
+
+
+def test_login_rate_limited_per_phone(app_client):
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+    client.post("/api/admin/employees/101/set-password", json={"password": "correct-horse-battery"})
+    import config
+    limit = config.EMPLOYEE_LOGIN_RATE_LIMIT_PER_PHONE_PER_MINUTE
+    for _ in range(limit):
+        resp = client.post("/api/employee/auth/login", json={"phone": "+15559000101", "password": "wrong-password"})
+        assert resp.status_code == 401
+    resp = client.post("/api/employee/auth/login", json={"phone": "+15559000101", "password": "wrong-password"})
+    assert resp.status_code == 429
+
+
+def test_setting_password_does_not_wipe_fcm_token(app_client):
+    """set_password_hash uses the same targeted-UPDATE pattern as
+    set_fcm_token/set_channel — a regression here would silently
+    unregister push for anyone who resets their password."""
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+    main_module.employee_directory.set_fcm_token("101", "some-fcm-token")
+    main_module.employee_directory.set_channel("101", "fcm")
+
+    client.post("/api/admin/employees/101/set-password", json={"password": "correct-horse-battery"})
+
+    record = main_module.employee_directory.get("101")
+    assert record["fcm_token"] == "some-fcm-token"
+    assert record["channel"] == "fcm"
+
+
 # ── Employee-scoped task actions ─────────────────────────────────────────
 
 def test_employee_can_start_and_complete_own_task(app_client):

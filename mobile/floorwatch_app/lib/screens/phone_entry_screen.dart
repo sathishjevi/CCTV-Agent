@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
 
 import '../services/api_client.dart';
-import 'otp_entry_screen.dart';
+import '../services/push_service.dart';
+import '../services/token_storage.dart';
+import 'task_list_screen.dart';
 
+/// Primary login screen: phone + password (see EmployeeLoginRequest in
+/// main.py). OTP (otp_entry_screen.dart) is kept as infrastructure for a
+/// possible future 2FA step, not wired into this flow.
 class PhoneEntryScreen extends StatefulWidget {
   const PhoneEntryScreen({super.key});
 
@@ -12,29 +17,41 @@ class PhoneEntryScreen extends StatefulWidget {
 
 class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
   final _phoneController = TextEditingController();
-  bool _sending = false;
+  final _passwordController = TextEditingController();
+  bool _loggingIn = false;
   String? _error;
 
-  Future<void> _sendCode() async {
+  Future<void> _login() async {
     final phone = _phoneController.text.trim();
-    if (phone.isEmpty) {
-      setState(() => _error = 'Enter your phone number.');
+    final password = _passwordController.text;
+    if (phone.isEmpty || password.isEmpty) {
+      setState(() => _error = 'Enter your phone number and password.');
       return;
     }
     setState(() {
-      _sending = true;
+      _loggingIn = true;
       _error = null;
     });
     try {
-      await ApiClient.instance.requestOtp(phone);
+      final result = await ApiClient.instance.login(phone, password);
+      await TokenStorage.instance.save(
+        token: result['token'] as String,
+        employeeNumber: result['employee_number'] as String,
+        name: result['name'] as String,
+      );
+      // Best-effort — push not being configured yet must never block login.
+      try {
+        await PushService.instance.initialize();
+      } catch (_) {}
       if (!mounted) return;
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => OtpEntryScreen(phone: phone)),
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const TaskListScreen()),
+        (route) => false,
       );
     } on ApiException catch (e) {
       setState(() => _error = e.message);
     } finally {
-      if (mounted) setState(() => _sending = false);
+      if (mounted) setState(() => _loggingIn = false);
     }
   }
 
@@ -50,7 +67,7 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
             children: [
               const Text('Floorwatch', style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
-              const Text('Enter your phone number to get a login code.'),
+              const Text('Log in with your phone number and password.'),
               const SizedBox(height: 24),
               TextField(
                 controller: _phoneController,
@@ -61,16 +78,26 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
                   border: OutlineInputBorder(),
                 ),
               ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _passwordController,
+                obscureText: true,
+                onSubmitted: (_) => _loggingIn ? null : _login(),
+                decoration: const InputDecoration(
+                  labelText: 'Password',
+                  border: OutlineInputBorder(),
+                ),
+              ),
               if (_error != null) ...[
                 const SizedBox(height: 8),
                 Text(_error!, style: const TextStyle(color: Colors.red)),
               ],
               const SizedBox(height: 16),
               FilledButton(
-                onPressed: _sending ? null : _sendCode,
-                child: _sending
+                onPressed: _loggingIn ? null : _login,
+                child: _loggingIn
                     ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Text('Send code'),
+                    : const Text('Log in'),
               ),
             ],
           ),

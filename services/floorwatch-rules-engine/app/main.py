@@ -44,8 +44,9 @@ from task_store import build_task_store, rehydrate_tasks, task_runtime_to_record
 from zone_directory import build_zone_directory, validate_zone_id  # noqa: E402
 
 from floorwatch_auth import (  # noqa: E402
-    VALID_ROLES, RevocationStore, build_user_store, issue_token, make_auth_dependency,
-    make_employee_auth_dependency, validate_password_strength, validate_username, verify_ws_token,
+    VALID_ROLES, RevocationStore, build_user_store, hash_password, issue_token, make_auth_dependency,
+    make_employee_auth_dependency, validate_password_strength, validate_username, verify_password,
+    verify_ws_token,
 )
 from floorwatch_logging import get_logger  # noqa: E402
 from floorwatch_rate_limit import RateLimiter  # noqa: E402
@@ -193,6 +194,10 @@ require_employee = make_employee_auth_dependency(
     config.AUTH_SECRET, employee_directory, revocation_store=revocation_store)
 otp_store = OtpStore(cluster_redis)
 otp_rate_limiter = RateLimiter(config.OTP_RATE_LIMIT_PER_PHONE_PER_MINUTE, window_seconds=60.0)
+employee_login_rate_limiter_by_ip = RateLimiter(
+    config.EMPLOYEE_LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE, window_seconds=60.0)
+employee_login_rate_limiter_by_phone = RateLimiter(
+    config.EMPLOYEE_LOGIN_RATE_LIMIT_PER_PHONE_PER_MINUTE, window_seconds=60.0)
 task_store = build_task_store(config.POSTGRES_DSN, config.TASK_STORE_PATH)
 
 # TaskRuntime only holds a MONOTONIC start (meaningless across a
@@ -1449,6 +1454,67 @@ async def verify_otp(body: VerifyOtpRequest):
         "token": token, "employee_number": employee["employee_number"], "name": employee["name"],
         "expires_in": config.TOKEN_TTL_SECONDS,
     }
+
+
+class EmployeeLoginRequest(BaseModel):
+    phone: str
+    password: str
+
+
+@app.post("/api/employee/auth/login")
+async def employee_login(body: EmployeeLoginRequest, request: Request):
+    # Primary login path (OTP-over-SMS is kept above for future 2FA use,
+    # but Twilio trial-account restrictions made it unreliable as the
+    # sole mechanism — see dazzling-hopping-comet.md). Same no-enumeration
+    # discipline as verify-otp: invalid phone and invalid password return
+    # the identical generic error.
+    phone = normalize_phone(body.phone)
+    ip = request.client.host if request.client else "unknown"
+    if not employee_login_rate_limiter_by_ip.allow(ip):
+        retry_after = employee_login_rate_limiter_by_ip.retry_after_seconds(ip)
+        return JSONResponse(
+            status_code=429, content={"error": "Too many login attempts — try again shortly."},
+            headers={"Retry-After": str(int(retry_after) + 1)},
+        )
+    if not employee_login_rate_limiter_by_phone.allow(phone):
+        retry_after = employee_login_rate_limiter_by_phone.retry_after_seconds(phone)
+        return JSONResponse(
+            status_code=429, content={"error": "Too many login attempts — try again shortly."},
+            headers={"Retry-After": str(int(retry_after) + 1)},
+        )
+    employee = await asyncio.to_thread(employee_directory.get_by_phone, phone)
+    if (
+        employee is None
+        or not employee.get("password_hash")
+        or not verify_password(body.password, employee["password_hash"])
+        or not employee.get("active", True)
+    ):
+        return JSONResponse(status_code=401, content={"error": "Invalid phone or password"})
+    token = issue_token(config.AUTH_SECRET, employee["employee_number"], "employee",
+                         ttl_seconds=config.TOKEN_TTL_SECONDS)
+    return {
+        "token": token, "employee_number": employee["employee_number"], "name": employee["name"],
+        "expires_in": config.TOKEN_TTL_SECONDS,
+    }
+
+
+class SetEmployeePasswordRequest(BaseModel):
+    password: str
+
+
+@app.post("/api/admin/employees/{employee_number}/set-password")
+async def set_employee_password(
+    employee_number: str, body: SetEmployeePasswordRequest, user=Depends(require_supervisor)
+):
+    existing = await asyncio.to_thread(employee_directory.get, employee_number)
+    if existing is None:
+        return JSONResponse(status_code=404, content={"error": "employee not found"})
+    ok, error = validate_password_strength(body.password)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": error})
+    password_hash = hash_password(body.password)
+    await asyncio.to_thread(employee_directory.set_password_hash, employee_number, password_hash)
+    return {"ok": True}
 
 
 def _employee_number(user: dict) -> str:

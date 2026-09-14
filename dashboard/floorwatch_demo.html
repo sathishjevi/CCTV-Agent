@@ -336,6 +336,25 @@
   </div>
 </div>
 
+<div class="login-overlay" id="setPasswordOverlay" style="display:none;align-items:flex-start;padding:40px 20px;overflow-y:auto;">
+  <div class="login-card" style="width:min(420px,100%);">
+    <div class="brand" style="justify-content:space-between;display:flex;">
+      <div style="display:flex;align-items:center;">
+        <div class="brand-mark" style="display:inline-flex;">FW</div>
+        <strong style="margin-left:8px;font-size:15px;">Set app password <span id="setPasswordEmpNumberLabel" style="color:var(--dim);"></span></strong>
+      </div>
+      <button class="btn" id="closeSetPasswordBtn" style="width:auto;padding:6px 12px;">Close</button>
+    </div>
+    <div style="font-family:var(--mono);font-size:10.5px;color:var(--dimmer);margin:-6px 0 16px;line-height:1.5;">Used for mobile-app login (phone + password). At least 10 characters.</div>
+    <div id="setPasswordError" class="login-error" style="min-height:0;"></div>
+    <form id="setPasswordForm" style="display:flex;flex-direction:column;gap:12px;margin-top:12px;">
+      <input type="hidden" id="setPasswordEmpNumber">
+      <div class="field" style="margin-bottom:0;"><label for="setPasswordValue">New password</label><input id="setPasswordValue" type="password" required minlength="10"></div>
+      <button type="submit" class="btn primary" style="width:auto;align-self:flex-start;">Set password</button>
+    </form>
+  </div>
+</div>
+
 <div class="login-overlay" id="manageZonesOverlay" style="display:none;align-items:flex-start;padding:40px 20px;overflow-y:auto;">
   <div class="login-card" style="width:min(720px,100%);">
     <div class="brand" style="justify-content:space-between;display:flex;">
@@ -1440,6 +1459,9 @@
         <td style="padding:8px;">
           <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;">
             <button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="edit" data-emp="${escapeHtml(e.employee_number)}">Edit</button>
+            ${e.role === 'employee'
+              ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="set-password" data-emp="${escapeHtml(e.employee_number)}">Set password</button>`
+              : ''}
             ${e.active
               ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="deactivate" data-emp="${escapeHtml(e.employee_number)}">Deactivate</button>`
               : `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reactivate" data-emp="${escapeHtml(e.employee_number)}">Reactivate</button>`}
@@ -1531,6 +1553,9 @@
       if(action === 'edit'){
         openEditEmployeeModal(employeeNumber);
         return;
+      } else if(action === 'set-password'){
+        openSetPasswordModal(employeeNumber);
+        return;
       } else if(action === 'deactivate'){
         if(!confirm(`Deactivate employee #${employeeNumber}? They will no longer be assignable to new tasks.`)) return;
         const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees/${encodeURIComponent(employeeNumber)}/deactivate`, {method: 'POST'});
@@ -1590,6 +1615,36 @@
       document.getElementById('editEmployeeOverlay').style.display = 'none';
       loadEmployees();
       loadEmployeesForPicker();
+    } catch(err){
+      errEl.textContent = err.message;
+    }
+  };
+
+  // ── Set app password modal ───────────────────────────────────────────
+  function openSetPasswordModal(employeeNumber){
+    document.getElementById('setPasswordEmpNumber').value = employeeNumber;
+    document.getElementById('setPasswordEmpNumberLabel').textContent = `#${employeeNumber}`;
+    document.getElementById('setPasswordValue').value = '';
+    document.getElementById('setPasswordError').textContent = '';
+    document.getElementById('setPasswordOverlay').style.display = 'flex';
+  }
+  document.getElementById('closeSetPasswordBtn').onclick = () => {
+    document.getElementById('setPasswordOverlay').style.display = 'none';
+  };
+  document.getElementById('setPasswordForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('setPasswordError');
+    errEl.textContent = '';
+    const employeeNumber = document.getElementById('setPasswordEmpNumber').value;
+    const password = document.getElementById('setPasswordValue').value;
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees/${encodeURIComponent(employeeNumber)}/set-password`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({password}),
+      });
+      const data = await res.json();
+      if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      document.getElementById('setPasswordOverlay').style.display = 'none';
     } catch(err){
       errEl.textContent = err.message;
     }

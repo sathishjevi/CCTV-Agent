@@ -57,6 +57,18 @@ class ApiClient {
 
   // ── Auth ──────────────────────────────────────────────────────────────
 
+  /// Primary login path. Returns (token, employee_number, name) on
+  /// success — caller persists via TokenStorage. OTP below is kept as
+  /// infrastructure for a possible future 2FA step, not the main flow.
+  Future<Map<String, dynamic>> login(String phone, String password) async {
+    final resp = await http.post(
+      _uri('/api/employee/auth/login'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'phone': phone, 'password': password}),
+    );
+    return _decode(resp);
+  }
+
   Future<void> requestOtp(String phone) async {
     final resp = await http.post(
       _uri('/api/employee/auth/request-otp'),

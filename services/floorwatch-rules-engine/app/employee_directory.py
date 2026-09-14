@@ -112,6 +112,15 @@ class PostgresEmployeeDirectory:
         "ALTER TABLE floorwatch_employees ADD COLUMN IF NOT EXISTS fcm_token TEXT;",
         "ALTER TABLE floorwatch_employees ADD COLUMN IF NOT EXISTS "
         "is_primary_contact BOOLEAN NOT NULL DEFAULT false;",
+        # Password login (mobile app) — added after OTP-over-SMS turned out
+        # to be blocked by a Twilio trial-account restriction unrelated to
+        # this codebase. NULL means "no password set yet" (this employee
+        # can't log into the app until a supervisor sets one) — never an
+        # empty-string sentinel, which could be mistaken for "any password
+        # accepted." Hashed with floorwatch_auth.hash_password (PBKDF2),
+        # same scheme as dashboard login accounts — never stored in
+        # plaintext, never logged.
+        "ALTER TABLE floorwatch_employees ADD COLUMN IF NOT EXISTS password_hash TEXT;",
     ]
     INDEX_SQL = [
         "CREATE INDEX IF NOT EXISTS floorwatch_employees_dept_idx "
@@ -139,15 +148,17 @@ class PostgresEmployeeDirectory:
         return {"employee_number": r[0], "name": r[1], "role": r[2], "department": r[3],
                 "phone": r[4], "active": r[5], "account_username": r[6],
                 "created_at": r[7].isoformat() if r[7] else None, "created_by": r[8],
-                "channel": r[9], "fcm_token": r[10], "is_primary_contact": r[11]}
+                "channel": r[9], "fcm_token": r[10], "is_primary_contact": r[11],
+                "password_hash": r[12]}
 
     _COLUMNS = ("employee_number, name, role, department, phone, active, "
-                "account_username, created_at, created_by, channel, fcm_token, is_primary_contact")
+                "account_username, created_at, created_by, channel, fcm_token, is_primary_contact, "
+                "password_hash")
 
     def add(self, employee_number: str, name: str, role: str, department: str, phone: str,
             account_username: Optional[str] = None, created_by: Optional[str] = None,
             channel: Optional[str] = None, fcm_token: Optional[str] = None,
-            is_primary_contact: bool = False):
+            is_primary_contact: bool = False, password_hash: Optional[str] = None):
         if role not in DIRECTORY_ROLES:
             raise ValueError(f"invalid directory role: {role!r}")
         ok, reason = validate_channel(channel)
@@ -160,16 +171,16 @@ class PostgresEmployeeDirectory:
             conn.execute(
                 "INSERT INTO floorwatch_employees "
                 "(employee_number, name, role, department, phone, active, account_username, "
-                "created_by, channel, fcm_token, is_primary_contact) "
-                "VALUES (%s,%s,%s,%s,%s,true,%s,%s,%s,%s,%s) "
+                "created_by, channel, fcm_token, is_primary_contact, password_hash) "
+                "VALUES (%s,%s,%s,%s,%s,true,%s,%s,%s,%s,%s,%s) "
                 "ON CONFLICT (employee_number) DO UPDATE SET "
                 "name=EXCLUDED.name, role=EXCLUDED.role, department=EXCLUDED.department, "
                 "phone=EXCLUDED.phone, account_username=EXCLUDED.account_username, "
                 "channel=EXCLUDED.channel, fcm_token=EXCLUDED.fcm_token, "
-                "is_primary_contact=EXCLUDED.is_primary_contact",
+                "is_primary_contact=EXCLUDED.is_primary_contact, password_hash=EXCLUDED.password_hash",
                 (employee_number, name, role, department, normalize_phone(phone),
                  account_username, created_by, channel or None, fcm_token or None,
-                 is_primary_contact),
+                 is_primary_contact, password_hash),
             )
 
     def get(self, employee_number: str) -> Optional[dict]:
@@ -247,6 +258,16 @@ class PostgresEmployeeDirectory:
                 (channel, employee_number))
             return cur.rowcount > 0
 
+    def set_password_hash(self, employee_number: str, password_hash: str) -> bool:
+        """Caller (main.py) is responsible for hashing via
+        floorwatch_auth.hash_password() before calling this — this
+        method never sees or handles a plaintext password."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE floorwatch_employees SET password_hash=%s WHERE employee_number=%s",
+                (password_hash, employee_number))
+            return cur.rowcount > 0
+
 
 class JsonEmployeeDirectory:
     """Local-file fallback when FLOORWATCH_POSTGRES_DSN isn't set — same
@@ -271,7 +292,7 @@ class JsonEmployeeDirectory:
     def add(self, employee_number: str, name: str, role: str, department: str, phone: str,
             account_username: Optional[str] = None, created_by: Optional[str] = None,
             channel: Optional[str] = None, fcm_token: Optional[str] = None,
-            is_primary_contact: bool = False):
+            is_primary_contact: bool = False, password_hash: Optional[str] = None):
         if role not in DIRECTORY_ROLES:
             raise ValueError(f"invalid directory role: {role!r}")
         ok, reason = validate_channel(channel)
@@ -292,6 +313,7 @@ class JsonEmployeeDirectory:
             "created_by": existing.get("created_by") or created_by,
             "channel": channel or None, "fcm_token": fcm_token or None,
             "is_primary_contact": is_primary_contact,
+            "password_hash": password_hash,
         }
         self._save(data)
 
@@ -342,6 +364,14 @@ class JsonEmployeeDirectory:
         if employee_number not in data:
             return False
         data[employee_number]["channel"] = channel
+        self._save(data)
+        return True
+
+    def set_password_hash(self, employee_number: str, password_hash: str) -> bool:
+        data = self._load()
+        if employee_number not in data:
+            return False
+        data[employee_number]["password_hash"] = password_hash
         self._save(data)
         return True
 
