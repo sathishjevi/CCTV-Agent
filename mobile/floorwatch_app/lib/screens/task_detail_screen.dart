@@ -29,6 +29,14 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() => _error = e.message);
+    } catch (e) {
+      // Network-level failures (e.g. a reset connection) throw
+      // ClientException/SocketException, not ApiException — those must
+      // still reach the UI instead of vanishing silently (this was a
+      // real bug: a dropped connection made action buttons look like
+      // they did nothing at all).
+      if (!mounted) return;
+      setState(() => _error = 'Network error — check your connection and try again.');
     } finally {
       if (mounted) setState(() => _busy = false);
     }

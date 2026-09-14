@@ -50,6 +50,10 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
       );
     } on ApiException catch (e) {
       setState(() => _error = e.message);
+    } catch (e) {
+      // A dropped connection (ClientException/SocketException) isn't an
+      // ApiException — must still be shown, not swallowed silently.
+      if (mounted) setState(() => _error = 'Network error — check your connection and try again.');
     } finally {
       if (mounted) setState(() => _loggingIn = false);
     }

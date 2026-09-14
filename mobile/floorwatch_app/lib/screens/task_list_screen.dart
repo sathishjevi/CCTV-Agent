@@ -36,6 +36,9 @@ class _TaskListScreenState extends State<TaskListScreen> {
     } on ApiException catch (e) {
       if (!mounted) return;
       setState(() => _error = e.message);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = 'Network error — pull down to retry.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
