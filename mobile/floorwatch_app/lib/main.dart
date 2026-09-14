@@ -1,11 +1,21 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 
+import 'services/dev_http_overrides.dart';
 import 'services/push_service.dart';
 import 'services/token_storage.dart';
 import 'screens/phone_entry_screen.dart';
 import 'screens/task_list_screen.dart';
 
-void main() {
+void main() async {
+  // kDebugMode-gated: trusts this dev machine's local SSL-inspection CA
+  // for Dart's own networking only in debug builds — see
+  // dev_http_overrides.dart's doc comment for why this exists and why
+  // it's structurally impossible for it to affect a release build.
+  if (kDebugMode) {
+    WidgetsFlutterBinding.ensureInitialized();
+    await installDevCertificateOverride();
+  }
   runApp(const FloorwatchApp());
 }
 
