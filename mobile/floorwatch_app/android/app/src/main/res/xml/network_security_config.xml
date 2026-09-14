@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Trusts the local machine's Norton Antivirus SSL-inspection root CA,
+  ONLY in debuggable builds (<debug-overrides> is guaranteed by Android
+  to be ignored whenever android:debuggable="false" — i.e. this has zero
+  effect on a real release build a real user installs).
+
+  Why this exists: this dev machine's Norton Web/Mail Shield transparently
+  re-signs all outbound HTTPS with its own CA, which Android's default
+  trust store correctly does NOT trust — causing every request from this
+  emulator to fail with CERTIFICATE_VERIFY_FAILED, even though the
+  backend and the app's own networking code are both correct. A real
+  user's phone, not running this same local SSL inspection, never hits
+  this — it is purely a this-machine testing artifact.
+
+  norton_root_ca.pem was exported from this machine's own trusted root
+  store — swap it out (or remove this whole override) if testing moves
+  to a machine/network without this interception.
+-->
+<network-security-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="@raw/norton_root_ca" />
+        </trust-anchors>
+    </debug-overrides>
+</network-security-config>
