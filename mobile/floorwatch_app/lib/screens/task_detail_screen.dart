@@ -63,6 +63,12 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
       () => ApiClient.instance.reassignTask(widget.task.taskId, target),
       'Handed off to employee $target.',
     );
+    // Once handed off, this employee no longer owns the task — every
+    // other action button would just 403 from here on, so there's
+    // nothing left to do on this screen. Back out to the list (which
+    // re-fetches and will no longer include this task) instead of
+    // leaving them stranded on a task that isn't theirs anymore.
+    if (_error == null && mounted) Navigator.of(context).pop();
   }
 
   @override

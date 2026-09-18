@@ -20,6 +20,15 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+/// package:http has NO default timeout — a stalled connection (as seen
+/// on this network: some requests threw ClientException immediately,
+/// others just never returned at all) leaves the caller's Future
+/// pending forever. That looked like "the button does nothing" — no
+/// spinner resolving, no error, because nothing ever threw. Every
+/// request below is wrapped in .timeout() so a stall becomes a visible
+/// error instead of an infinite hang.
+const _requestTimeout = Duration(seconds: 20);
+
 class ApiClient {
   ApiClient._();
   static final ApiClient instance = ApiClient._();
@@ -48,6 +57,20 @@ class ApiClient {
     };
   }
 
+  Future<http.Response> _get(String path, {required Map<String, String> headers}) {
+    return http.get(_uri(path), headers: headers).timeout(
+          _requestTimeout,
+          onTimeout: () => throw ApiException(0, 'Request timed out — check your connection and try again.'),
+        );
+  }
+
+  Future<http.Response> _post(String path, {required Map<String, String> headers, String? body}) {
+    return http.post(_uri(path), headers: headers, body: body).timeout(
+          _requestTimeout,
+          onTimeout: () => throw ApiException(0, 'Request timed out — check your connection and try again.'),
+        );
+  }
+
   Map<String, dynamic> _decode(http.Response resp) {
     final body = resp.body.isEmpty ? <String, dynamic>{} : jsonDecode(resp.body) as Map<String, dynamic>;
     if (resp.statusCode >= 200 && resp.statusCode < 300) return body;
@@ -61,8 +84,8 @@ class ApiClient {
   /// success — caller persists via TokenStorage. OTP below is kept as
   /// infrastructure for a possible future 2FA step, not the main flow.
   Future<Map<String, dynamic>> login(String phone, String password) async {
-    final resp = await http.post(
-      _uri('/api/employee/auth/login'),
+    final resp = await _post(
+      '/api/employee/auth/login',
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'phone': phone, 'password': password}),
     );
@@ -70,8 +93,8 @@ class ApiClient {
   }
 
   Future<void> requestOtp(String phone) async {
-    final resp = await http.post(
-      _uri('/api/employee/auth/request-otp'),
+    final resp = await _post(
+      '/api/employee/auth/request-otp',
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'phone': phone}),
     );
@@ -81,8 +104,8 @@ class ApiClient {
   /// Returns (token, employeeNumber, name) on success — caller is
   /// responsible for persisting via TokenStorage.
   Future<Map<String, dynamic>> verifyOtp(String phone, String code) async {
-    final resp = await http.post(
-      _uri('/api/employee/auth/verify-otp'),
+    final resp = await _post(
+      '/api/employee/auth/verify-otp',
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'phone': phone, 'code': code}),
     );
@@ -92,36 +115,35 @@ class ApiClient {
   // ── Tasks ─────────────────────────────────────────────────────────────
 
   Future<List<EmployeeTask>> fetchTasks() async {
-    final resp = await http.get(_uri('/api/employee/tasks'), headers: await _authHeaders());
+    final resp = await _get('/api/employee/tasks', headers: await _authHeaders());
     final body = _decode(resp);
     final list = body['tasks'] as List<dynamic>;
     return list.map((e) => EmployeeTask.fromJson(e as Map<String, dynamic>)).toList();
   }
 
   Future<void> startTask(String taskId) async {
-    final resp = await http.post(_uri('/api/employee/tasks/$taskId/start'), headers: await _authHeaders());
+    final resp = await _post('/api/employee/tasks/$taskId/start', headers: await _authHeaders());
     _decode(resp);
   }
 
   Future<void> completeTask(String taskId) async {
-    final resp = await http.post(_uri('/api/employee/tasks/$taskId/complete'), headers: await _authHeaders());
+    final resp = await _post('/api/employee/tasks/$taskId/complete', headers: await _authHeaders());
     _decode(resp);
   }
 
   Future<void> requestExtension(String taskId) async {
-    final resp =
-        await http.post(_uri('/api/employee/tasks/$taskId/request-extension'), headers: await _authHeaders());
+    final resp = await _post('/api/employee/tasks/$taskId/request-extension', headers: await _authHeaders());
     _decode(resp);
   }
 
   Future<void> requestReview(String taskId) async {
-    final resp = await http.post(_uri('/api/employee/tasks/$taskId/request-review'), headers: await _authHeaders());
+    final resp = await _post('/api/employee/tasks/$taskId/request-review', headers: await _authHeaders());
     _decode(resp);
   }
 
   Future<void> reassignTask(String taskId, String newAssignee) async {
-    final resp = await http.post(
-      _uri('/api/employee/tasks/$taskId/reassign'),
+    final resp = await _post(
+      '/api/employee/tasks/$taskId/reassign',
       headers: await _authHeaders(),
       body: jsonEncode({'new_assignee': newAssignee}),
     );
@@ -131,8 +153,8 @@ class ApiClient {
   // ── Push ──────────────────────────────────────────────────────────────
 
   Future<void> registerDeviceToken(String fcmToken) async {
-    final resp = await http.post(
-      _uri('/api/employee/device-token'),
+    final resp = await _post(
+      '/api/employee/device-token',
       headers: await _authHeaders(),
       body: jsonEncode({'fcm_token': fcmToken}),
     );

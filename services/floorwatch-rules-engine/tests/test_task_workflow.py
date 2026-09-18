@@ -122,6 +122,21 @@ def test_started_reply_before_notification_is_rejected():
     assert engine.mark_started(task_id) is None
 
 
+def test_started_reply_after_notify_failed_is_accepted():
+    """Unlike SMS (where notify_failed genuinely means "they don't know"),
+    the mobile app lets an employee see and act on a task regardless of
+    whether the assignment message was ever delivered — them tapping
+    Start IS proof they know about it. A Twilio failure (trial-account
+    restrictions, no channel configured, etc.) must not permanently
+    block Start for an app-based assignee."""
+    engine, _ = make_engine()
+    task_id = assign(engine)
+    engine.mark_notify_failed(task_id, reason="no channel configured")
+    evt = engine.mark_started(task_id)
+    assert evt is not None
+    assert engine.tasks[task_id].workflow_status == "in_progress"
+
+
 def test_extension_request_needs_supervisor_decision():
     engine, _ = make_engine()
     task_id = assign(engine)

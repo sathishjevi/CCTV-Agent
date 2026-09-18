@@ -253,9 +253,23 @@ class EffortEngine:
             + (f" — {reason}" if reason else "") + ". The assignee does not know about this task.")
 
     def mark_started(self, task_id: str) -> Optional[dict]:
-        """Assignee replied START (or equivalent acknowledgment)."""
+        """Assignee replied START (or equivalent acknowledgment).
+
+        "notify_failed" is accepted here too — that status means the
+        assignment MESSAGE couldn't be delivered (see WORKFLOW_STATUSES'
+        docstring), which used to be a solid proxy for "the assignee
+        doesn't know about this task" back when SMS delivery was the
+        only way they'd ever find out. The mobile app breaks that
+        assumption: an employee sees their tasks via GET
+        /api/employee/tasks regardless of whether any message went out,
+        so them tapping Start from the app IS them knowing about it —
+        actually stronger proof than a delivered SMS. Blocking Start on
+        a stale notify_failed left every task assigned to an app user
+        permanently unstartable whenever Twilio failed (which, with
+        Twilio trial-account restrictions, was happening on every
+        assignment)."""
         t = self.tasks.get(task_id)
-        if t is None or t.status != "open" or t.workflow_status not in ("notified", "awaiting_update"):
+        if t is None or t.status != "open" or t.workflow_status not in ("notified", "awaiting_update", "notify_failed"):
             return None
         t.workflow_status = "in_progress"
         return self._workflow_event(t, "started",
