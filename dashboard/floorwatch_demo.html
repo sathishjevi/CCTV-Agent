@@ -1101,6 +1101,13 @@
         if(tasks[evt.task_id]){
           tasks[evt.task_id].workflowStatus = evt.workflow_status;
           tasks[evt.task_id].assignedTo = evt.assigned_to || tasks[evt.task_id].assignedTo;
+          // Every engine event already carries the task's CURRENT budget
+          // (_base_event always sets assigned_minutes) — extend_task()
+          // raises it, but this handler was dropping that on the floor,
+          // so the dashboard kept showing the pre-extension budget (and
+          // the progress bar kept computing against it) until a full
+          // page reload forced a fresh REST resync.
+          if(typeof evt.assigned_minutes === 'number') tasks[evt.task_id].assignedMin = evt.assigned_minutes;
         }
         logEvent('eff', escapeHtml(evt.message || `Task workflow update: ${evt.workflow_status}`));
         break;

@@ -67,6 +67,10 @@ class EmployeeTask {
     }
   }
 
-  bool get canStart => workflowStatus == 'notified' || workflowStatus == 'notify_failed';
+  // Mirrors mark_started()'s exact guard in effort_engine.py — keep in
+  // sync if that ever changes, or Start will show as available (or
+  // hidden) in cases the backend actually disagrees with.
+  bool get canStart =>
+      workflowStatus == 'notified' || workflowStatus == 'notify_failed' || workflowStatus == 'awaiting_update';
   bool get isActionable => workflowStatus != 'completed';
 }

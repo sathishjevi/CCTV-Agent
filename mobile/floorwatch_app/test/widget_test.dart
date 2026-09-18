@@ -29,6 +29,6 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Floorwatch'), findsOneWidget);
-    expect(find.text('Send code'), findsOneWidget);
+    expect(find.text('Log in'), findsOneWidget);
   });
 }
