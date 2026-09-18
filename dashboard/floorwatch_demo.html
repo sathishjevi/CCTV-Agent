@@ -819,8 +819,20 @@
       let barClass = 'good';
       if(pct < expectedPct - 30) barClass = 'bad';
       else if(pct < expectedPct - 10) barClass = 'warn';
+      // "On track" is a claim about ACTIVE-TIME PACE only (t.status),
+      // completely independent of workflow stage (t.workflowStatus) —
+      // a task can be paced fine on active time while genuinely stuck
+      // (never started, budget blown with no update, employee asking
+      // for help) because nothing here has actually nudged its PACE
+      // yet. Showing "On track" next to "Pending — waiting for update"
+      // or "Notification failed" reads as a direct contradiction, so
+      // it's suppressed whenever a workflow badge already signals a
+      // problem — that badge alone is the real status in that case.
+      const workflowNeedsAttention = ['notify_failed', 'awaiting_update', 'extension_requested', 'review_requested']
+        .includes(t.workflowStatus);
       let statusText, statusClass;
-      if(t.status==='ok'){ statusText='On track'; statusClass='ok'; }
+      if(t.status==='ok' && workflowNeedsAttention){ statusText=null; statusClass=null; }
+      else if(t.status==='ok'){ statusText='On track'; statusClass='ok'; }
       else if(t.status==='low'){ statusText='Low active time — nudged'; statusClass='warn'; }
       else if(t.status==='flagged'){ statusText='Flagged for supervisor review'; statusClass='bad'; }
       else if(t.status==='resolved'){
@@ -842,7 +854,7 @@
         <div class="hd"><div class="tn">${escapeHtml(t.name)}</div><div class="tz">${escapeHtml(t.zone)}</div></div>
         <div class="barwrap"><div class="bar ${barClass}" style="width:${pct}%" data-bar="${id}"></div></div>
         <div class="stats" data-stats="${id}"><span>Active: ${t.activeMin.toFixed(1)} / ${t.assignedMin} min</span><span>Elapsed: ${elapsedMin.toFixed(1)} / ${t.assignedMin} min</span></div>
-        <div class="status ${statusClass}">${statusText}</div>
+        ${statusText ? `<div class="status ${statusClass}">${statusText}</div>` : ''}
         ${assigneeText ? `<div class="assignee">Assigned to: ${escapeHtml(assigneeText)}</div>` : ''}
         ${wf ? `<div class="wf-badge ${wf.cls}">${escapeHtml(wf.text)}</div>` : ''}
         ${(t.status==='ok'||t.status==='low') ? `
