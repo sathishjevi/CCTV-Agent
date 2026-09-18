@@ -338,6 +338,47 @@ def test_resolve_after_review_closes_a_reopened_task_without_reflagging():
     assert engine.pending_flags() == []
 
 
+def test_pending_flags_includes_extension_and_review_requests():
+    """The supervisor queue previously only ever showed effort-flagged
+    tasks — an employee's extension/review request was visible ONLY as
+    a badge on the task's own card, easy to miss while scanning the
+    board. Both origins now appear here too, tagged by `kind` so the
+    dashboard knows which action applies."""
+    engine, _ = make_engine(staffed=True, zone_covered=True)
+    ext_evt = engine.assign_task("Restock", "theatre3", 30, task_type="clean_door", assigned_to="101")
+    engine.mark_notified(ext_evt["task_id"])
+    engine.request_extension(ext_evt["task_id"])
+
+    review_evt = engine.assign_task("Clean Lobby", "theatre3", 30, task_type="clean_door", assigned_to="102")
+    engine.mark_notified(review_evt["task_id"])
+    engine.request_review(review_evt["task_id"])
+
+    kinds_by_task = {f["task_id"]: f["kind"] for f in engine.pending_flags()}
+    assert kinds_by_task[ext_evt["task_id"]] == "extension_requested"
+    assert kinds_by_task[review_evt["task_id"]] == "review_requested"
+
+
+def test_resolve_after_review_accepts_direct_review_request():
+    """An employee asking for review via request_review() (REVIEW reply
+    or the app's "Ask supervisor" button) is a different origin than a
+    confirm_flag() reopen, but the same real action on the supervisor's
+    side — resolve_after_review() must accept both."""
+    engine, _ = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Lobby", "theatre3", 30, task_type="clean_door", assigned_to="102")
+    task_id = task_evt["task_id"]
+    engine.mark_notified(task_id)
+    engine.request_review(task_id)
+    assert engine.tasks[task_id].workflow_status == "review_requested"
+
+    evt = engine.resolve_after_review(task_id, supervisor_id="alice")
+    assert evt is not None
+    assert evt["action_type"] == "reviewed"
+    t = engine.tasks[task_id]
+    assert t.status == "resolved"
+    assert t.workflow_status == "completed"
+    assert engine.pending_flags() == []
+
+
 def test_resolve_after_review_rejects_a_task_never_reopened():
     """Not a general-purpose "resolve anything" bypass — only usable on
     a task that actually went through confirm_flag()."""

@@ -502,7 +502,21 @@ class EffortEngine:
         return None, f"You have multiple open tasks — reply with the task code too: {codes}"
 
     def pending_flags(self) -> list:
-        return [
+        """The supervisor queue — every open task needing supervisor
+        attention, of any origin. `kind` tells the dashboard which
+        action(s) apply:
+          - "flagged": an effort-flagged task (status=="flagged") —
+            Confirm (confirm_flag) / Dismiss (dismiss_flag).
+          - "extension_requested": employee asked for more time
+            (workflow_status) — Extend (extend_task).
+          - "review_requested": employee asked a supervisor to look
+            (workflow_status) — Resolve (resolve_after_review, which
+            also accepts this origin, not just a confirm_flag reopen).
+        Previously only "flagged" tasks appeared here — an extension or
+        review request was visible ONLY as a badge on the task's own
+        card, with no queue entry pulling a supervisor's attention to
+        it, easy to miss entirely while scanning the board."""
+        flagged = [
             {
                 "task_id": t.task_id,
                 "task_name": t.task_name,
@@ -510,9 +524,25 @@ class EffortEngine:
                 "zone_name": self._zone_label(t.zone_id),
                 "active_minutes": round(t.active_seconds / 60.0, 2),
                 "assigned_minutes": t.assigned_minutes,
+                "kind": "flagged",
             }
             for t in self.tasks.values() if t.status == "flagged"
         ]
+        requested = [
+            {
+                "task_id": t.task_id,
+                "task_name": t.task_name,
+                "zone_id": t.zone_id,
+                "zone_name": self._zone_label(t.zone_id),
+                "active_minutes": round(t.active_seconds / 60.0, 2),
+                "assigned_minutes": t.assigned_minutes,
+                "assigned_to": t.assigned_to,
+                "kind": t.workflow_status,
+            }
+            for t in self.tasks.values()
+            if t.status == "open" and t.workflow_status in ("extension_requested", "review_requested")
+        ]
+        return flagged + requested
 
     def confirm_flag(self, task_id: str, supervisor_id: str = "supervisor") -> Optional[dict]:
         """Confirming a flag REOPENS the task rather than terminally
@@ -571,11 +601,15 @@ class EffortEngine:
         complete (which still runs the normal check, in case they'd
         rather let the system re-evaluate).
 
-        Only usable on a task actually reopened this way (status=='open'
-        AND reopened_for_review) — not a general-purpose "resolve
-        anything" bypass for a task that was never flagged."""
+        Usable on a task reopened via confirm_flag() (reopened_for_review)
+        OR one an employee directly asked to be reviewed via
+        request_review() (workflow_status=="review_requested") — both
+        are the same real action from the supervisor's side (they looked
+        at it with/for the employee and it's fine), just different
+        origins. Not a general-purpose "resolve anything" bypass for a
+        task that was never flagged or asked about."""
         t = self.tasks.get(task_id)
-        if t is None or t.status != "open" or not t.reopened_for_review:
+        if t is None or t.status != "open" or not (t.reopened_for_review or t.workflow_status == "review_requested"):
             return None
         t.status = "resolved"
         t.workflow_status = "completed"

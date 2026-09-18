@@ -791,8 +791,8 @@
     notify_failed:       {text: 'Notification failed — assignee not reached',       cls: 'wf-bad'},
     in_progress:         {text: 'In progress',                                      cls: 'wf-ok'},
     awaiting_update:     {text: 'Pending — waiting for update from employee',        cls: 'wf-warn'},
-    extension_requested: {text: 'Extension requested',                              cls: 'wf-warn'},
-    review_requested:    {text: 'Supervisor review requested',                      cls: 'wf-warn'},
+    extension_requested: {text: 'Employee asked for more time — see queue',         cls: 'wf-warn'},
+    review_requested:    {text: 'Employee asked for review — see queue',            cls: 'wf-warn'},
     completed:           {text: 'Completed',                                        cls: 'wf-ok'},
   };
   function employeeLabel(employeeNumber){
@@ -912,6 +912,19 @@
     }
   }
 
+  async function extendTask(taskId, extraMinutes){
+    const base = restBase(wsUrlInput.value.trim());
+    try {
+      const res = await authFetch(`${base}/api/tasks/${encodeURIComponent(taskId)}/extend`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({extra_minutes: extraMinutes}),
+      });
+      if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+    } catch(err){
+      logEvent('crit', `Failed to extend task ${escapeHtml(taskId)}: ${escapeHtml(err.message)}`);
+    }
+  }
+
   async function postAction(zoneId, action){
     const base = restBase(wsUrlInput.value.trim());
     try {
@@ -934,8 +947,20 @@
 
   function renderQueue(){
     const pendingZoneIds = Object.keys(pendingCommands);
-    const pendingTasks = Object.keys(tasks).filter(id=>tasks[id].status==='flagged');
-    if(pendingZoneIds.length===0 && pendingTasks.length===0){
+    // Previously only effort-flagged tasks showed up here — an
+    // extension or review request was visible ONLY as a badge on the
+    // task's own card (easy to miss while scanning the board, and
+    // confusing sitting next to an unrelated "On track" pace badge).
+    // Both now pull a card into this same queue, same as a flag does.
+    const flaggedIds = Object.keys(tasks).filter(id=>tasks[id].status==='flagged');
+    // task_resolved doesn't reset workflowStatus client-side (it only
+    // ever meant "assignment/conversation stage" before this, never
+    // needed resetting on resolve) — excluding status==='resolved'
+    // here stops a just-reviewed task from lingering in the queue.
+    const extensionIds = Object.keys(tasks).filter(id=>tasks[id].workflowStatus==='extension_requested' && tasks[id].status!=='resolved');
+    const reviewIds = Object.keys(tasks).filter(id=>tasks[id].workflowStatus==='review_requested' && tasks[id].status!=='resolved');
+    const pendingTaskCount = flaggedIds.length + extensionIds.length + reviewIds.length;
+    if(pendingZoneIds.length===0 && pendingTaskCount===0){
       queueEl.innerHTML = '<div class="empty">No pending items.</div>';
     } else {
       queueEl.innerHTML = '';
@@ -953,7 +978,7 @@
           </div>`;
         queueEl.appendChild(card);
       });
-      pendingTasks.forEach(id=>{
+      flaggedIds.forEach(id=>{
         const t = tasks[id];
         const card = document.createElement('div');
         card.className = 'cmdcard effort';
@@ -967,14 +992,50 @@
           </div>`;
         queueEl.appendChild(card);
       });
+      extensionIds.forEach(id=>{
+        const t = tasks[id];
+        const who = employeeLabel(t.assignedTo) || t.assignedTo || 'unknown employee';
+        const card = document.createElement('div');
+        card.className = 'cmdcard effort';
+        card.innerHTML = `
+          <div class="hd"><div class="zn">${escapeHtml(t.name)}</div><div class="age">needs more time</div></div>
+          <div class="msg">${escapeHtml(who)} asked for more time. Active: <b>${t.activeMin.toFixed(1)} of ${t.assignedMin} min</b> budgeted.</div>
+          <div class="cmdrow">
+            <button class="btn approve" data-type="extend" data-id="${escapeHtml(id)}">Extend</button>
+          </div>`;
+        queueEl.appendChild(card);
+      });
+      reviewIds.forEach(id=>{
+        const t = tasks[id];
+        const who = employeeLabel(t.assignedTo) || t.assignedTo || 'unknown employee';
+        const card = document.createElement('div');
+        card.className = 'cmdcard effort';
+        card.innerHTML = `
+          <div class="hd"><div class="zn">${escapeHtml(t.name)}</div><div class="age">review requested</div></div>
+          <div class="msg">${escapeHtml(who)} asked a supervisor to look at this before it's marked done.</div>
+          <div class="cmdrow">
+            <button class="btn approve" data-type="review" data-id="${escapeHtml(id)}">Resolve — reviewed with employee</button>
+          </div>`;
+        queueEl.appendChild(card);
+      });
       queueEl.querySelectorAll('button[data-zone]').forEach(btn=>{
         btn.onclick = ()=>{ postAction(btn.dataset.zone, btn.dataset.a); };
       });
       queueEl.querySelectorAll('button[data-type="task"]').forEach(btn=>{
         btn.onclick = ()=>{ postTaskAction(btn.dataset.id, btn.dataset.a); };
       });
+      queueEl.querySelectorAll('button[data-type="extend"]').forEach(btn=>{
+        btn.onclick = ()=>{
+          const minutes = parseFloat(window.prompt('Extend by how many minutes?', '15'));
+          if(!minutes || minutes <= 0) return;
+          extendTask(btn.dataset.id, minutes);
+        };
+      });
+      queueEl.querySelectorAll('button[data-type="review"]').forEach(btn=>{
+        btn.onclick = ()=>{ resolveAfterReview(btn.dataset.id); };
+      });
     }
-    document.getElementById('queueCount').textContent = (pendingZoneIds.length+pendingTasks.length) + ' pending';
+    document.getElementById('queueCount').textContent = (pendingZoneIds.length+pendingTaskCount) + ' pending';
   }
 
   function updateStats(){
