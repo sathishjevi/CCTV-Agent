@@ -23,6 +23,7 @@ class _SupervisorDashboardScreenState extends State<SupervisorDashboardScreen> {
   List<ZoneRecord> _zoneDirectory = [];
   List<QueueItem> _queue = [];
   List<DashboardTask> _tasks = [];
+  Map<String, String> _employeeNames = {};
 
   @override
   void initState() {
@@ -41,11 +42,13 @@ class _SupervisorDashboardScreenState extends State<SupervisorDashboardScreen> {
         ApiClient.instance.fetchSupervisorQueue(),
         ApiClient.instance.fetchDashboardTasks(),
         ApiClient.instance.fetchZones(),
+        ApiClient.instance.fetchEmployees(),
       ]);
       if (!mounted) return;
       setState(() {
         _zoneStates = results[0] as List<ZoneState>;
         _zoneDirectory = (results[3] as List<ZoneRecord>).where((z) => z.active).toList();
+        _employeeNames = {for (final e in results[4] as List<EmployeeRecord>) e.employeeNumber: e.name};
         _queue = results[1] as List<QueueItem>;
         _tasks = (results[2] as List<DashboardTask>).where((t) => t.isOpen).toList();
       });
@@ -125,22 +128,36 @@ class _SupervisorDashboardScreenState extends State<SupervisorDashboardScreen> {
           ),
           _zoneCoverage(),
           const SizedBox(height: 24),
-          _sectionHeader('Supervisor queue (${_queue.length})'),
-          if (_queue.isEmpty) const Text('Nothing needs attention right now.'),
+          _sectionHeader('SUPERVISOR QUEUE', '${_queue.length} pending'),
+          if (_queue.isEmpty) const Text('No pending items.'),
           ..._queue.map(_queueCard),
           const SizedBox(height: 24),
-          _sectionHeader('Active tasks (${_tasks.length})'),
-          if (_tasks.isEmpty) const Text('No open tasks.'),
+          _sectionHeader('ASSIGNED TASKS — EFFORT TRACKING', '${_tasks.length} active'),
+          if (_tasks.isEmpty) const Text('No tasks assigned yet.'),
           ..._tasks.map(_taskCard),
         ],
       ),
     );
   }
 
-  Widget _sectionHeader(String text) => Padding(
+  Widget _sectionHeader(String text, String count) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
-        child: Text(text, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(text,
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5)),
+            ),
+            Text(count, style: Theme.of(context).textTheme.bodySmall),
+          ],
+        ),
       );
+
+  String _employeeLabel(String? number) {
+    if (number == null) return 'nobody';
+    final name = _employeeNames[number];
+    return name == null ? '#$number' : '$name (#$number)';
+  }
 
   static const _statusOrder = ['covered', 'gap', 'nudge', 'command', 'escalated'];
   static const _statusLabels = {
@@ -293,15 +310,23 @@ class _SupervisorDashboardScreenState extends State<SupervisorDashboardScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(task.taskName, style: const TextStyle(fontWeight: FontWeight.bold)),
-            Text('${task.zoneName} · assigned to ${task.assignedTo ?? "nobody"}'),
+            Text('${task.zoneName} · assigned to ${_employeeLabel(task.assignedTo)}'),
             Text('Active: ${task.activeMinutes.toStringAsFixed(1)} · '
                 'Elapsed: ${task.elapsedMinutes.toStringAsFixed(1)} · Budget: ${task.assignedMinutes.toStringAsFixed(0)} min'),
             const SizedBox(height: 8),
             Row(
               children: [
-                FilledButton(
-                    onPressed: () => _runAction(() => ApiClient.instance.dashboardCompleteTask(task.taskId)),
-                    child: const Text('Mark complete')),
+                // Same rule as the web card: a task reopened via "Follow up with
+                // Employee" is closed with "Reviewed — looks good" (resolve-review),
+                // not Mark complete, which would just re-run the flag check.
+                if (task.reopenedForReview)
+                  FilledButton(
+                      onPressed: () => _runAction(() => ApiClient.instance.dashboardResolveReview(task.taskId)),
+                      child: const Text('Reviewed — looks good'))
+                else
+                  FilledButton(
+                      onPressed: () => _runAction(() => ApiClient.instance.dashboardCompleteTask(task.taskId)),
+                      child: const Text('Mark complete')),
                 const SizedBox(width: 8),
                 OutlinedButton(
                     onPressed: () => _reassignDialog(task.taskId), child: const Text('Reassign')),

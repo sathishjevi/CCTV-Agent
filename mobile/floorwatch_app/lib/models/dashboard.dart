@@ -24,6 +24,7 @@ class DashboardTask {
   final String status; // open | flagged | resolved
   final String workflowStatus;
   final String? assignedTo;
+  final bool reopenedForReview;
 
   DashboardTask({
     required this.taskId,
@@ -36,6 +37,7 @@ class DashboardTask {
     required this.status,
     required this.workflowStatus,
     required this.assignedTo,
+    required this.reopenedForReview,
   });
 
   bool get isOpen => status == 'open';
@@ -52,6 +54,7 @@ class DashboardTask {
       status: json['status'] as String? ?? 'open',
       workflowStatus: json['workflow_status'] as String? ?? 'unassigned',
       assignedTo: json['assigned_to'] as String?,
+      reopenedForReview: json['reopened_for_review'] as bool? ?? false,
     );
   }
 }

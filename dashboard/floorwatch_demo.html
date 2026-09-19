@@ -884,7 +884,11 @@
         reassignTask(taskId, select.value);
       };
     });
-    document.getElementById('taskCount').textContent = ids.length + ' active';
+    // Only tasks still open count as "active" — resolved/completed ones stay
+    // listed above for reference but were inflating this number. Flagged tasks
+    // are excluded too (they sit in the Supervisor Queue, same as mobile).
+    document.getElementById('taskCount').textContent =
+      ids.filter(id => tasks[id].status==='ok' || tasks[id].status==='low').length + ' active';
   }
 
   async function reassignTask(taskId, employeeNumber){
