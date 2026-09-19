@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../models/admin.dart';
 import '../models/dashboard.dart';
 import '../services/api_client.dart';
 
@@ -18,7 +19,8 @@ class SupervisorDashboardScreen extends StatefulWidget {
 class _SupervisorDashboardScreenState extends State<SupervisorDashboardScreen> {
   bool _loading = true;
   String? _error;
-  List<ZoneState> _zones = [];
+  List<ZoneState> _zoneStates = [];
+  List<ZoneRecord> _zoneDirectory = [];
   List<QueueItem> _queue = [];
   List<DashboardTask> _tasks = [];
 
@@ -38,10 +40,12 @@ class _SupervisorDashboardScreenState extends State<SupervisorDashboardScreen> {
         ApiClient.instance.fetchZoneStates(),
         ApiClient.instance.fetchSupervisorQueue(),
         ApiClient.instance.fetchDashboardTasks(),
+        ApiClient.instance.fetchZones(),
       ]);
       if (!mounted) return;
       setState(() {
-        _zones = results[0] as List<ZoneState>;
+        _zoneStates = results[0] as List<ZoneState>;
+        _zoneDirectory = (results[3] as List<ZoneRecord>).where((z) => z.active).toList();
         _queue = results[1] as List<QueueItem>;
         _tasks = (results[2] as List<DashboardTask>).where((t) => t.isOpen).toList();
       });
@@ -107,7 +111,7 @@ class _SupervisorDashboardScreenState extends State<SupervisorDashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading && _tasks.isEmpty && _queue.isEmpty && _zones.isEmpty) {
+    if (_loading && _tasks.isEmpty && _queue.isEmpty && _zoneDirectory.isEmpty) {
       return const Center(child: CircularProgressIndicator());
     }
     return RefreshIndicator(
@@ -119,8 +123,7 @@ class _SupervisorDashboardScreenState extends State<SupervisorDashboardScreen> {
             padding: const EdgeInsets.only(bottom: 12),
             child: Text(_error!, style: const TextStyle(color: Colors.red)),
           ),
-          _sectionHeader('Zone coverage'),
-          _zoneSummary(),
+          _zoneCoverage(),
           const SizedBox(height: 24),
           _sectionHeader('Supervisor queue (${_queue.length})'),
           if (_queue.isEmpty) const Text('Nothing needs attention right now.'),
@@ -139,29 +142,93 @@ class _SupervisorDashboardScreenState extends State<SupervisorDashboardScreen> {
         child: Text(text, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
       );
 
-  Widget _zoneSummary() {
-    final covered = _zones.where((z) => z.status == 'covered').length;
-    final gaps = _zones.where((z) => z.status != 'covered').length;
+  static const _statusOrder = ['covered', 'gap', 'nudge', 'command', 'escalated'];
+  static const _statusLabels = {
+    'covered': 'Covered',
+    'gap': 'Gap detected',
+    'nudge': 'Nudge sent',
+    'command': 'Command issued',
+    'escalated': 'Escalated',
+  };
+
+  // Same source as the web dashboard's Floor Status panel: the active zone
+  // directory, each defaulting to "covered" until a live state says otherwise
+  // (/api/state only lists zones the engine has seen an event for).
+  String _statusFor(String zoneId) {
+    for (final z in _zoneStates) {
+      if (z.zoneId == zoneId) return z.status;
+    }
+    return 'covered';
+  }
+
+  String _coverageSummary() {
+    if (_zoneDirectory.isEmpty) return 'No zones configured';
+    final counts = <String, int>{};
+    for (final z in _zoneDirectory) {
+      final s = _statusFor(z.zoneId);
+      counts[s] = (counts[s] ?? 0) + 1;
+    }
+    final keys = [..._statusOrder.where(counts.containsKey), ...counts.keys.where((k) => !_statusOrder.contains(k))];
+    return keys.map((k) => '${counts[k]} ${(_statusLabels[k] ?? k).toLowerCase()}').join(', ');
+  }
+
+  Color _statusColor(String status) {
+    switch (status) {
+      case 'covered':
+        return Colors.green;
+      case 'escalated':
+        return Colors.red;
+      default:
+        return Colors.orange;
+    }
+  }
+
+  Widget _zoneCoverage() {
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('$covered covered · $gaps needing attention'),
-            const SizedBox(height: 8),
-            Wrap(
+      child: ExpansionTile(
+        initiallyExpanded: false,
+        shape: const Border(),
+        collapsedShape: const Border(),
+        title: const Text('FLOOR STATUS — COVERAGE',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, letterSpacing: 0.5)),
+        subtitle: Text('${_zoneDirectory.length} zones · ${_coverageSummary()}'),
+        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        children: [
+          if (_zoneDirectory.isEmpty) const Padding(padding: EdgeInsets.all(8), child: Text('No zones configured yet.')),
+          LayoutBuilder(builder: (context, constraints) {
+            final width = (constraints.maxWidth - 8) / 2;
+            return Wrap(
               spacing: 8,
               runSpacing: 8,
-              children: _zones
-                  .map((z) => Chip(
-                        label: Text('${z.zoneId}: ${z.status}'),
-                        backgroundColor: z.status == 'covered' ? Colors.green.shade100 : Colors.orange.shade100,
-                      ))
-                  .toList(),
-            ),
-          ],
-        ),
+              children: _zoneDirectory.map((z) {
+                final status = _statusFor(z.zoneId);
+                final color = _statusColor(status);
+                return Container(
+                  width: width,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: color.withValues(alpha: 0.5)),
+                    borderRadius: BorderRadius.circular(8),
+                    color: color.withValues(alpha: 0.06),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(z.name, style: const TextStyle(fontWeight: FontWeight.bold)),
+                      Text(z.roleTag.toUpperCase(), style: Theme.of(context).textTheme.labelSmall),
+                      const SizedBox(height: 8),
+                      Row(children: [
+                        Icon(Icons.circle, size: 8, color: color),
+                        const SizedBox(width: 6),
+                        Text(_statusLabels[status] ?? status, style: TextStyle(color: color, fontSize: 12)),
+                      ]),
+                    ],
+                  ),
+                );
+              }).toList(),
+            );
+          }),
+        ],
       ),
     );
   }
