@@ -965,12 +965,23 @@
     // confusing sitting next to an unrelated "On track" pace badge).
     // Both now pull a card into this same queue, same as a flag does.
     const flaggedIds = Object.keys(tasks).filter(id=>tasks[id].status==='flagged');
-    // task_resolved doesn't reset workflowStatus client-side (it only
-    // ever meant "assignment/conversation stage" before this, never
-    // needed resetting on resolve) — excluding status==='resolved'
-    // here stops a just-reviewed task from lingering in the queue.
-    const extensionIds = Object.keys(tasks).filter(id=>tasks[id].workflowStatus==='extension_requested' && tasks[id].status!=='resolved');
-    const reviewIds = Object.keys(tasks).filter(id=>tasks[id].workflowStatus==='review_requested' && tasks[id].status!=='resolved');
+    // Neither task_flag NOR task_resolved reset workflowStatus
+    // client-side (it was only ever meant to track "assignment/
+    // conversation stage" before this queue existed) — so a task that
+    // had review_requested/extension_requested right before being
+    // completed (complete_task() always sets workflow_status to
+    // "completed" server-side, whether it resolves cleanly or gets
+    // flagged for low active time) kept showing its STALE workflow
+    // badge and queue card, duplicating the real "flagged" card for the
+    // exact same task. Requiring status to still be 'ok'/'low' (the
+    // same "still actually open" check used elsewhere in this file)
+    // is the fix — a flagged OR resolved task is never still
+    // "awaiting an extension/review reply" no matter what its last
+    // known workflowStatus says.
+    const extensionIds = Object.keys(tasks)
+      .filter(id=>tasks[id].workflowStatus==='extension_requested' && (tasks[id].status==='ok'||tasks[id].status==='low'));
+    const reviewIds = Object.keys(tasks)
+      .filter(id=>tasks[id].workflowStatus==='review_requested' && (tasks[id].status==='ok'||tasks[id].status==='low'));
     const pendingTaskCount = flaggedIds.length + extensionIds.length + reviewIds.length;
     if(pendingZoneIds.length===0 && pendingTaskCount===0){
       queueEl.innerHTML = '<div class="empty">No pending items.</div>';
@@ -1152,6 +1163,14 @@
           tasks[evt.task_id].status = 'flagged';
           tasks[evt.task_id].activeMin = evt.active_minutes;
           tasks[evt.task_id].elapsedMin = frozenElapsed;
+          // complete_task() ALWAYS sets workflow_status to "completed"
+          // server-side before deciding flagged vs resolved — leaving
+          // a stale "review_requested"/"extension_requested" here made
+          // the task's own card badge (and the Supervisor Queue card)
+          // keep showing a request that no longer exists, alongside the
+          // new flag, and let a Resolve/Extend tap 400 against the real
+          // current state.
+          tasks[evt.task_id].workflowStatus = 'completed';
         }
         // deduped by task_id — a task reopened (confirmed) and flagged
         // again is still the same flag being worked through, not a
@@ -1165,6 +1184,13 @@
           tasks[evt.task_id].status = 'resolved'; tasks[evt.task_id].activeMin = evt.active_minutes;
           tasks[evt.task_id].reopenedForReview = false; // terminal either way (auto/dismissed/reviewed)
           tasks[evt.task_id].resolutionType = evt.action_type || null; // "resolved"|"reviewed"|"dismissed" — picks the status label below
+          // Whichever path got here (auto-resolved, resolve_after_review,
+          // or dismiss_flag leaving it unchanged from an earlier
+          // complete_task() call), the true workflow_status is always
+          // "completed" by this point — same staleness fix as task_flag
+          // above, so a resolved task's card never keeps showing a
+          // request badge that no longer applies.
+          tasks[evt.task_id].workflowStatus = 'completed';
         }
         if(evt.action_type === 'dismissed'){
           // a dismissed flag turned out to be a false alarm — it never
