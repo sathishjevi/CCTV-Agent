@@ -27,7 +27,7 @@ from floorwatch_logging import get_logger
 
 _log = get_logger("rules-engine.employee_directory")
 
-DIRECTORY_ROLES = {"employee", "supervisor"}
+DIRECTORY_ROLES = {"employee", "supervisor", "admin"}
 NOTIFY_CHANNELS = {"sms", "fcm"}
 
 

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import '../models/admin.dart';
 import '../models/dashboard.dart';
 import '../models/task.dart';
 import 'token_storage.dart';
@@ -67,6 +68,13 @@ class ApiClient {
 
   Future<http.Response> _post(String path, {required Map<String, String> headers, String? body}) {
     return http.post(_uri(path), headers: headers, body: body).timeout(
+          _requestTimeout,
+          onTimeout: () => throw ApiException(0, 'Request timed out — check your connection and try again.'),
+        );
+  }
+
+  Future<http.Response> _put(String path, {required Map<String, String> headers, String? body}) {
+    return http.put(_uri(path), headers: headers, body: body).timeout(
           _requestTimeout,
           onTimeout: () => throw ApiException(0, 'Request timed out — check your connection and try again.'),
         );
@@ -218,6 +226,174 @@ class ApiClient {
       '/api/employee/dashboard/tasks/$taskId/reassign',
       headers: await _authHeaders(),
       body: jsonEncode({'new_assignee': newAssignee}),
+    );
+    _decode(resp);
+  }
+
+  // ── Manage Employees (require_employee_supervisor: supervisor OR admin) ─
+
+  Future<List<EmployeeRecord>> fetchEmployees() async {
+    final resp = await _get('/api/employee/dashboard/employees', headers: await _authHeaders());
+    final body = _decode(resp);
+    final list = body['employees'] as List<dynamic>;
+    return list.map((e) => EmployeeRecord.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<void> addEmployee({
+    required String employeeNumber,
+    required String name,
+    required String role,
+    required String department,
+    required String phone,
+    bool isPrimaryContact = false,
+  }) async {
+    final resp = await _post(
+      '/api/employee/dashboard/employees',
+      headers: await _authHeaders(),
+      body: jsonEncode({
+        'employee_number': employeeNumber, 'name': name, 'role': role,
+        'department': department, 'phone': phone, 'is_primary_contact': isPrimaryContact,
+      }),
+    );
+    _decode(resp);
+  }
+
+  Future<void> editEmployee({
+    required String employeeNumber,
+    required String name,
+    required String role,
+    required String department,
+    required String phone,
+    bool isPrimaryContact = false,
+  }) async {
+    final resp = await _put(
+      '/api/employee/dashboard/employees/$employeeNumber',
+      headers: await _authHeaders(),
+      body: jsonEncode({
+        'name': name, 'role': role, 'department': department, 'phone': phone,
+        'is_primary_contact': isPrimaryContact,
+      }),
+    );
+    _decode(resp);
+  }
+
+  Future<void> deactivateEmployee(String employeeNumber) async {
+    final resp = await _post(
+      '/api/employee/dashboard/employees/$employeeNumber/deactivate', headers: await _authHeaders());
+    _decode(resp);
+  }
+
+  Future<void> reactivateEmployee(String employeeNumber) async {
+    final resp = await _post(
+      '/api/employee/dashboard/employees/$employeeNumber/reactivate', headers: await _authHeaders());
+    _decode(resp);
+  }
+
+  Future<void> setEmployeePrimaryContact(String employeeNumber, bool isPrimaryContact) async {
+    final resp = await _post(
+      '/api/employee/dashboard/employees/$employeeNumber/set-primary-contact',
+      headers: await _authHeaders(),
+      body: jsonEncode({'is_primary_contact': isPrimaryContact}),
+    );
+    _decode(resp);
+  }
+
+  Future<void> setEmployeePassword(String employeeNumber, String password) async {
+    final resp = await _post(
+      '/api/employee/dashboard/employees/$employeeNumber/set-password',
+      headers: await _authHeaders(),
+      body: jsonEncode({'password': password}),
+    );
+    _decode(resp);
+  }
+
+  // ── Manage Zones (require_employee_supervisor) ──────────────────────
+
+  Future<List<ZoneRecord>> fetchZones() async {
+    final resp = await _get('/api/employee/dashboard/zones', headers: await _authHeaders());
+    final body = _decode(resp);
+    final list = body['zones'] as List<dynamic>;
+    return list.map((e) => ZoneRecord.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<void> addZone({
+    required String zoneId,
+    required String name,
+    required String roleTag,
+    bool staffed = true,
+  }) async {
+    final resp = await _post(
+      '/api/employee/dashboard/zones',
+      headers: await _authHeaders(),
+      body: jsonEncode({'zone_id': zoneId, 'name': name, 'role_tag': roleTag, 'staffed': staffed}),
+    );
+    _decode(resp);
+  }
+
+  Future<void> deactivateZone(String zoneId) async {
+    final resp =
+        await _post('/api/employee/dashboard/zones/$zoneId/deactivate', headers: await _authHeaders());
+    _decode(resp);
+  }
+
+  Future<void> reactivateZone(String zoneId) async {
+    final resp =
+        await _post('/api/employee/dashboard/zones/$zoneId/reactivate', headers: await _authHeaders());
+    _decode(resp);
+  }
+
+  Future<void> setZoneStaffed(String zoneId, bool staffed) async {
+    final resp = await _post(
+      '/api/employee/dashboard/zones/$zoneId/set-staffed',
+      headers: await _authHeaders(),
+      body: jsonEncode({'staffed': staffed}),
+    );
+    _decode(resp);
+  }
+
+  // ── History (require_employee_supervisor) ───────────────────────────
+
+  Future<List<HistoryEvent>> fetchHistory() async {
+    final resp = await _get('/api/employee/dashboard/history', headers: await _authHeaders());
+    final list = _decodeList(resp);
+    return list.map((e) => HistoryEvent.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  // ── Manage Users — dashboard accounts (require_employee_admin) ──────
+
+  Future<List<DashboardUserAccount>> fetchDashboardUsers() async {
+    final resp = await _get('/api/employee/admin/users', headers: await _authHeaders());
+    final body = _decode(resp);
+    final list = body['users'] as List<dynamic>;
+    return list.map((e) => DashboardUserAccount.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<void> createDashboardUser(String username, String password, String role) async {
+    final resp = await _post(
+      '/api/employee/admin/users',
+      headers: await _authHeaders(),
+      body: jsonEncode({'username': username, 'password': password, 'role': role}),
+    );
+    _decode(resp);
+  }
+
+  Future<void> deactivateDashboardUser(String username) async {
+    final resp =
+        await _post('/api/employee/admin/users/$username/deactivate', headers: await _authHeaders());
+    _decode(resp);
+  }
+
+  Future<void> reactivateDashboardUser(String username) async {
+    final resp =
+        await _post('/api/employee/admin/users/$username/reactivate', headers: await _authHeaders());
+    _decode(resp);
+  }
+
+  Future<void> resetDashboardUserPassword(String username, String newPassword) async {
+    final resp = await _post(
+      '/api/employee/admin/users/$username/reset-password',
+      headers: await _authHeaders(),
+      body: jsonEncode({'new_password': newPassword}),
     );
     _decode(resp);
   }

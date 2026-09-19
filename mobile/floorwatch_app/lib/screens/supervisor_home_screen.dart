@@ -1,15 +1,22 @@
 import 'package:flutter/material.dart';
 
 import '../services/token_storage.dart';
+import 'history_screen.dart';
+import 'manage_employees_screen.dart';
+import 'manage_users_screen.dart';
+import 'manage_zones_screen.dart';
 import 'phone_entry_screen.dart';
 import 'supervisor_dashboard_screen.dart';
 import 'task_list_screen.dart';
 
 /// Landing screen for a supervisor login: a top tab bar with "My Tasks"
 /// (their own self-assigned tasks — the same screen a plain employee
-/// gets) and "Dashboard" (the supervisor mobile dashboard). A plain
-/// employee never reaches this screen at all — see phone_entry_screen.dart's
-/// role-based routing after login.
+/// gets) and "Dashboard" (the supervisor mobile dashboard), plus an
+/// overflow menu mirroring the web dashboard's top menu (Manage
+/// Employees / Manage Zones / History / Manage Users) — 1:1 parity with
+/// the web dashboard rather than cramming 6 tabs into a phone-width
+/// TabBar. A plain employee never reaches this screen at all — see
+/// phone_entry_screen.dart's role-based routing after login.
 class SupervisorHomeScreen extends StatefulWidget {
   const SupervisorHomeScreen({super.key});
 
@@ -19,6 +26,7 @@ class SupervisorHomeScreen extends StatefulWidget {
 
 class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with SingleTickerProviderStateMixin {
   late final TabController _tabController;
+  String _role = 'supervisor';
 
   @override
   void initState() {
@@ -27,6 +35,13 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
     // tab is Dashboard (index 1) — they're checking on the floor first,
     // not their own task list.
     _tabController = TabController(length: 2, vsync: this, initialIndex: 1);
+    _loadRole();
+  }
+
+  Future<void> _loadRole() async {
+    final role = await TokenStorage.instance.readRole();
+    if (!mounted) return;
+    setState(() => _role = role ?? 'supervisor');
   }
 
   @override
@@ -56,7 +71,36 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
             Tab(icon: Icon(Icons.dashboard), text: 'Dashboard'),
           ],
         ),
-        actions: [IconButton(icon: const Icon(Icons.logout), onPressed: _logout)],
+        actions: [
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) {
+              switch (value) {
+                case 'employees':
+                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ManageEmployeesScreen()));
+                  break;
+                case 'zones':
+                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ManageZonesScreen()));
+                  break;
+                case 'history':
+                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const HistoryScreen()));
+                  break;
+                case 'users':
+                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ManageUsersScreen()));
+                  break;
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'employees', child: Text('Manage Employees')),
+              const PopupMenuItem(value: 'zones', child: Text('Manage Zones')),
+              const PopupMenuItem(value: 'history', child: Text('History')),
+              // Admin-only, same gate as the web dashboard's manageUsersBtn
+              // (role === 'admin').
+              if (_role == 'admin') const PopupMenuItem(value: 'users', child: Text('Manage Users')),
+            ],
+          ),
+          IconButton(icon: const Icon(Icons.logout), onPressed: _logout),
+        ],
       ),
       body: TabBarView(
         controller: _tabController,

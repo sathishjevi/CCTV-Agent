@@ -198,14 +198,30 @@ async def require_employee_supervisor(user: dict = Depends(require_employee)) ->
     """A supervisor's mobile-app Dashboard tab — same employee token as
     everything else under /api/employee/, just additionally requiring
     the resolved employee_directory record's own `role` to be
-    "supervisor". Deliberately NOT require_auth/require_supervisor: this
+    "supervisor" OR "admin" (mirrors the web dashboard's own
+    `role === 'admin' || role === 'supervisor'` gate on Manage
+    Employees/Manage Zones — an admin can do everything a supervisor
+    can, plus the admin-only sections behind require_employee_admin
+    below). Deliberately NOT require_auth/require_supervisor: this
     identity has no dashboard username/password account and was never
     meant to satisfy that check (see make_employee_auth_dependency's
     docstring) — it's the exact same phone+password login every
     employee uses, just gated on directory role rather than a second,
     separate account."""
-    if user["employee"].get("role") != "supervisor":
+    if user["employee"].get("role") not in ("supervisor", "admin"):
         raise HTTPException(status_code=403, detail="Supervisor role required")
+    return user
+
+
+async def require_employee_admin(user: dict = Depends(require_employee)) -> dict:
+    """The mobile app's admin-only sections (Manage Users — dashboard
+    username/password accounts, unrelated to employee_directory but
+    reachable here for a 1:1 mirror of the web dashboard's own
+    admin-only "Manage Users" button). Every require_employee_admin
+    caller also satisfies require_employee_supervisor's check, matching
+    the web dashboard's own admin-is-a-superset-of-supervisor model."""
+    if user["employee"].get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
     return user
 
 
@@ -1221,8 +1237,8 @@ async def add_employee(body: AddEmployeeRequest, user=Depends(require_supervisor
     ok, reason = validate_phone(body.phone)
     if not ok:
         return JSONResponse(status_code=400, content={"error": reason})
-    if body.role not in ("employee", "supervisor"):
-        return JSONResponse(status_code=400, content={"error": "role must be 'employee' or 'supervisor'"})
+    if body.role not in ("employee", "supervisor", "admin"):
+        return JSONResponse(status_code=400, content={"error": "role must be 'employee', 'supervisor', or 'admin'"})
     if not body.department.strip():
         return JSONResponse(status_code=400, content={"error": "department is required"})
     ok, reason = validate_channel(body.channel)
@@ -1277,8 +1293,8 @@ async def edit_employee(employee_number: str, body: EditEmployeeRequest, user=De
     ok, reason = validate_phone(body.phone)
     if not ok:
         return JSONResponse(status_code=400, content={"error": reason})
-    if body.role not in ("employee", "supervisor"):
-        return JSONResponse(status_code=400, content={"error": "role must be 'employee' or 'supervisor'"})
+    if body.role not in ("employee", "supervisor", "admin"):
+        return JSONResponse(status_code=400, content={"error": "role must be 'employee', 'supervisor', or 'admin'"})
     if not body.department.strip():
         return JSONResponse(status_code=400, content={"error": "department is required"})
     ok, reason = validate_primary_contact(body.role, body.is_primary_contact)
@@ -1761,6 +1777,241 @@ async def employee_dashboard_resolve_review(task_id: str, user=Depends(require_e
     reply = await submit_command(
         cluster_redis, "resolve_after_review", {"task_id": task_id, "supervisor_id": f"employee:{user['sub']}"})
     return _command_reply_to_response(reply, error_status=400)
+
+
+# ── Supervisor mobile dashboard, continued — Manage Employees, Manage
+# Zones, and History, exactly mirroring the web dashboard's own
+# require_supervisor-gated endpoints (which the web UI shows to
+# admin-OR-supervisor dashboard accounts — see manageEmployeesBtn/
+# manageZonesBtn's visibility logic in floorwatch_demo.html). Same
+# validation, same underlying employee_directory/zone_directory calls.
+
+@app.get("/api/employee/dashboard/employees")
+async def employee_dashboard_list_employees(
+    department: str | None = None, user=Depends(require_employee_supervisor)
+):
+    return {"employees": employee_directory.list_all(department=department)}
+
+
+@app.post("/api/employee/dashboard/employees")
+async def employee_dashboard_add_employee(body: AddEmployeeRequest, user=Depends(require_employee_supervisor)):
+    ok, reason = validate_employee_number(body.employee_number)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    ok, reason = validate_phone(body.phone)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    if body.role not in ("employee", "supervisor", "admin"):
+        return JSONResponse(status_code=400, content={"error": "role must be 'employee', 'supervisor', or 'admin'"})
+    if not body.department.strip():
+        return JSONResponse(status_code=400, content={"error": "department is required"})
+    ok, reason = validate_channel(body.channel)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    if body.channel == "fcm" and not body.fcm_token:
+        return JSONResponse(status_code=400, content={
+            "error": "fcm_token is required when channel is 'fcm'"})
+    ok, reason = validate_primary_contact(body.role, body.is_primary_contact)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    await asyncio.to_thread(
+        employee_directory.add, body.employee_number, body.name, body.role, body.department,
+        body.phone, account_username=body.account_username, created_by=f"employee:{user['sub']}",
+        channel=body.channel, fcm_token=body.fcm_token, is_primary_contact=body.is_primary_contact)
+    log(f"employee:{user['sub']} added directory entry for employee {body.employee_number} "
+        f"({body.role}, {body.department}{', primary contact' if body.is_primary_contact else ''})")
+    return {"ok": True}
+
+
+@app.put("/api/employee/dashboard/employees/{employee_number}")
+async def employee_dashboard_edit_employee(
+    employee_number: str, body: EditEmployeeRequest, user=Depends(require_employee_supervisor)
+):
+    existing = await asyncio.to_thread(employee_directory.get, employee_number)
+    if existing is None:
+        return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
+    ok, reason = validate_phone(body.phone)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    if body.role not in ("employee", "supervisor", "admin"):
+        return JSONResponse(status_code=400, content={"error": "role must be 'employee', 'supervisor', or 'admin'"})
+    if not body.department.strip():
+        return JSONResponse(status_code=400, content={"error": "department is required"})
+    ok, reason = validate_primary_contact(body.role, body.is_primary_contact)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    await asyncio.to_thread(
+        employee_directory.add, employee_number, body.name, body.role, body.department,
+        body.phone, account_username=body.account_username, created_by=existing.get("created_by"),
+        channel=existing.get("channel"), fcm_token=existing.get("fcm_token"),
+        is_primary_contact=body.is_primary_contact)
+    log(f"employee:{user['sub']} edited directory entry for employee {employee_number}")
+    return {"ok": True}
+
+
+@app.post("/api/employee/dashboard/employees/{employee_number}/deactivate")
+async def employee_dashboard_deactivate_employee(employee_number: str, user=Depends(require_employee_supervisor)):
+    if not await asyncio.to_thread(employee_directory.set_active, employee_number, False):
+        return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
+    return {"ok": True}
+
+
+@app.post("/api/employee/dashboard/employees/{employee_number}/reactivate")
+async def employee_dashboard_reactivate_employee(employee_number: str, user=Depends(require_employee_supervisor)):
+    if not await asyncio.to_thread(employee_directory.set_active, employee_number, True):
+        return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
+    return {"ok": True}
+
+
+@app.post("/api/employee/dashboard/employees/{employee_number}/set-primary-contact")
+async def employee_dashboard_set_primary_contact(
+    employee_number: str, body: SetPrimaryContactRequest, user=Depends(require_employee_supervisor)
+):
+    existing = await asyncio.to_thread(employee_directory.get, employee_number)
+    if existing is None:
+        return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
+    ok, reason = validate_primary_contact(existing["role"], body.is_primary_contact)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    await asyncio.to_thread(employee_directory.set_primary_contact, employee_number, body.is_primary_contact)
+    return {"ok": True}
+
+
+@app.post("/api/employee/dashboard/employees/{employee_number}/set-password")
+async def employee_dashboard_set_employee_password(
+    employee_number: str, body: SetEmployeePasswordRequest, user=Depends(require_employee_supervisor)
+):
+    existing = await asyncio.to_thread(employee_directory.get, employee_number)
+    if existing is None:
+        return JSONResponse(status_code=404, content={"error": "employee not found"})
+    ok, reason = validate_password_strength(body.password)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    password_hash = hash_password(body.password)
+    await asyncio.to_thread(employee_directory.set_password_hash, employee_number, password_hash)
+    return {"ok": True}
+
+
+@app.get("/api/employee/dashboard/zones")
+async def employee_dashboard_list_zones(user=Depends(require_employee_supervisor)):
+    return {"zones": zone_directory.list_all()}
+
+
+@app.post("/api/employee/dashboard/zones")
+async def employee_dashboard_add_zone(body: AddZoneRequest, user=Depends(require_employee_supervisor)):
+    ok, reason = validate_zone_id(body.zone_id)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    if not body.name.strip():
+        return JSONResponse(status_code=400, content={"error": "name is required"})
+    if not body.role_tag.strip():
+        return JSONResponse(status_code=400, content={"error": "role_tag is required"})
+    await asyncio.to_thread(
+        zone_directory.add, body.zone_id, body.name, body.role_tag,
+        camera_id=body.camera_id, created_by=f"employee:{user['sub']}", staffed=body.staffed)
+    zones_meta[body.zone_id] = {"name": body.name, "role_tag": body.role_tag, "camera_id": body.camera_id}
+    log(f"employee:{user['sub']} added zone '{body.zone_id}' ({body.name})")
+    return {"ok": True}
+
+
+@app.post("/api/employee/dashboard/zones/{zone_id}/deactivate")
+async def employee_dashboard_deactivate_zone(zone_id: str, user=Depends(require_employee_supervisor)):
+    if not await asyncio.to_thread(zone_directory.set_active, zone_id, False):
+        return JSONResponse(status_code=404, content={"error": f"zone '{zone_id}' not found"})
+    zones_meta.pop(zone_id, None)
+    log(f"employee:{user['sub']} deactivated zone '{zone_id}'")
+    return {"ok": True}
+
+
+@app.post("/api/employee/dashboard/zones/{zone_id}/reactivate")
+async def employee_dashboard_reactivate_zone(zone_id: str, user=Depends(require_employee_supervisor)):
+    if not await asyncio.to_thread(zone_directory.set_active, zone_id, True):
+        return JSONResponse(status_code=404, content={"error": f"zone '{zone_id}' not found"})
+    z = await asyncio.to_thread(next, (z for z in zone_directory.list_all() if z["zone_id"] == zone_id), None)
+    if z:
+        zones_meta[zone_id] = {"name": z["name"], "role_tag": z["role_tag"], "camera_id": z["camera_id"]}
+    log(f"employee:{user['sub']} reactivated zone '{zone_id}'")
+    return {"ok": True}
+
+
+@app.post("/api/employee/dashboard/zones/{zone_id}/set-staffed")
+async def employee_dashboard_set_zone_staffed(
+    zone_id: str, body: SetZoneStaffedRequest, user=Depends(require_employee_supervisor)
+):
+    if not await asyncio.to_thread(zone_directory.set_staffed, zone_id, body.staffed):
+        return JSONResponse(status_code=404, content={"error": f"zone '{zone_id}' not found"})
+    log(f"employee:{user['sub']} set zone '{zone_id}'s staffed flag to {body.staffed}")
+    return {"ok": True}
+
+
+@app.get("/api/employee/dashboard/history")
+async def employee_dashboard_history(
+    event_type: str | None = None, zone_id: str | None = None, task_id: str | None = None,
+    since: str | None = None, until: str | None = None, limit: int = 200,
+    user=Depends(require_employee_supervisor),
+):
+    limit = max(1, min(limit, 1000))
+    return await asyncio.to_thread(
+        event_history.query, event_type=event_type, zone_id=zone_id, task_id=task_id,
+        since=since, until=until, limit=limit)
+
+
+# ── Supervisor mobile dashboard, admin-only — Manage Users (dashboard
+# username/password accounts). A different identity system entirely
+# from employee_directory, but mirrored here 1:1 for parity with the
+# web dashboard's own admin-only "Manage Users" button — same
+# users store, same validation, same rate limiting.
+
+@app.get("/api/employee/admin/users")
+async def employee_admin_list_users(user=Depends(require_employee_admin)):
+    return {"users": users.list_users()}
+
+
+@app.post("/api/employee/admin/users")
+async def employee_admin_create_user(body: CreateUserRequest, user=Depends(require_employee_admin)):
+    if body.role not in VALID_ROLES - {"service"}:
+        return JSONResponse(status_code=400, content={
+            "error": f"role must be one of: {sorted(VALID_ROLES - {'service'})}"})
+    ok, reason = validate_username(body.username)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    ok, reason = validate_password_strength(body.password, username=body.username)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    if users.user_exists(body.username):
+        return JSONResponse(status_code=409, content={"error": f"user '{body.username}' already exists"})
+    users.create_user(body.username, body.password, role=body.role, created_by=f"employee:{user['sub']}")
+    log(f"Admin employee:{user['sub']} created account '{body.username}' with role '{body.role}'")
+    return {"ok": True}
+
+
+@app.post("/api/employee/admin/users/{username}/deactivate")
+async def employee_admin_deactivate_user(username: str, user=Depends(require_employee_admin)):
+    if not users.set_active(username, False):
+        return JSONResponse(status_code=404, content={"error": f"user '{username}' not found"})
+    await revocation_store.revoke(username)
+    log(f"Admin employee:{user['sub']} deactivated account '{username}'")
+    return {"ok": True}
+
+
+@app.post("/api/employee/admin/users/{username}/reactivate")
+async def employee_admin_reactivate_user(username: str, user=Depends(require_employee_admin)):
+    if not users.set_active(username, True):
+        return JSONResponse(status_code=404, content={"error": f"user '{username}' not found"})
+    log(f"Admin employee:{user['sub']} reactivated account '{username}'")
+    return {"ok": True}
+
+
+@app.post("/api/employee/admin/users/{username}/reset-password")
+async def employee_admin_reset_password(username: str, body: ResetPasswordRequest, user=Depends(require_employee_admin)):
+    ok, reason = validate_password_strength(body.new_password, username=username)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    if not users.set_password(username, body.new_password, must_change_password=True):
+        return JSONResponse(status_code=404, content={"error": f"user '{username}' not found"})
+    await revocation_store.revoke(username)
+    log(f"Admin employee:{user['sub']} reset the password for account '{username}'")
+    return {"ok": True}
 
 
 # ── Inbound SMS webhook (Twilio) — the employee-reply half of the task

@@ -52,5 +52,15 @@
     "active": true,
     "created_at": "2026-08-23T17:23:21.873639+00:00",
     "created_by": "system:seed"
+  },
+  "mobile_test_zone": {
+    "zone_id": "mobile_test_zone",
+    "name": "Mobile Test Zone",
+    "role_tag": "usher",
+    "camera_id": null,
+    "active": true,
+    "created_at": "2026-09-19T04:08:57.367747+00:00",
+    "created_by": "employee:300",
+    "staffed": false
   }
 }
