@@ -235,7 +235,7 @@
         <label for="newUserRole">Role</label>
         <select id="newUserRole" style="width:100%;box-sizing:border-box;font-family:var(--sans);font-size:13px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:9px 10px;">
           <option value="viewer">viewer</option>
-          <option value="supervisor" selected>supervisor</option>
+          <option value="supervisor" selected>Secondary Admin</option>
           <option value="admin">admin</option>
         </select>
       </div>
@@ -1455,7 +1455,7 @@
       return `
       <tr style="border-bottom:1px solid var(--line);">
         <td style="padding:8px;overflow-wrap:anywhere;">${un}${isYou ? ' <span style="color:var(--dimmer);">(you)</span>' : ''}</td>
-        <td style="padding:8px;font-family:var(--mono);">${escapeHtml(u.role)}</td>
+        <td style="padding:8px;font-family:var(--mono);">${escapeHtml(u.role === 'supervisor' ? 'Secondary Admin' : u.role)}</td>
         <td style="padding:8px;color:${u.active ? 'var(--ok)' : 'var(--red)'};">${u.active ? 'active' : 'deactivated'}</td>
         <td style="padding:8px;font-family:var(--mono);font-size:11px;color:var(--dim);">${u.last_login_at ? escapeHtml(new Date(u.last_login_at).toLocaleString()) : 'never'}</td>
         <td style="padding:8px;">

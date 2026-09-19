@@ -83,7 +83,7 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
                 decoration: const InputDecoration(labelText: 'Role'),
                 items: const [
                   DropdownMenuItem(value: 'admin', child: Text('admin')),
-                  DropdownMenuItem(value: 'supervisor', child: Text('supervisor')),
+                  DropdownMenuItem(value: 'supervisor', child: Text('Secondary Admin')),
                   DropdownMenuItem(value: 'viewer', child: Text('viewer')),
                 ],
                 onChanged: (v) => setDialogState(() => role = v ?? 'supervisor'),
@@ -146,7 +146,7 @@ class _ManageUsersScreenState extends State<ManageUsersScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(u.username, style: const TextStyle(fontWeight: FontWeight.bold)),
-                              Text(u.role),
+                              Text(u.role == 'supervisor' ? 'Secondary Admin' : u.role),
                               Text(u.active ? 'active' : 'deactivated',
                                   style: TextStyle(color: u.active ? Colors.green : Colors.red)),
                               const SizedBox(height: 8),
