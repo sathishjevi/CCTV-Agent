@@ -27,6 +27,7 @@ class FloorwatchApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Floorwatch',
+      scaffoldMessengerKey: PushService.messengerKey,
       theme: ThemeData(
         useMaterial3: true,
         colorSchemeSeed: const Color(0xFF2F6FED), // matches the web dashboard's accent blue

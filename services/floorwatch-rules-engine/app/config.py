@@ -137,6 +137,10 @@ TWILIO_FROM_NUMBER = os.environ.get("FLOORWATCH_TWILIO_FROM_NUMBER", "")
 PUBLIC_BASE_URL = os.environ.get("FLOORWATCH_PUBLIC_BASE_URL", "")
 
 FCM_CREDENTIALS_PATH = os.environ.get("FLOORWATCH_FCM_CREDENTIALS_PATH", "")
+# The same Firebase service-account key, pasted whole as a JSON string instead
+# of a file path — Railway has no easy place to mount a file, but does have
+# variables. Used when FLOORWATCH_FCM_CREDENTIALS_PATH is empty.
+FCM_CREDENTIALS_JSON = os.environ.get("FLOORWATCH_FCM_CREDENTIALS_JSON", "")
 
 # Which concrete SMS gateway backs the "twilio"/"sms" channel — lets a
 # deployment switch providers (e.g. for India-market pricing: MSG91/

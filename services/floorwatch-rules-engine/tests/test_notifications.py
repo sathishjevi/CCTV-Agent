@@ -433,3 +433,60 @@ def test_dispatcher_records_notification_result_on_event(tmp_path):
     dispatcher("employee_nudge", event)
 
     assert event["notification_result"] == {"sent": True, "channel": "twilio_sms", "detail": "SM1"}
+
+
+# ── FCM sender: credentials source + delivery shape ────────────────────
+
+def _fake_firebase():
+    """A stand-in `firebase_admin` package (the real SDK needs a real
+    Firebase project). Returns (modules_dict, credentials_mock, messaging_mock)."""
+    firebase_admin = MagicMock()
+    firebase_admin._apps = {}
+    credentials = MagicMock()
+    messaging = MagicMock()
+    firebase_admin.credentials = credentials
+    firebase_admin.messaging = messaging
+    modules = {"firebase_admin": firebase_admin, "firebase_admin.credentials": credentials,
+               "firebase_admin.messaging": messaging}
+    return modules, credentials, messaging
+
+
+def test_fcm_sender_accepts_inline_json_credentials():
+    """Railway has variables, not mountable files — the service-account key
+    must be usable pasted whole as a JSON string."""
+    from notifications import FcmSender
+    modules, credentials, _messaging = _fake_firebase()
+    with patch.dict(sys.modules, modules):
+        FcmSender(credentials_json='{"type": "service_account", "project_id": "demo"}')
+    credentials.Certificate.assert_called_once_with({"type": "service_account", "project_id": "demo"})
+
+
+def test_fcm_sender_prefers_a_file_path_when_both_are_given():
+    from notifications import FcmSender
+    modules, credentials, _messaging = _fake_firebase()
+    with patch.dict(sys.modules, modules):
+        FcmSender(credentials_path="/secrets/key.json", credentials_json='{"a": 1}')
+    credentials.Certificate.assert_called_once_with("/secrets/key.json")
+
+
+def test_fcm_sender_sends_a_high_priority_notification():
+    from notifications import FcmSender
+    modules, _credentials, messaging = _fake_firebase()
+    messaging.send.return_value = "projects/demo/messages/1"
+    with patch.dict(sys.modules, modules):
+        sender = FcmSender(credentials_json='{"type": "service_account"}')
+        result = sender.send({"fcm_token": "device-token"}, "Task assigned")
+    assert result.sent is True and result.channel == "fcm"
+    messaging.AndroidConfig.assert_called_once_with(priority="high")
+    kwargs = messaging.Message.call_args.kwargs
+    assert kwargs["token"] == "device-token"
+
+
+def test_fcm_sender_without_a_token_skips_instead_of_guessing():
+    from notifications import FcmSender
+    modules, _credentials, messaging = _fake_firebase()
+    with patch.dict(sys.modules, modules):
+        sender = FcmSender(credentials_json='{"type": "service_account"}')
+        result = sender.send({"fcm_token": None}, "Task assigned")
+    assert result.sent is False and "no fcm token" in result.detail
+    messaging.send.assert_not_called()

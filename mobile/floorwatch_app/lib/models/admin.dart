@@ -83,16 +83,20 @@ class HistoryEvent {
   final String eventType;
   final String? actionType;
   final String? message;
+  final String? taskId;
   final String? taskName;
   final String? zoneName;
+  final String? resolvedBy;
   final String? timestamp;
 
   HistoryEvent({
     required this.eventType,
     required this.actionType,
     required this.message,
+    required this.taskId,
     required this.taskName,
     required this.zoneName,
+    required this.resolvedBy,
     required this.timestamp,
   });
 
@@ -101,8 +105,10 @@ class HistoryEvent {
       eventType: json['event_type'] as String? ?? '',
       actionType: json['action_type'] as String?,
       message: json['message'] as String?,
+      taskId: json['task_id'] as String?,
       taskName: json['task_name'] as String?,
       zoneName: json['zone_name'] as String?,
+      resolvedBy: json['resolved_by'] as String?,
       timestamp: json['timestamp'] as String?,
     );
   }

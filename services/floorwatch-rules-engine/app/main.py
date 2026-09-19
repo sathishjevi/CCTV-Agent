@@ -135,22 +135,53 @@ def _seed_admin_from_env():
 _seed_admin_from_env()
 
 
+def app_hint_for(event: dict, scope: dict):
+    """What (if anything) a mobile-app WebSocket connection is told about an
+    engine event. NEVER the event itself — only a "something changed,
+    refetch" hint, so the socket can't leak task/zone detail: the app
+    re-reads whatever it's allowed to see over its own authenticated REST
+    calls. `scope` is {"all": True} (supervisor/admin/dashboard accounts —
+    anything on the floor may matter) or {"employee": "<number>"} (a plain
+    employee — only events for a task currently or previously theirs)."""
+    if not scope.get("all"):
+        number = scope.get("employee")
+        if not number or number not in (event.get("assigned_to"), event.get("previous_assignee")):
+            return None
+    return {"hint": "refresh", "event_type": event.get("event_type"), "task_id": event.get("task_id")}
+
+
 class ConnectionManager:
     def __init__(self):
         self.active: set[WebSocket] = set()
+        # Mobile-app sockets (/ws/app) — kept apart from `active` (the web
+        # dashboard's full-event sockets) so they only ever receive hints.
+        self.app_scopes: dict[WebSocket, dict] = {}
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
         self.active.add(ws)
 
+    async def connect_app(self, ws: WebSocket, scope: dict):
+        await ws.accept()
+        self.app_scopes[ws] = scope
+
     def disconnect(self, ws: WebSocket):
         self.active.discard(ws)
+        self.app_scopes.pop(ws, None)
 
     async def broadcast(self, event: dict):
         dead = []
         for ws in self.active:
             try:
                 await ws.send_text(json.dumps(event))
+            except Exception:
+                dead.append(ws)
+        for ws, scope in list(self.app_scopes.items()):
+            hint = app_hint_for(event, scope)
+            if hint is None:
+                continue
+            try:
+                await ws.send_text(json.dumps(hint))
             except Exception:
                 dead.append(ws)
         for ws in dead:
@@ -1035,7 +1066,7 @@ async def coverage_ui():
 
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "shadow_mode": config.SHADOW_MODE, "connections": len(manager.active),
+    return {"ok": True, "shadow_mode": config.SHADOW_MODE, "connections": len(manager.active) + len(manager.app_scopes),
             "replica_id": REPLICA_ID, "is_leader": leadership.is_leader}
 
 
@@ -1558,6 +1589,36 @@ async def employee_login(body: EmployeeLoginRequest, request: Request):
     }
 
 
+class ChangeEmployeePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@app.post("/api/employee/auth/change-password")
+async def employee_change_password(body: ChangeEmployeePasswordRequest, user=Depends(require_employee)):
+    """Self-service, mirroring the dashboard's /api/change-password:
+    requires the CURRENT password, not just a valid token, so a phone
+    left unlocked can't be used to lock the real owner out. Shares the
+    per-phone login limiter so a stolen token can't be used to brute-force
+    the current password at full speed."""
+    employee = user["employee"]
+    phone = employee["phone"]
+    if not employee_login_rate_limiter_by_phone.allow(phone):
+        retry_after = employee_login_rate_limiter_by_phone.retry_after_seconds(phone)
+        return JSONResponse(
+            status_code=429, content={"error": "Too many attempts — try again shortly."},
+            headers={"Retry-After": str(int(retry_after) + 1)},
+        )
+    if not employee.get("password_hash") or not verify_password(body.current_password, employee["password_hash"]):
+        return JSONResponse(status_code=401, content={"error": "current password is incorrect"})
+    ok, reason = validate_password_strength(body.new_password)
+    if not ok:
+        return JSONResponse(status_code=400, content={"error": reason})
+    await asyncio.to_thread(
+        employee_directory.set_password_hash, employee["employee_number"], hash_password(body.new_password))
+    return {"ok": True}
+
+
 class SetEmployeePasswordRequest(BaseModel):
     password: str
 
@@ -1769,6 +1830,41 @@ async def employee_dashboard_reassign_task(
 @app.post("/api/employee/dashboard/tasks/{task_id}/complete")
 async def employee_dashboard_complete_task(task_id: str, user=Depends(require_employee_supervisor)):
     reply = await submit_command(cluster_redis, "complete_task", {"task_id": task_id})
+    return _command_reply_to_response(reply)
+
+
+class DashboardAssignTaskRequest(BaseModel):
+    task_name: str
+    zone_id: str
+    assigned_minutes: float
+    task_type: str | None = None
+    assigned_to: str | None = None  # employee_number — omit for an unassigned task
+
+
+@app.post("/api/employee/dashboard/tasks")
+async def employee_dashboard_assign_task(
+    body: DashboardAssignTaskRequest, user=Depends(require_employee_supervisor)
+):
+    reply = await submit_command(cluster_redis, "assign_task", {
+        "task_name": body.task_name, "zone_id": body.zone_id,
+        "assigned_minutes": body.assigned_minutes, "task_type": body.task_type,
+        "assigned_to": body.assigned_to,
+        "assigned_by": f"employee:{user['sub']}" if body.assigned_to else None,
+    })
+    return _command_reply_to_response(reply, error_status=400)
+
+
+@app.post("/api/employee/dashboard/queue/zone/{zone_id}/approve")
+async def employee_dashboard_approve_zone(zone_id: str, user=Depends(require_employee_supervisor)):
+    reply = await submit_command(
+        cluster_redis, "approve_zone", {"zone_id": zone_id, "supervisor_id": f"employee:{user['sub']}"})
+    return _command_reply_to_response(reply)
+
+
+@app.post("/api/employee/dashboard/queue/zone/{zone_id}/reassign")
+async def employee_dashboard_reassign_zone(zone_id: str, user=Depends(require_employee_supervisor)):
+    reply = await submit_command(
+        cluster_redis, "reassign_zone", {"zone_id": zone_id, "supervisor_id": f"employee:{user['sub']}"})
     return _command_reply_to_response(reply)
 
 
@@ -2190,9 +2286,43 @@ async def events_ws(ws: WebSocket):
     if payload is None:
         await ws.close(code=4401)
         return
+    # This socket streams EVERY event in full — dashboard accounts only. An
+    # employee-app token is valid (verify_ws_token only checks signature/
+    # expiry/revocation) but must never see other people's tasks; the app
+    # uses /ws/app, which only ever sends refresh hints.
+    if payload.get("role") == "employee":
+        await ws.close(code=4403)
+        return
     await manager.connect(ws)
     try:
         while True:
             await ws.receive_text()  # dashboard doesn't send anything; just keep the connection open
+    except WebSocketDisconnect:
+        manager.disconnect(ws)
+
+
+@app.websocket("/ws/app")
+async def app_events_ws(ws: WebSocket):
+    """Live-update channel for the mobile app. Sends {"hint": "refresh", ...}
+    when something the caller cares about changed (see app_hint_for) — the
+    app then refetches over authenticated REST. Accepts an employee token
+    (scoped to their own tasks, or everything for a supervisor/admin
+    employee) or a dashboard-account token (everything)."""
+    payload = await verify_ws_token(config.AUTH_SECRET, ws, revocation_store=revocation_store)
+    if payload is None:
+        await ws.close(code=4401)
+        return
+    if payload.get("role") == "employee":
+        employee = await asyncio.to_thread(employee_directory.get, payload["sub"])
+        if employee is None or not employee.get("active", True):
+            await ws.close(code=4401)
+            return
+        scope = {"all": True} if employee.get("role") in ("supervisor", "admin") else {"employee": payload["sub"]}
+    else:
+        scope = {"all": True}
+    await manager.connect_app(ws, scope)
+    try:
+        while True:
+            await ws.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(ws)

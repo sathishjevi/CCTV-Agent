@@ -1,5 +1,6 @@
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/material.dart';
 
 import 'api_client.dart';
 
@@ -9,19 +10,26 @@ import 'api_client.dart';
 /// token registration by POST /api/employee/device-token).
 ///
 /// REQUIRES a real Firebase project before this does anything:
-///   1. Create/reuse a Firebase project (the same one backing this
-///      repo's FLOORWATCH_FCM_CREDENTIALS_PATH on the backend, so
-///      tokens issued here are valid for that backend's Admin SDK).
-///   2. Android: add google-services.json to android/app/.
-///   3. iOS: add GoogleService-Info.plist to ios/Runner/, plus an APNs
-///      Auth Key uploaded to the Firebase project (see
-///      dazzling-hopping-comet.md's Phase 4 notes — needs a Mac/Xcode
-///      to actually build the iOS target at all).
-/// Without those files, Firebase.initializeApp() throws at startup —
-/// main.dart catches that and the app still runs, just without push.
+///   1. Create a Firebase project and add an Android app with package name
+///      com.floorwatch.floorwatch_app.
+///   2. Download its google-services.json into android/app/ and rebuild —
+///      android/app/build.gradle.kts applies the Google services plugin
+///      automatically when that file exists.
+///   3. Backend: Project settings > Service accounts > Generate new private
+///      key, then paste the whole JSON into the Railway variable
+///      FLOORWATCH_FCM_CREDENTIALS_JSON (or mount it and set
+///      FLOORWATCH_FCM_CREDENTIALS_PATH).
+///   4. iOS additionally needs GoogleService-Info.plist in ios/Runner/ and an
+///      APNs key uploaded to the Firebase project (needs a Mac/Xcode).
+/// Without those, Firebase.initializeApp() throws — callers catch that and
+/// the app still runs, just without push (SMS/dashboard behave as before).
 class PushService {
   PushService._();
   static final PushService instance = PushService._();
+
+  /// MaterialApp uses this so a push that arrives while the app is open can
+  /// show a banner (the OS only draws notifications for a backgrounded app).
+  static final GlobalKey<ScaffoldMessengerState> messengerKey = GlobalKey<ScaffoldMessengerState>();
 
   final _messaging = FirebaseMessaging.instance;
   bool _initialized = false;
@@ -44,6 +52,15 @@ class PushService {
     // whenever that happens, not just once at startup.
     _messaging.onTokenRefresh.listen((newToken) {
       ApiClient.instance.registerDeviceToken(newToken);
+    });
+
+    // Foreground: show the notification text in-app.
+    FirebaseMessaging.onMessage.listen((message) {
+      final body = message.notification?.body;
+      if (body == null || body.isEmpty) return;
+      messengerKey.currentState
+        ?..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(body), duration: const Duration(seconds: 6)));
     });
   }
 }

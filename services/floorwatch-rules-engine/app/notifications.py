@@ -271,11 +271,14 @@ class Fast2SmsSender:
 
 
 class FcmSender:
-    def __init__(self, credentials_path: str):
+    def __init__(self, credentials_path: str = "", credentials_json: str = ""):
+        import json
         import firebase_admin
         from firebase_admin import credentials
         if not firebase_admin._apps:
-            cred = credentials.Certificate(credentials_path)
+            # Inline JSON (a Railway variable) wins if a path isn't given.
+            source = json.loads(credentials_json) if (credentials_json and not credentials_path) else credentials_path
+            cred = credentials.Certificate(source)
             firebase_admin.initialize_app(cred)
 
     def send(self, to_context: dict, message: str) -> NotificationResult:
@@ -287,6 +290,9 @@ class FcmSender:
         try:
             msg = messaging.Message(
                 notification=messaging.Notification(title="Floorwatch", body=message),
+                # High priority so an assignment reaches a phone that's dozing,
+                # not just whenever Android next wakes the radio.
+                android=messaging.AndroidConfig(priority="high"),
                 token=token,
             )
             message_id = messaging.send(msg)
@@ -338,7 +344,7 @@ def build_sender(channel: str, config):
             return NoOpSender()
     if channel == "fcm":
         try:
-            return FcmSender(config.FCM_CREDENTIALS_PATH)
+            return FcmSender(config.FCM_CREDENTIALS_PATH, getattr(config, "FCM_CREDENTIALS_JSON", ""))
         except Exception as e:
             log(f"could not initialize FCM sender ({e}) — falling back to NoOpSender", level="warning")
             return NoOpSender()

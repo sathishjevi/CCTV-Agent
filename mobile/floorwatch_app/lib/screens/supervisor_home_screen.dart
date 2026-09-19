@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../services/live_updates.dart';
 import '../services/token_storage.dart';
+import 'change_password_dialog.dart';
 import 'history_screen.dart';
 import 'manage_employees_screen.dart';
 import 'manage_users_screen.dart';
@@ -15,7 +17,7 @@ import 'task_list_screen.dart';
 ///    Dashboard;
 ///  - dashboard username+password login ([dashboardLogin]): no employee
 ///    identity, so just the Dashboard (no "My Tasks" tab).
-/// Either way an overflow menu mirrors the web dashboard's top menu, gated
+/// Either way a burger-menu drawer mirrors the web dashboard's top menu, gated
 /// by role the same way the web UI does: Manage Employees/Zones for
 /// admin+supervisor, History for everyone, Manage Users for admin only.
 class SupervisorHomeScreen extends StatefulWidget {
@@ -29,6 +31,7 @@ class SupervisorHomeScreen extends StatefulWidget {
 class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with SingleTickerProviderStateMixin {
   late final TabController _tabController;
   String _role = 'supervisor';
+  String _name = '';
 
   @override
   void initState() {
@@ -42,8 +45,12 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
 
   Future<void> _loadRole() async {
     final role = await TokenStorage.instance.readRole();
+    final name = await TokenStorage.instance.readEmployeeName();
     if (!mounted) return;
-    setState(() => _role = role ?? 'supervisor');
+    setState(() {
+      _role = role ?? 'supervisor';
+      _name = name ?? '';
+    });
   }
 
   @override
@@ -53,6 +60,7 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
   }
 
   Future<void> _logout() async {
+    LiveUpdates.instance.stop();
     await TokenStorage.instance.clear();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
@@ -64,7 +72,66 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
   @override
   Widget build(BuildContext context) {
     final canManage = _role == 'admin' || _role == 'supervisor';
+    void open(Widget screen) {
+      Navigator.of(context).pop(); // close the drawer
+      Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
+    }
+
     return Scaffold(
+      // The default leading button for a Scaffold with a drawer is the
+      // burger (☰) icon.
+      drawer: Drawer(
+        child: SafeArea(
+          child: ListView(
+            children: [
+              ListTile(
+                title: Text(_name.isEmpty ? 'Floorwatch' : _name,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                subtitle: Text(_role == 'supervisor' && widget.dashboardLogin ? 'Secondary Admin' : _role),
+              ),
+              const Divider(),
+              // Same gates as the web dashboard's top menu.
+              if (canManage)
+                ListTile(
+                  leading: const Icon(Icons.badge_outlined),
+                  title: const Text('Manage Employees'),
+                  onTap: () => open(const ManageEmployeesScreen()),
+                ),
+              if (canManage)
+                ListTile(
+                  leading: const Icon(Icons.map_outlined),
+                  title: const Text('Manage Zones'),
+                  onTap: () => open(const ManageZonesScreen()),
+                ),
+              ListTile(
+                leading: const Icon(Icons.history),
+                title: const Text('History'),
+                onTap: () => open(const HistoryScreen()),
+              ),
+              if (_role == 'admin')
+                ListTile(
+                  leading: const Icon(Icons.manage_accounts_outlined),
+                  title: const Text('Manage Users'),
+                  onTap: () => open(const ManageUsersScreen()),
+                ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.lock_reset),
+                title: const Text('Change password'),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  showChangePasswordDialog(context);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.logout),
+                title: const Text('Log out'),
+                onTap: _logout,
+              ),
+            ],
+          ),
+        ),
+      ),
       appBar: AppBar(
         title: const Text('Floorwatch'),
         bottom: widget.dashboardLogin
@@ -77,32 +144,6 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
                 ],
               ),
         actions: [
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert),
-            onSelected: (value) {
-              switch (value) {
-                case 'employees':
-                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ManageEmployeesScreen()));
-                  break;
-                case 'zones':
-                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ManageZonesScreen()));
-                  break;
-                case 'history':
-                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const HistoryScreen()));
-                  break;
-                case 'users':
-                  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const ManageUsersScreen()));
-                  break;
-              }
-            },
-            itemBuilder: (context) => [
-              // Same gates as the web dashboard's top menu.
-              if (canManage) const PopupMenuItem(value: 'employees', child: Text('Manage Employees')),
-              if (canManage) const PopupMenuItem(value: 'zones', child: Text('Manage Zones')),
-              const PopupMenuItem(value: 'history', child: Text('History')),
-              if (_role == 'admin') const PopupMenuItem(value: 'users', child: Text('Manage Users')),
-            ],
-          ),
           IconButton(icon: const Icon(Icons.logout), onPressed: _logout),
         ],
       ),

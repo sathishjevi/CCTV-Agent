@@ -156,6 +156,15 @@ class ApiClient {
     _decode(resp);
   }
 
+  Future<void> changeEmployeePassword(String currentPassword, String newPassword) async {
+    final resp = await _post(
+      '/api/employee/auth/change-password',
+      headers: await _authHeaders(),
+      body: jsonEncode({'current_password': currentPassword, 'new_password': newPassword}),
+    );
+    _decode(resp);
+  }
+
   Future<void> requestOtp(String phone) async {
     final resp = await _post(
       '/api/employee/auth/request-otp',
@@ -235,6 +244,42 @@ class ApiClient {
     final resp = await _get('/api/employee/dashboard/queue/tasks', headers: await _authHeaders());
     final list = _decodeList(resp);
     return list.map((e) => QueueItem.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<List<ZoneDirective>> fetchZoneDirectives() async {
+    final resp = await _get('/api/employee/dashboard/queue', headers: await _authHeaders());
+    final list = _decodeList(resp);
+    return list.map((e) => ZoneDirective.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<void> approveZoneDirective(String zoneId) async {
+    final resp =
+        await _post('/api/employee/dashboard/queue/zone/$zoneId/approve', headers: await _authHeaders());
+    _decode(resp);
+  }
+
+  Future<void> reassignZoneCoverage(String zoneId) async {
+    final resp =
+        await _post('/api/employee/dashboard/queue/zone/$zoneId/reassign', headers: await _authHeaders());
+    _decode(resp);
+  }
+
+  Future<void> assignTask({
+    required String taskName,
+    required String zoneId,
+    required double assignedMinutes,
+    required String taskType,
+    String? assignedTo,
+  }) async {
+    final resp = await _post(
+      '/api/employee/dashboard/tasks',
+      headers: await _authHeaders(),
+      body: jsonEncode({
+        'task_name': taskName, 'zone_id': zoneId, 'assigned_minutes': assignedMinutes,
+        'task_type': taskType, 'assigned_to': assignedTo,
+      }),
+    );
+    _decode(resp);
   }
 
   Future<void> confirmFlag(String taskId) async {
@@ -396,8 +441,8 @@ class ApiClient {
 
   // ── History (require_employee_supervisor) ───────────────────────────
 
-  Future<List<HistoryEvent>> fetchHistory() async {
-    final resp = await _get('/api/employee/dashboard/history', headers: await _authHeaders());
+  Future<List<HistoryEvent>> fetchHistory({int limit = 200}) async {
+    final resp = await _get('/api/employee/dashboard/history?limit=$limit', headers: await _authHeaders());
     final list = _decodeList(resp);
     return list.map((e) => HistoryEvent.fromJson(e as Map<String, dynamic>)).toList();
   }

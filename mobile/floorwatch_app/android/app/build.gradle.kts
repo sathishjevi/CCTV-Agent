@@ -5,6 +5,13 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Firebase (push notifications): applied only if android/app/google-services.json
+// exists. Without a Firebase project the app builds and runs exactly as before,
+// just without push; drop the file in and rebuild to switch it on.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 android {
     namespace = "com.floorwatch.floorwatch_app"
     compileSdk = flutter.compileSdkVersion

@@ -267,6 +267,53 @@ def test_admin_can_manage_users_via_mobile(app_client):
     assert reset_resp.status_code == 200
 
 
+def test_supervisor_can_assign_a_task_via_dashboard(app_client):
+    client, main_module, _url = app_client
+    _add_employee(client, "300", "supervisor", "+15559000300")
+    _add_employee(client, "101", "employee", "+15559000101")
+    body = _set_password_and_login(client, "300", "+15559000300")
+    headers = {"Authorization": f"Bearer {body['token']}"}
+
+    resp = client.post("/api/employee/dashboard/tasks", json={
+        "task_name": "Restock drinks", "zone_id": "theatre3", "assigned_minutes": 25,
+        "task_type": "clean_door", "assigned_to": "101"}, headers=headers)
+    assert resp.status_code == 200, resp.text
+
+    task = client.get("/api/tasks").json()[resp.json()["task_id"]]
+    assert task["assigned_to"] == "101"
+    assert task["assigned_by"] == "employee:300"
+
+
+def test_plain_employee_cannot_assign_a_task_via_dashboard(app_client):
+    client, main_module, _url = app_client
+    _add_employee(client, "101", "employee", "+15559000101")
+    body = _set_password_and_login(client, "101", "+15559000101")
+    resp = client.post("/api/employee/dashboard/tasks", json={
+        "task_name": "x", "zone_id": "theatre3", "assigned_minutes": 5},
+        headers={"Authorization": f"Bearer {body['token']}"})
+    assert resp.status_code == 403
+
+
+def test_zone_directive_endpoints_are_supervisor_gated(app_client):
+    """approve/reassign on a zone with nothing pending returns the same
+    not-found the web dashboard's own endpoints do (proving they reach the
+    command bus) — and a plain employee never gets that far."""
+    client, main_module, _url = app_client
+    _add_employee(client, "300", "supervisor", "+15559000300")
+    _add_employee(client, "101", "employee", "+15559000101")
+    sup = _set_password_and_login(client, "300", "+15559000300")
+    emp = _set_password_and_login(client, "101", "+15559000101")
+
+    sup_headers = {"Authorization": f"Bearer {sup['token']}"}
+    resp = client.post("/api/employee/dashboard/queue/zone/lobby/approve", headers=sup_headers)
+    assert resp.status_code in (200, 404)
+    assert client.get("/api/employee/dashboard/queue", headers=sup_headers).status_code == 200
+
+    emp_headers = {"Authorization": f"Bearer {emp['token']}"}
+    assert client.post("/api/employee/dashboard/queue/zone/lobby/approve", headers=emp_headers).status_code == 403
+    assert client.post("/api/employee/dashboard/queue/zone/lobby/reassign", headers=emp_headers).status_code == 403
+
+
 def test_supervisor_can_reassign_and_complete_via_dashboard(app_client):
     client, main_module, _url = app_client
     _add_employee(client, "300", "supervisor", "+15559000300")

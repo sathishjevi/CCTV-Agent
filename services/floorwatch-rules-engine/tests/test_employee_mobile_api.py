@@ -200,6 +200,54 @@ def test_set_password_unknown_employee_returns_404(app_client):
     assert resp.status_code == 404
 
 
+def _login_with_password(client, phone, password):
+    resp = client.post("/api/employee/auth/login", json={"phone": phone, "password": password})
+    return resp
+
+
+def test_employee_can_change_own_password(app_client):
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+    client.post("/api/admin/employees/101/set-password", json={"password": "correct-horse-battery"})
+    token = _login_with_password(client, "+15559000101", "correct-horse-battery").json()["token"]
+
+    resp = client.post(
+        "/api/employee/auth/change-password",
+        json={"current_password": "correct-horse-battery", "new_password": "a-brand-new-passphrase"},
+        headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200, resp.text
+
+    assert _login_with_password(client, "+15559000101", "a-brand-new-passphrase").status_code == 200
+    assert _login_with_password(client, "+15559000101", "correct-horse-battery").status_code == 401
+
+
+def test_change_password_rejects_wrong_current_password(app_client):
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+    client.post("/api/admin/employees/101/set-password", json={"password": "correct-horse-battery"})
+    token = _login_with_password(client, "+15559000101", "correct-horse-battery").json()["token"]
+
+    resp = client.post(
+        "/api/employee/auth/change-password",
+        json={"current_password": "not-the-password", "new_password": "a-brand-new-passphrase"},
+        headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 401
+    assert _login_with_password(client, "+15559000101", "correct-horse-battery").status_code == 200
+
+
+def test_change_password_rejects_weak_new_password(app_client):
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+    client.post("/api/admin/employees/101/set-password", json={"password": "correct-horse-battery"})
+    token = _login_with_password(client, "+15559000101", "correct-horse-battery").json()["token"]
+
+    resp = client.post(
+        "/api/employee/auth/change-password",
+        json={"current_password": "correct-horse-battery", "new_password": "short"},
+        headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 400
+
+
 def test_login_rate_limited_per_phone(app_client):
     client, main_module = app_client
     main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")

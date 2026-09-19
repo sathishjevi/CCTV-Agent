@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../models/task.dart';
 import '../services/api_client.dart';
+import '../services/live_updates.dart';
 import '../services/token_storage.dart';
+import 'change_password_dialog.dart';
 import 'phone_entry_screen.dart';
 import 'task_detail_screen.dart';
 
@@ -17,38 +21,73 @@ class TaskListScreen extends StatefulWidget {
   State<TaskListScreen> createState() => _TaskListScreenState();
 }
 
-class _TaskListScreenState extends State<TaskListScreen> {
+class _TaskListScreenState extends State<TaskListScreen> with WidgetsBindingObserver {
   List<EmployeeTask> _tasks = [];
   bool _loading = true;
   String? _error;
 
+  StreamSubscription<Map<String, dynamic>>? _hintSub;
+  final _debounce = Debouncer(const Duration(milliseconds: 800));
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
+    // A hint means one of THIS employee's tasks changed (assigned, extended,
+    // reassigned away, ...) — refetch quietly instead of waiting for a pull.
+    LiveUpdates.instance.start();
+    _hintSub = LiveUpdates.instance.hints.listen((hint) {
+      if (hint['event_type'] == 'task_active_time_update') return;
+      _debounce.run(() {
+        if (mounted) _load(silent: true);
+      });
+    });
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _hintSub?.cancel();
+    _debounce.dispose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      LiveUpdates.instance.start();
+      _load(silent: true);
+    }
+  }
+
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final tasks = await ApiClient.instance.fetchTasks();
       if (!mounted) return;
-      setState(() => _tasks = tasks);
+      setState(() {
+        _tasks = tasks;
+        _error = null;
+      });
     } on ApiException catch (e) {
-      if (!mounted) return;
+      if (!mounted || silent) return;
       setState(() => _error = e.message);
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || silent) return;
       setState(() => _error = 'Network error — pull down to retry.');
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && !silent) setState(() => _loading = false);
     }
   }
 
   Future<void> _logout() async {
+    LiveUpdates.instance.stop();
     await TokenStorage.instance.clear();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
@@ -64,7 +103,14 @@ class _TaskListScreenState extends State<TaskListScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('My tasks'),
-        actions: [IconButton(icon: const Icon(Icons.logout), onPressed: _logout)],
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.lock_reset),
+            tooltip: 'Change password',
+            onPressed: () => showChangePasswordDialog(context),
+          ),
+          IconButton(icon: const Icon(Icons.logout), onPressed: _logout),
+        ],
       ),
       body: body,
     );
