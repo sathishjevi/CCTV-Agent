@@ -258,11 +258,11 @@ class _SupervisorDashboardScreenState extends State<SupervisorDashboardScreen> {
         actions = [
           FilledButton(
               onPressed: () => _runAction(() => ApiClient.instance.confirmFlag(item.taskId)),
-              child: const Text('Confirm')),
+              child: const Text('Follow up')),
           const SizedBox(width: 8),
           OutlinedButton(
               onPressed: () => _runAction(() => ApiClient.instance.dismissFlag(item.taskId)),
-              child: const Text('Dismiss')),
+              child: const Text('Looks Fine')),
         ];
     }
     return Card(
