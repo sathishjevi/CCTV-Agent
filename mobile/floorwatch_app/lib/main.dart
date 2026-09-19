@@ -52,6 +52,7 @@ class _StartupGateState extends State<_StartupGate> {
   bool _checked = false;
   bool _loggedIn = false;
   String _role = 'employee';
+  String _kind = 'employee';
 
   @override
   void initState() {
@@ -62,18 +63,25 @@ class _StartupGateState extends State<_StartupGate> {
   Future<void> _check() async {
     final token = await TokenStorage.instance.readToken();
     String role = 'employee';
+    String kind = 'employee';
     if (token != null) {
       role = await TokenStorage.instance.readRole() ?? 'employee';
+      kind = await TokenStorage.instance.readKind();
       // Best-effort — see push_service.dart's docstring for what's
       // required before this actually delivers anything.
-      try {
-        await PushService.instance.initialize();
-      } catch (_) {}
+      // Push is per-employee-device; a dashboard-account session has no
+      // employee identity to register a token against.
+      if (kind == 'employee') {
+        try {
+          await PushService.instance.initialize();
+        } catch (_) {}
+      }
     }
     if (!mounted) return;
     setState(() {
       _loggedIn = token != null;
       _role = role;
+      _kind = kind;
       _checked = true;
     });
   }
@@ -84,6 +92,7 @@ class _StartupGateState extends State<_StartupGate> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     if (!_loggedIn) return const PhoneEntryScreen();
-    return _role == 'supervisor' ? const SupervisorHomeScreen() : const TaskListScreen();
+    if (_kind == 'dashboard') return const SupervisorHomeScreen(dashboardLogin: true);
+    return (_role == 'supervisor' || _role == 'admin') ? const SupervisorHomeScreen() : const TaskListScreen();
   }
 }

@@ -9,16 +9,18 @@ import 'phone_entry_screen.dart';
 import 'supervisor_dashboard_screen.dart';
 import 'task_list_screen.dart';
 
-/// Landing screen for a supervisor login: a top tab bar with "My Tasks"
-/// (their own self-assigned tasks — the same screen a plain employee
-/// gets) and "Dashboard" (the supervisor mobile dashboard), plus an
-/// overflow menu mirroring the web dashboard's top menu (Manage
-/// Employees / Manage Zones / History / Manage Users) — 1:1 parity with
-/// the web dashboard rather than cramming 6 tabs into a phone-width
-/// TabBar. A plain employee never reaches this screen at all — see
-/// phone_entry_screen.dart's role-based routing after login.
+/// Landing screen for a supervisor/admin login. Two ways in:
+///  - phone+password employee login (role supervisor/admin): a top tab bar
+///    with "My Tasks" (their own assigned tasks) and "Dashboard", default
+///    Dashboard;
+///  - dashboard username+password login ([dashboardLogin]): no employee
+///    identity, so just the Dashboard (no "My Tasks" tab).
+/// Either way an overflow menu mirrors the web dashboard's top menu, gated
+/// by role the same way the web UI does: Manage Employees/Zones for
+/// admin+supervisor, History for everyone, Manage Users for admin only.
 class SupervisorHomeScreen extends StatefulWidget {
-  const SupervisorHomeScreen({super.key});
+  final bool dashboardLogin;
+  const SupervisorHomeScreen({super.key, this.dashboardLogin = false});
 
   @override
   State<SupervisorHomeScreen> createState() => _SupervisorHomeScreenState();
@@ -61,16 +63,19 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
 
   @override
   Widget build(BuildContext context) {
+    final canManage = _role == 'admin' || _role == 'supervisor';
     return Scaffold(
       appBar: AppBar(
         title: const Text('Floorwatch'),
-        bottom: TabBar(
-          controller: _tabController,
-          tabs: const [
-            Tab(icon: Icon(Icons.checklist), text: 'My Tasks'),
-            Tab(icon: Icon(Icons.dashboard), text: 'Dashboard'),
-          ],
-        ),
+        bottom: widget.dashboardLogin
+            ? null
+            : TabBar(
+                controller: _tabController,
+                tabs: const [
+                  Tab(icon: Icon(Icons.checklist), text: 'My Tasks'),
+                  Tab(icon: Icon(Icons.dashboard), text: 'Dashboard'),
+                ],
+              ),
         actions: [
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
@@ -91,24 +96,25 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
               }
             },
             itemBuilder: (context) => [
-              const PopupMenuItem(value: 'employees', child: Text('Manage Employees')),
-              const PopupMenuItem(value: 'zones', child: Text('Manage Zones')),
+              // Same gates as the web dashboard's top menu.
+              if (canManage) const PopupMenuItem(value: 'employees', child: Text('Manage Employees')),
+              if (canManage) const PopupMenuItem(value: 'zones', child: Text('Manage Zones')),
               const PopupMenuItem(value: 'history', child: Text('History')),
-              // Admin-only, same gate as the web dashboard's manageUsersBtn
-              // (role === 'admin').
               if (_role == 'admin') const PopupMenuItem(value: 'users', child: Text('Manage Users')),
             ],
           ),
           IconButton(icon: const Icon(Icons.logout), onPressed: _logout),
         ],
       ),
-      body: TabBarView(
-        controller: _tabController,
-        children: const [
-          _EmbeddedTaskList(),
-          SupervisorDashboardScreen(),
-        ],
-      ),
+      body: widget.dashboardLogin
+          ? const SupervisorDashboardScreen()
+          : TabBarView(
+              controller: _tabController,
+              children: const [
+                _EmbeddedTaskList(),
+                SupervisorDashboardScreen(),
+              ],
+            ),
     );
   }
 }

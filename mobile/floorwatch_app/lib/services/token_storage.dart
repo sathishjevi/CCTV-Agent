@@ -16,17 +16,23 @@ class TokenStorage {
   // token itself is always role="employee" server-side regardless (see
   // require_employee_supervisor's docstring in main.py).
   static const _roleKey = 'floorwatch_employee_role';
+  // "employee" (phone+password, /api/employee/*) or "dashboard" (username+
+  // password admin login, the same accounts as the web dashboard — its token
+  // is used against the regular /api/* endpoints, see ApiClient._resolvePath).
+  static const _kindKey = 'floorwatch_session_kind';
 
   Future<void> save({
     required String token,
     required String employeeNumber,
     required String name,
     required String role,
+    String kind = 'employee',
   }) async {
     await _storage.write(key: _tokenKey, value: token);
     await _storage.write(key: _employeeNumberKey, value: employeeNumber);
     await _storage.write(key: _employeeNameKey, value: name);
     await _storage.write(key: _roleKey, value: role);
+    await _storage.write(key: _kindKey, value: kind);
   }
 
   Future<String?> readToken() => _storage.read(key: _tokenKey);
@@ -35,10 +41,13 @@ class TokenStorage {
 
   Future<String?> readRole() => _storage.read(key: _roleKey);
 
+  Future<String> readKind() async => (await _storage.read(key: _kindKey)) ?? 'employee';
+
   Future<void> clear() async {
     await _storage.delete(key: _tokenKey);
     await _storage.delete(key: _employeeNumberKey);
     await _storage.delete(key: _employeeNameKey);
     await _storage.delete(key: _roleKey);
+    await _storage.delete(key: _kindKey);
   }
 }

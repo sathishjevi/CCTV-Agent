@@ -42,7 +42,7 @@ class _SupervisorDashboardScreenState extends State<SupervisorDashboardScreen> {
         ApiClient.instance.fetchSupervisorQueue(),
         ApiClient.instance.fetchDashboardTasks(),
         ApiClient.instance.fetchZones(),
-        ApiClient.instance.fetchEmployees(),
+        ApiClient.instance.fetchEmployees().catchError((_) => <EmployeeRecord>[]),
       ]);
       if (!mounted) return;
       setState(() {

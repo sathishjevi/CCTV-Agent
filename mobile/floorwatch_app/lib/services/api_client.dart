@@ -59,22 +59,45 @@ class ApiClient {
     };
   }
 
-  Future<http.Response> _get(String path, {required Map<String, String> headers}) {
-    return http.get(_uri(path), headers: headers).timeout(
+  /// A dashboard (username/password) session talks to the regular /api/*
+  /// endpoints the web dashboard uses; an employee session talks to the
+  /// /api/employee/* mirrors of them. Same request/response shapes either
+  /// way, so callers below just use the employee paths and this maps them.
+  Future<String> _resolvePath(String path) async {
+    if (await TokenStorage.instance.readKind() != 'dashboard') return path;
+    const rules = [
+      ['/api/employee/dashboard/queue/', '/api/queue/'],
+      ['/api/employee/dashboard/employees', '/api/admin/employees'],
+      ['/api/employee/dashboard/zones', '/api/admin/zones'],
+      ['/api/employee/dashboard/history', '/api/history'],
+      ['/api/employee/dashboard/', '/api/'],
+      ['/api/employee/admin/users', '/api/admin/users'],
+    ];
+    for (final r in rules) {
+      if (path.startsWith(r[0])) return r[1] + path.substring(r[0].length);
+    }
+    return path;
+  }
+
+  Future<http.Response> _get(String path, {required Map<String, String> headers}) async {
+    final resolved = await _resolvePath(path);
+    return http.get(_uri(resolved), headers: headers).timeout(
           _requestTimeout,
           onTimeout: () => throw ApiException(0, 'Request timed out — check your connection and try again.'),
         );
   }
 
-  Future<http.Response> _post(String path, {required Map<String, String> headers, String? body}) {
-    return http.post(_uri(path), headers: headers, body: body).timeout(
+  Future<http.Response> _post(String path, {required Map<String, String> headers, String? body}) async {
+    final resolved = await _resolvePath(path);
+    return http.post(_uri(resolved), headers: headers, body: body).timeout(
           _requestTimeout,
           onTimeout: () => throw ApiException(0, 'Request timed out — check your connection and try again.'),
         );
   }
 
-  Future<http.Response> _put(String path, {required Map<String, String> headers, String? body}) {
-    return http.put(_uri(path), headers: headers, body: body).timeout(
+  Future<http.Response> _put(String path, {required Map<String, String> headers, String? body}) async {
+    final resolved = await _resolvePath(path);
+    return http.put(_uri(resolved), headers: headers, body: body).timeout(
           _requestTimeout,
           onTimeout: () => throw ApiException(0, 'Request timed out — check your connection and try again.'),
         );
@@ -83,7 +106,7 @@ class ApiClient {
   Map<String, dynamic> _decode(http.Response resp) {
     final body = resp.body.isEmpty ? <String, dynamic>{} : jsonDecode(resp.body) as Map<String, dynamic>;
     if (resp.statusCode >= 200 && resp.statusCode < 300) return body;
-    final message = body['error'] as String? ?? 'Request failed (${resp.statusCode})';
+    final message = (body['error'] ?? body['detail']) as String? ?? 'Request failed (${resp.statusCode})';
     throw ApiException(resp.statusCode, message);
   }
 
@@ -95,7 +118,7 @@ class ApiClient {
       return resp.body.isEmpty ? <dynamic>[] : jsonDecode(resp.body) as List<dynamic>;
     }
     final body = resp.body.isEmpty ? <String, dynamic>{} : jsonDecode(resp.body) as Map<String, dynamic>;
-    final message = body['error'] as String? ?? 'Request failed (${resp.statusCode})';
+    final message = (body['error'] ?? body['detail']) as String? ?? 'Request failed (${resp.statusCode})';
     throw ApiException(resp.statusCode, message);
   }
 
@@ -111,6 +134,26 @@ class ApiClient {
       body: jsonEncode({'phone': phone, 'password': password}),
     );
     return _decode(resp);
+  }
+
+  /// Dashboard-account login (the same username/password as the web
+  /// dashboard). Returns {token, username, role, must_change_password}.
+  Future<Map<String, dynamic>> dashboardLogin(String username, String password) async {
+    final resp = await _post(
+      '/api/login',
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'username': username, 'password': password}),
+    );
+    return _decode(resp);
+  }
+
+  Future<void> changeDashboardPassword(String currentPassword, String newPassword) async {
+    final resp = await _post(
+      '/api/change-password',
+      headers: await _authHeaders(),
+      body: jsonEncode({'current_password': currentPassword, 'new_password': newPassword}),
+    );
+    _decode(resp);
   }
 
   Future<void> requestOtp(String phone) async {

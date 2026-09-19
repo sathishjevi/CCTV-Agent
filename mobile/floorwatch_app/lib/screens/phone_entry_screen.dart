@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/api_client.dart';
 import '../services/push_service.dart';
 import '../services/token_storage.dart';
+import 'admin_login_screen.dart';
 import 'supervisor_home_screen.dart';
 import 'task_list_screen.dart';
 
@@ -49,7 +50,9 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
-          builder: (_) => role == 'supervisor' ? const SupervisorHomeScreen() : const TaskListScreen(),
+          builder: (_) => (role == 'supervisor' || role == 'admin')
+              ? const SupervisorHomeScreen()
+              : const TaskListScreen(),
         ),
         (route) => false,
       );
@@ -68,7 +71,17 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        child: Padding(
+        child: Stack(children: [
+          Positioned(
+            top: 4,
+            right: 8,
+            child: TextButton(
+              onPressed: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const AdminLoginScreen())),
+              child: const Text('Admin login'),
+            ),
+          ),
+          Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -111,6 +124,7 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
             ],
           ),
         ),
+        ]),
       ),
     );
   }
