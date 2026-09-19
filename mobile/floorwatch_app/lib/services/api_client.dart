@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import '../models/dashboard.dart';
 import '../models/task.dart';
 import 'token_storage.dart';
 
@@ -78,6 +79,18 @@ class ApiClient {
     throw ApiException(resp.statusCode, message);
   }
 
+  /// Same error handling as _decode, for the dashboard endpoints that
+  /// return a bare JSON array (/api/queue, /api/queue/tasks) rather
+  /// than an object.
+  List<dynamic> _decodeList(http.Response resp) {
+    if (resp.statusCode >= 200 && resp.statusCode < 300) {
+      return resp.body.isEmpty ? <dynamic>[] : jsonDecode(resp.body) as List<dynamic>;
+    }
+    final body = resp.body.isEmpty ? <String, dynamic>{} : jsonDecode(resp.body) as Map<String, dynamic>;
+    final message = body['error'] as String? ?? 'Request failed (${resp.statusCode})';
+    throw ApiException(resp.statusCode, message);
+  }
+
   // ── Auth ──────────────────────────────────────────────────────────────
 
   /// Primary login path. Returns (token, employee_number, name) on
@@ -147,6 +160,71 @@ class ApiClient {
       headers: await _authHeaders(),
       body: jsonEncode({'new_assignee': newAssignee}),
     );
+    _decode(resp);
+  }
+
+  // ── Supervisor dashboard ─────────────────────────────────────────────
+  // Mirrors the web dashboard's own /api/state, /api/tasks, /api/queue*
+  // and action endpoints exactly, just under /api/employee/dashboard/
+  // and gated on require_employee_supervisor — see main.py.
+
+  Future<List<ZoneState>> fetchZoneStates() async {
+    final resp = await _get('/api/employee/dashboard/state', headers: await _authHeaders());
+    final body = _decode(resp);
+    return body.entries.map((e) => ZoneState.fromJson(e.key, e.value as Map<String, dynamic>)).toList();
+  }
+
+  Future<List<DashboardTask>> fetchDashboardTasks() async {
+    final resp = await _get('/api/employee/dashboard/tasks', headers: await _authHeaders());
+    final body = _decode(resp);
+    return body.entries.map((e) => DashboardTask.fromJson(e.key, e.value as Map<String, dynamic>)).toList();
+  }
+
+  Future<List<QueueItem>> fetchSupervisorQueue() async {
+    final resp = await _get('/api/employee/dashboard/queue/tasks', headers: await _authHeaders());
+    final list = _decodeList(resp);
+    return list.map((e) => QueueItem.fromJson(e as Map<String, dynamic>)).toList();
+  }
+
+  Future<void> confirmFlag(String taskId) async {
+    final resp =
+        await _post('/api/employee/dashboard/queue/task/$taskId/confirm', headers: await _authHeaders());
+    _decode(resp);
+  }
+
+  Future<void> dismissFlag(String taskId) async {
+    final resp =
+        await _post('/api/employee/dashboard/queue/task/$taskId/dismiss', headers: await _authHeaders());
+    _decode(resp);
+  }
+
+  Future<void> dashboardExtendTask(String taskId, double extraMinutes) async {
+    final resp = await _post(
+      '/api/employee/dashboard/tasks/$taskId/extend',
+      headers: await _authHeaders(),
+      body: jsonEncode({'extra_minutes': extraMinutes}),
+    );
+    _decode(resp);
+  }
+
+  Future<void> dashboardResolveReview(String taskId) async {
+    final resp =
+        await _post('/api/employee/dashboard/tasks/$taskId/resolve-review', headers: await _authHeaders());
+    _decode(resp);
+  }
+
+  Future<void> dashboardReassignTask(String taskId, String newAssignee) async {
+    final resp = await _post(
+      '/api/employee/dashboard/tasks/$taskId/reassign',
+      headers: await _authHeaders(),
+      body: jsonEncode({'new_assignee': newAssignee}),
+    );
+    _decode(resp);
+  }
+
+  Future<void> dashboardCompleteTask(String taskId) async {
+    final resp =
+        await _post('/api/employee/dashboard/tasks/$taskId/complete', headers: await _authHeaders());
     _decode(resp);
   }
 

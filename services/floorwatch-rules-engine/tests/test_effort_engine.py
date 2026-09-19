@@ -244,6 +244,21 @@ def test_per_task_type_threshold_used_not_global_default():
     assert evt["event_type"] == "task_resolved"  # would have been flagged under the 90% default
 
 
+def test_pending_flags_includes_elapsed_time_alongside_active_time():
+    """A flagged task's active-time-vs-budget number alone doesn't say
+    whether this was flagged 5 minutes in or 5 hours in — a supervisor
+    needs elapsed time alongside active time to judge which."""
+    engine, clock = make_engine(staffed=True, zone_covered=True)
+    task_evt = engine.assign_task("Clean Door", "theatre3", 60, task_type="clean_door")
+    task_id = task_evt["task_id"]
+    clock.advance(600)  # 10 minutes pass before it's marked complete
+    engine.complete_task(task_id)  # active_seconds=0 -> flagged
+
+    flag = engine.pending_flags()[0]
+    assert flag["elapsed_minutes"] == 10.0
+    assert flag["active_minutes"] == 0.0
+
+
 # ── supervisor confirm/dismiss ───────────────────────────────────────────
 
 def test_confirm_flag_reopens_task_with_supervisor_attribution():

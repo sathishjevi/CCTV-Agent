@@ -515,7 +515,14 @@ class EffortEngine:
         Previously only "flagged" tasks appeared here — an extension or
         review request was visible ONLY as a badge on the task's own
         card, with no queue entry pulling a supervisor's attention to
-        it, easy to miss entirely while scanning the board."""
+        it, easy to miss entirely while scanning the board.
+
+        `elapsed_minutes` (wall-clock since assignment) is included
+        alongside `active_minutes` (camera-detected activity) — for a
+        "marked complete" flag specifically, active time alone doesn't
+        say whether this was a 10-minute task with no detected motion
+        or a 10-hour one; a supervisor needs both to judge which."""
+        now = self._clock()
         flagged = [
             {
                 "task_id": t.task_id,
@@ -523,6 +530,7 @@ class EffortEngine:
                 "zone_id": t.zone_id,
                 "zone_name": self._zone_label(t.zone_id),
                 "active_minutes": round(t.active_seconds / 60.0, 2),
+                "elapsed_minutes": round((now - t.start_monotonic) / 60.0, 2),
                 "assigned_minutes": t.assigned_minutes,
                 "kind": "flagged",
             }
@@ -535,6 +543,7 @@ class EffortEngine:
                 "zone_id": t.zone_id,
                 "zone_name": self._zone_label(t.zone_id),
                 "active_minutes": round(t.active_seconds / 60.0, 2),
+                "elapsed_minutes": round((now - t.start_monotonic) / 60.0, 2),
                 "assigned_minutes": t.assigned_minutes,
                 "assigned_to": t.assigned_to,
                 "kind": t.workflow_status,

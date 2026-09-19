@@ -21,7 +21,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -192,6 +192,23 @@ employee_directory = build_employee_directory(config.POSTGRES_DSN, config.EMPLOY
 # structurally distinct rather than folded into the same role ladder.
 require_employee = make_employee_auth_dependency(
     config.AUTH_SECRET, employee_directory, revocation_store=revocation_store)
+
+
+async def require_employee_supervisor(user: dict = Depends(require_employee)) -> dict:
+    """A supervisor's mobile-app Dashboard tab — same employee token as
+    everything else under /api/employee/, just additionally requiring
+    the resolved employee_directory record's own `role` to be
+    "supervisor". Deliberately NOT require_auth/require_supervisor: this
+    identity has no dashboard username/password account and was never
+    meant to satisfy that check (see make_employee_auth_dependency's
+    docstring) — it's the exact same phone+password login every
+    employee uses, just gated on directory role rather than a second,
+    separate account."""
+    if user["employee"].get("role") != "supervisor":
+        raise HTTPException(status_code=403, detail="Supervisor role required")
+    return user
+
+
 otp_store = OtpStore(cluster_redis)
 otp_rate_limiter = RateLimiter(config.OTP_RATE_LIMIT_PER_PHONE_PER_MINUTE, window_seconds=60.0)
 employee_login_rate_limiter_by_ip = RateLimiter(
@@ -1463,7 +1480,7 @@ async def verify_otp(body: VerifyOtpRequest):
                          ttl_seconds=config.TOKEN_TTL_SECONDS)
     return {
         "token": token, "employee_number": employee["employee_number"], "name": employee["name"],
-        "expires_in": config.TOKEN_TTL_SECONDS,
+        "role": employee["role"], "expires_in": config.TOKEN_TTL_SECONDS,
     }
 
 
@@ -1515,6 +1532,12 @@ async def employee_login(body: EmployeeLoginRequest, request: Request):
                          ttl_seconds=config.TOKEN_TTL_SECONDS)
     return {
         "token": token, "employee_number": employee["employee_number"], "name": employee["name"],
+        # The app uses this to decide whether to show the Dashboard tab
+        # at all — a plain "employee" never sees it. The token itself
+        # stays role="employee" either way (see
+        # require_employee_supervisor's docstring for why); this is
+        # purely a client-side UI signal, not a second auth claim.
+        "role": employee["role"],
         "expires_in": config.TOKEN_TTL_SECONDS,
     }
 
@@ -1656,6 +1679,88 @@ async def employee_register_device_token(body: DeviceTokenRequest, user=Depends(
         # back to SMS.
         await asyncio.to_thread(employee_directory.set_channel, employee["employee_number"], "fcm")
     return {"ok": True}
+
+
+# ── Supervisor mobile dashboard — the app's "Dashboard" tab, shown only
+# to employee_directory records with role=="supervisor" (see
+# require_employee_supervisor above). Deliberately mirrors the web
+# dashboard's own endpoints (/api/state, /api/tasks, /api/queue*,
+# extend/reassign/complete/resolve-review) exactly — same
+# submit_command/read_snapshot plumbing, same effort_engine methods —
+# rather than inventing a second, parallel set of capabilities. The
+# ONLY thing that differs is the auth dependency and the URL prefix.
+
+@app.get("/api/employee/dashboard/state")
+async def employee_dashboard_state(user=Depends(require_employee_supervisor)):
+    return await read_snapshot(cluster_redis, SNAPSHOT_STATE_KEY, default={})
+
+
+@app.get("/api/employee/dashboard/tasks")
+async def employee_dashboard_tasks(user=Depends(require_employee_supervisor)):
+    return await read_snapshot(cluster_redis, SNAPSHOT_TASKS_KEY, default={})
+
+
+@app.get("/api/employee/dashboard/queue")
+async def employee_dashboard_queue(user=Depends(require_employee_supervisor)):
+    return await read_snapshot(cluster_redis, SNAPSHOT_QUEUE_KEY, default=[])
+
+
+@app.get("/api/employee/dashboard/queue/tasks")
+async def employee_dashboard_task_queue(user=Depends(require_employee_supervisor)):
+    return await read_snapshot(cluster_redis, SNAPSHOT_QUEUE_TASKS_KEY, default=[])
+
+
+@app.post("/api/employee/dashboard/queue/task/{task_id}/confirm")
+async def employee_dashboard_confirm_flag(task_id: str, user=Depends(require_employee_supervisor)):
+    reply = await submit_command(
+        cluster_redis, "confirm_flag", {"task_id": task_id, "supervisor_id": f"employee:{user['sub']}"})
+    return _command_reply_to_response(reply)
+
+
+@app.post("/api/employee/dashboard/queue/task/{task_id}/dismiss")
+async def employee_dashboard_dismiss_flag(task_id: str, user=Depends(require_employee_supervisor)):
+    reply = await submit_command(
+        cluster_redis, "dismiss_flag", {"task_id": task_id, "supervisor_id": f"employee:{user['sub']}"})
+    return _command_reply_to_response(reply)
+
+
+class DashboardExtendRequest(BaseModel):
+    extra_minutes: float
+
+
+@app.post("/api/employee/dashboard/tasks/{task_id}/extend")
+async def employee_dashboard_extend_task(
+    task_id: str, body: DashboardExtendRequest, user=Depends(require_employee_supervisor)
+):
+    reply = await submit_command(cluster_redis, "extend_task", {
+        "task_id": task_id, "extra_minutes": body.extra_minutes, "supervisor_id": f"employee:{user['sub']}"})
+    return _command_reply_to_response(reply, error_status=400)
+
+
+class DashboardReassignRequest(BaseModel):
+    new_assignee: str
+
+
+@app.post("/api/employee/dashboard/tasks/{task_id}/reassign")
+async def employee_dashboard_reassign_task(
+    task_id: str, body: DashboardReassignRequest, user=Depends(require_employee_supervisor)
+):
+    reply = await submit_command(cluster_redis, "reassign_task", {
+        "task_id": task_id, "new_assignee": body.new_assignee, "supervisor_id": f"employee:{user['sub']}"})
+    return _command_reply_to_response(reply, error_status=400)
+
+
+@app.post("/api/employee/dashboard/tasks/{task_id}/complete")
+async def employee_dashboard_complete_task(task_id: str, user=Depends(require_employee_supervisor)):
+    reply = await submit_command(cluster_redis, "complete_task", {"task_id": task_id})
+    return _command_reply_to_response(reply)
+
+
+@app.post("/api/employee/dashboard/tasks/{task_id}/resolve-review")
+async def employee_dashboard_resolve_review(task_id: str, user=Depends(require_employee_supervisor)):
+    reply = await submit_command(
+        cluster_redis, "resolve_after_review", {"task_id": task_id, "supervisor_id": f"employee:{user['sub']}"})
+    return _command_reply_to_response(reply, error_status=400)
 
 
 # ── Inbound SMS webhook (Twilio) — the employee-reply half of the task

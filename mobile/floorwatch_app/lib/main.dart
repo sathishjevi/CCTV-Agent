@@ -5,6 +5,7 @@ import 'services/dev_http_overrides.dart';
 import 'services/push_service.dart';
 import 'services/token_storage.dart';
 import 'screens/phone_entry_screen.dart';
+import 'screens/supervisor_home_screen.dart';
 import 'screens/task_list_screen.dart';
 
 void main() async {
@@ -50,6 +51,7 @@ class _StartupGate extends StatefulWidget {
 class _StartupGateState extends State<_StartupGate> {
   bool _checked = false;
   bool _loggedIn = false;
+  String _role = 'employee';
 
   @override
   void initState() {
@@ -59,7 +61,9 @@ class _StartupGateState extends State<_StartupGate> {
 
   Future<void> _check() async {
     final token = await TokenStorage.instance.readToken();
+    String role = 'employee';
     if (token != null) {
+      role = await TokenStorage.instance.readRole() ?? 'employee';
       // Best-effort — see push_service.dart's docstring for what's
       // required before this actually delivers anything.
       try {
@@ -69,6 +73,7 @@ class _StartupGateState extends State<_StartupGate> {
     if (!mounted) return;
     setState(() {
       _loggedIn = token != null;
+      _role = role;
       _checked = true;
     });
   }
@@ -78,6 +83,7 @@ class _StartupGateState extends State<_StartupGate> {
     if (!_checked) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    return _loggedIn ? const TaskListScreen() : const PhoneEntryScreen();
+    if (!_loggedIn) return const PhoneEntryScreen();
+    return _role == 'supervisor' ? const SupervisorHomeScreen() : const TaskListScreen();
   }
 }

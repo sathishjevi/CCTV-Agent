@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/api_client.dart';
 import '../services/push_service.dart';
 import '../services/token_storage.dart';
+import 'supervisor_home_screen.dart';
 import 'task_list_screen.dart';
 
 /// Primary login screen: phone + password (see EmployeeLoginRequest in
@@ -34,10 +35,12 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
     });
     try {
       final result = await ApiClient.instance.login(phone, password);
+      final role = result['role'] as String? ?? 'employee';
       await TokenStorage.instance.save(
         token: result['token'] as String,
         employeeNumber: result['employee_number'] as String,
         name: result['name'] as String,
+        role: role,
       );
       // Best-effort — push not being configured yet must never block login.
       try {
@@ -45,7 +48,9 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
       } catch (_) {}
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const TaskListScreen()),
+        MaterialPageRoute(
+          builder: (_) => role == 'supervisor' ? const SupervisorHomeScreen() : const TaskListScreen(),
+        ),
         (route) => false,
       );
     } on ApiException catch (e) {

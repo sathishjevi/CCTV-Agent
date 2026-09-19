@@ -7,7 +7,11 @@ import 'phone_entry_screen.dart';
 import 'task_detail_screen.dart';
 
 class TaskListScreen extends StatefulWidget {
-  const TaskListScreen({super.key});
+  // When embedded inside SupervisorHomeScreen's "My Tasks" tab, the
+  // parent already provides a Scaffold/AppBar/logout button — showing
+  // this screen's own would double them up.
+  final bool embedded;
+  const TaskListScreen({super.key, this.embedded = false});
 
   @override
   State<TaskListScreen> createState() => _TaskListScreenState();
@@ -55,15 +59,14 @@ class _TaskListScreenState extends State<TaskListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final body = RefreshIndicator(onRefresh: _load, child: _buildBody());
+    if (widget.embedded) return body;
     return Scaffold(
       appBar: AppBar(
         title: const Text('My tasks'),
         actions: [IconButton(icon: const Icon(Icons.logout), onPressed: _logout)],
       ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: _buildBody(),
-      ),
+      body: body,
     );
   }
 

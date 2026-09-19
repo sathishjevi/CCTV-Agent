@@ -996,7 +996,8 @@
         card.className = 'cmdcard effort';
         card.innerHTML = `
           <div class="hd"><div class="zn">${escapeHtml(t.name)}</div><div class="age">marked complete, low active time</div></div>
-          <div class="msg">Employee marked this task complete. Active time detected: <b>${t.activeMin.toFixed(1)} of ${t.assignedMin} min</b> assigned.
+          <div class="msg">Employee marked this task complete. Active time detected: <b>${t.activeMin.toFixed(1)} of ${t.assignedMin} min</b> assigned
+            (elapsed: <b>${taskElapsedMin(t).toFixed(1)} min</b>).
             <span class="draft">This is a flag, not a conclusion — worth a quick check before assuming anything.</span></div>
           <div class="cmdrow">
             <button class="btn approve" data-type="task" data-id="${escapeHtml(id)}" data-a="confirm">Confirm — follow up with employee</button>
@@ -1141,7 +1142,17 @@
         logEvent('eff', `Low active-time nudge for "${escapeHtml(evt.task_name)}"${evt.shadow_mode_suppressed ? ' (shadow mode — not actually delivered)' : ''}.`);
         break;
       case 'task_flag':
-        if(tasks[evt.task_id]){ tasks[evt.task_id].status = 'flagged'; tasks[evt.task_id].activeMin = evt.active_minutes; tasks[evt.task_id].elapsedMin = tasks[evt.task_id].assignedMin; }
+        if(tasks[evt.task_id]){
+          // Freeze the REAL elapsed-so-far (must be read before status
+          // flips — taskElapsedMin()'s live tick only runs for
+          // 'ok'/'low') rather than hardcoding it to the budget, which
+          // was wrong for any task flagged well past (or well before)
+          // its assigned minutes.
+          const frozenElapsed = taskElapsedMin(tasks[evt.task_id]);
+          tasks[evt.task_id].status = 'flagged';
+          tasks[evt.task_id].activeMin = evt.active_minutes;
+          tasks[evt.task_id].elapsedMin = frozenElapsed;
+        }
         // deduped by task_id — a task reopened (confirmed) and flagged
         // again is still the same flag being worked through, not a
         // second one. See flaggedTaskIds' declaration above.
@@ -1539,9 +1550,7 @@
         <td style="padding:8px;">
           <div style="display:flex;flex-wrap:wrap;align-items:center;gap:10px;">
             <button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="edit" data-emp="${escapeHtml(e.employee_number)}">Edit</button>
-            ${e.role === 'employee'
-              ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="set-password" data-emp="${escapeHtml(e.employee_number)}">Set password</button>`
-              : ''}
+            <button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="set-password" data-emp="${escapeHtml(e.employee_number)}">Set password</button>
             ${e.active
               ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="deactivate" data-emp="${escapeHtml(e.employee_number)}">Deactivate</button>`
               : `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reactivate" data-emp="${escapeHtml(e.employee_number)}">Reactivate</button>`}

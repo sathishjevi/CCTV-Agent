@@ -34,6 +34,7 @@ class _OtpEntryScreenState extends State<OtpEntryScreen> {
         token: result['token'] as String,
         employeeNumber: result['employee_number'] as String,
         name: result['name'] as String,
+        role: result['role'] as String? ?? 'employee',
       );
       // Best-effort — push not being configured yet (no Firebase project
       // wired up) must never block login. See push_service.dart's
