@@ -142,6 +142,20 @@ FCM_CREDENTIALS_PATH = os.environ.get("FLOORWATCH_FCM_CREDENTIALS_PATH", "")
 # variables. Used when FLOORWATCH_FCM_CREDENTIALS_PATH is empty.
 FCM_CREDENTIALS_JSON = os.environ.get("FLOORWATCH_FCM_CREDENTIALS_JSON", "")
 
+# Firebase client settings the mobile app starts Firebase with — served to a
+# logged-in app (GET /api/employee/app-config) so the API key lives only in
+# Railway variables, never in git or in the build. The key is REQUIRED from
+# the environment; the other three are public project identifiers (already in
+# the repo's Firebase config) so they default to this project's values but can
+# be overridden. Unprefixed names (e.g. FIREBASE_API_KEY) work as well.
+def _firebase_env(name, default=""):
+    return os.environ.get(f"FLOORWATCH_FIREBASE_{name}") or os.environ.get(f"FIREBASE_{name}") or default
+
+FIREBASE_API_KEY = _firebase_env("API_KEY")
+FIREBASE_APP_ID = _firebase_env("APP_ID", "1:805448853541:android:55e2f202db977ab16db7cc")
+FIREBASE_PROJECT_ID = _firebase_env("PROJECT_ID", "cctv-floor-watch")
+FIREBASE_SENDER_ID = _firebase_env("SENDER_ID", "805448853541")
+
 # Which concrete SMS gateway backs the "twilio"/"sms" channel — lets a
 # deployment switch providers (e.g. for India-market pricing: MSG91/
 # Fast2SMS are commonly cheaper than Twilio there) without touching

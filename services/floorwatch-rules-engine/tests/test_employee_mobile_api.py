@@ -248,6 +248,32 @@ def test_change_password_rejects_weak_new_password(app_client):
     assert resp.status_code == 400
 
 
+def test_app_config_is_null_until_the_firebase_api_key_is_set(app_client):
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+    client.post("/api/admin/employees/101/set-password", json={"password": "correct-horse-battery"})
+    token = _login_with_password(client, "+15559000101", "correct-horse-battery").json()["token"]
+
+    resp = client.get("/api/employee/app-config", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    assert resp.json() == {"firebase": None}
+
+
+def test_app_config_serves_firebase_settings_to_a_logged_in_employee_only(app_client, monkeypatch):
+    client, main_module = app_client
+    monkeypatch.setattr(main_module.config, "FIREBASE_API_KEY", "key-123")
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+    client.post("/api/admin/employees/101/set-password", json={"password": "correct-horse-battery"})
+    token = _login_with_password(client, "+15559000101", "correct-horse-battery").json()["token"]
+
+    firebase = client.get("/api/employee/app-config", headers={"Authorization": f"Bearer {token}"}).json()["firebase"]
+    assert firebase["apiKey"] == "key-123"
+    assert firebase["projectId"] and firebase["appId"] and firebase["messagingSenderId"]
+
+    # not handed out to an unauthenticated caller
+    assert client.get("/api/employee/app-config", headers={"Authorization": "Bearer garbage"}).status_code == 401
+
+
 def test_login_rate_limited_per_phone(app_client):
     client, main_module = app_client
     main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")

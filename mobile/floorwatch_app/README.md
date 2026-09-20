@@ -16,40 +16,34 @@ flutter run --dart-define=FLOORWATCH_API_BASE_URL=https://your-deployment.up.rai
 Without it, every API call fails with a clear "not configured" error
 rather than silently pointing at the wrong server.
 
-## Push notifications — requires a real Firebase project
+## Push notifications — configured in Railway
 
-Firebase is set up by the build (not from Dart at runtime): when a push
-arrives for a closed app Android starts the process without running any Dart,
-so a default Firebase app has to exist natively already or the notification
-can't be shown. The API key is kept out of git:
+Nothing Firebase-related is committed or baked into the build. Set these
+Railway variables on the rules-engine service, then redeploy:
 
-1. Create a Firebase project with an Android app, package name
-   `com.floorwatch.floorwatch_app`.
-2. The committed template `android/app/firebase-config.json` is a
-   `google-services.json` with its key left as `{{FIREBASE_API_KEY}}`. At build
-   time Gradle copies it to the git-ignored `google-services.json` with the
-   real key filled in. Supply the key (the `current_key` from the
-   `google-services.json` you download from Firebase) to the build with either:
-   - the environment variable `FIREBASE_API_KEY`, or
-   - a line `FIREBASE_API_KEY=AIza...` in `android/firebase.properties`
-     (git-ignored; not `local.properties`, which Flutter rewrites each build).
-   Also worth restricting that key to the app's package name in Google Cloud
-   console. (Railway can't supply it: the APK is built on your machine — but if
-   you ever build in CI, set `FIREBASE_API_KEY` there as a secret.)
-3. **Backend** (Railway): Firebase console → Project settings → Service
-   accounts → Generate new private key. Paste the entire JSON as the variable
-   `FLOORWATCH_FCM_CREDENTIALS_JSON` on the rules-engine service (or mount the
-   file and set `FLOORWATCH_FCM_CREDENTIALS_PATH`) and redeploy. It must be the
-   **same** Firebase project as the app's. `/healthz` then reports
-   `"fcm_ready": true`.
-4. Log in on the phone once: it registers its device token and the employee's
-   channel switches to push; the next assignment arrives as a notification.
-5. **iOS** additionally needs `ios/Runner/GoogleService-Info.plist` and an
-   APNs Auth Key (Apple Developer account) uploaded under Firebase Project
-   settings → Cloud Messaging. `UIBackgroundModes: remote-notification` is
-   already set in `Info.plist`; in Xcode also enable the **Push Notifications**
-   and **Background Modes → Remote notifications** capabilities on the Runner
-   target.
+| Variable | Value |
+|---|---|
+| `FIREBASE_API_KEY` (or `FLOORWATCH_FIREBASE_API_KEY`) | the Firebase API key |
+| `FLOORWATCH_FCM_CREDENTIALS_JSON` | the whole service-account key JSON (Firebase → Project settings → Service accounts → Generate new private key) — lets the backend *send* pushes |
+| `FIREBASE_APP_ID`, `FIREBASE_PROJECT_ID`, `FIREBASE_SENDER_ID` | optional overrides; default to this project's values |
+
+After login the app fetches its Firebase settings from
+`GET /api/employee/app-config` (login-required) and caches them on the device.
+`android/.../FloorwatchApplication.kt` starts Firebase from that cache on every
+launch — including when Android starts the app only to show a push while it's
+closed, where no Dart code runs (which is why this can't be done from Dart
+alone). So the very first login registers the device; pushes work from then on.
+`/healthz` reports `app_push_config_ready` (API key present) and `fcm_ready`
+(service-account key valid). The Android app in Firebase must have package name
+`com.floorwatch.floorwatch_app`, and everything must be the **same** Firebase
+project.
+
+iOS additionally needs an APNs Auth Key (Apple Developer account) uploaded
+under Firebase Project settings → Cloud Messaging, plus an iOS app's
+`GoogleService-Info.plist` values. `UIBackgroundModes: remote-notification` is
+already set in `Info.plist`; in Xcode also enable the **Push Notifications**
+and **Background Modes → Remote notifications** capabilities on the Runner
+target.
 
 ## Live updates
 

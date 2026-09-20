@@ -494,6 +494,16 @@ class ApiClient {
 
   // ── Push ──────────────────────────────────────────────────────────────
 
+  /// The Firebase client settings (apiKey/appId/projectId/messagingSenderId),
+  /// served from the backend's Railway variables so they never live in git
+  /// or the build. Null when push isn't configured on the server.
+  Future<Map<String, String>?> fetchFirebaseConfig() async {
+    final resp = await _get('/api/employee/app-config', headers: await _authHeaders());
+    final firebase = _decode(resp)['firebase'];
+    if (firebase is! Map) return null;
+    return firebase.map((k, v) => MapEntry(k.toString(), v.toString()));
+  }
+
   Future<void> registerDeviceToken(String fcmToken) async {
     final resp = await _post(
       '/api/employee/device-token',

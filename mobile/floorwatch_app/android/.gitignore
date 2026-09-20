@@ -4,8 +4,6 @@ gradle-wrapper.jar
 /gradlew
 /gradlew.bat
 /local.properties
-# Holds FIREBASE_API_KEY for local builds — see app/build.gradle.kts.
-/firebase.properties
 GeneratedPluginRegistrant.java
 .cxx/
 

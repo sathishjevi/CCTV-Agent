@@ -1067,7 +1067,7 @@ async def coverage_ui():
 @app.get("/healthz")
 async def healthz():
     from notifications import FcmSender
-    return {"ok": True, "fcm_ready": isinstance(TASK_CHANNEL_SENDERS.get("fcm"), FcmSender), "shadow_mode": config.SHADOW_MODE, "connections": len(manager.active) + len(manager.app_scopes),
+    return {"ok": True, "fcm_ready": isinstance(TASK_CHANNEL_SENDERS.get("fcm"), FcmSender), "app_push_config_ready": bool(config.FIREBASE_API_KEY), "shadow_mode": config.SHADOW_MODE, "connections": len(manager.active) + len(manager.app_scopes),
             "replica_id": REPLICA_ID, "is_leader": leadership.is_leader}
 
 
@@ -1740,6 +1740,19 @@ async def employee_reassign_task(task_id: str, body: EmployeeReassignRequest, us
     await _emit(evt)
     await _notify_assignee(task_id)  # sends the new assignee their own assignment message
     return {"event": evt}
+
+
+@app.get("/api/employee/app-config")
+async def employee_app_config(user=Depends(require_employee)):
+    """Firebase client settings for the mobile app, from Railway variables.
+    Login-gated (the app only needs them after signing in) so they aren't
+    handed to anyone who finds the URL. {"firebase": null} when the API key
+    isn't set — the app then just runs without push."""
+    fields = {
+        "apiKey": config.FIREBASE_API_KEY, "appId": config.FIREBASE_APP_ID,
+        "projectId": config.FIREBASE_PROJECT_ID, "messagingSenderId": config.FIREBASE_SENDER_ID,
+    }
+    return {"firebase": fields if all(fields.values()) else None}
 
 
 class DeviceTokenRequest(BaseModel):
