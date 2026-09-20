@@ -9,20 +9,15 @@ import 'api_client.dart';
 /// employee_directory.py's set_channel(), auto-applied on first device-
 /// token registration by POST /api/employee/device-token).
 ///
-/// REQUIRES a real Firebase project before this does anything:
-///   1. Create a Firebase project and add an Android app with package name
-///      com.floorwatch.floorwatch_app.
-///   2. Download its google-services.json into android/app/ and rebuild —
-///      android/app/build.gradle.kts applies the Google services plugin
-///      automatically when that file exists.
-///   3. Backend: Project settings > Service accounts > Generate new private
-///      key, then paste the whole JSON into the Railway variable
-///      FLOORWATCH_FCM_CREDENTIALS_JSON (or mount it and set
-///      FLOORWATCH_FCM_CREDENTIALS_PATH).
-///   4. iOS additionally needs GoogleService-Info.plist in ios/Runner/ and an
-///      APNs key uploaded to the Firebase project (needs a Mac/Xcode).
-/// Without those, Firebase.initializeApp() throws — callers catch that and
-/// the app still runs, just without push (SMS/dashboard behave as before).
+/// Firebase must be set up BY THE BUILD (google-services.json), not from
+/// Dart at runtime: when a push arrives for a closed app, Android starts the
+/// process without running any Dart, so a default FirebaseApp has to already
+/// exist natively or the notification can't be displayed. The key is kept out
+/// of git — see README ("Push notifications"): a committed template plus
+/// FIREBASE_API_KEY supplied at build time.
+///
+/// Without that, Firebase.initializeApp() throws — callers catch it and the
+/// app simply runs without push.
 class PushService {
   PushService._();
   static final PushService instance = PushService._();
@@ -31,7 +26,7 @@ class PushService {
   /// show a banner (the OS only draws notifications for a backgrounded app).
   static final GlobalKey<ScaffoldMessengerState> messengerKey = GlobalKey<ScaffoldMessengerState>();
 
-  final _messaging = FirebaseMessaging.instance;
+  FirebaseMessaging get _messaging => FirebaseMessaging.instance;
   bool _initialized = false;
 
   Future<void> initialize() async {

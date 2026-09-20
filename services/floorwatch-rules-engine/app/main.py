@@ -1066,7 +1066,8 @@ async def coverage_ui():
 
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True, "shadow_mode": config.SHADOW_MODE, "connections": len(manager.active) + len(manager.app_scopes),
+    from notifications import FcmSender
+    return {"ok": True, "fcm_ready": isinstance(TASK_CHANNEL_SENDERS.get("fcm"), FcmSender), "shadow_mode": config.SHADOW_MODE, "connections": len(manager.active) + len(manager.app_scopes),
             "replica_id": REPLICA_ID, "is_leader": leadership.is_leader}
 
 

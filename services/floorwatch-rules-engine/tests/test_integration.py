@@ -92,6 +92,14 @@ def test_healthz_reports_shadow_mode(app_client):
     assert resp.json()["shadow_mode"] is True
 
 
+def test_healthz_reports_push_not_ready_without_fcm_credentials(app_client):
+    """/healthz is public, so it only says whether push is configured (a
+    bool) — enough to tell "credentials variable missing/invalid" from "app
+    config missing" without exposing anything."""
+    client, _main_module, _url = app_client
+    assert client.get("/healthz").json()["fcm_ready"] is False
+
+
 def test_state_endpoint_reflects_zone_after_gap(app_client):
     client, main_module, fake_redis_url = app_client
     publisher = redis.Redis.from_url(fake_redis_url, decode_responses=True)
