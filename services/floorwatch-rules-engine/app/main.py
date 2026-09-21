@@ -239,8 +239,21 @@ async def require_employee_supervisor(user: dict = Depends(require_employee)) ->
     docstring) — it's the exact same phone+password login every
     employee uses, just gated on directory role rather than a second,
     separate account."""
-    if user["employee"].get("role") not in ("supervisor", "admin"):
+    if user["employee"].get("role") not in ("supervisor", "secondary_admin", "admin"):
         raise HTTPException(status_code=403, detail="Supervisor role required")
+    return user
+
+
+async def require_employee_manager(user: dict = Depends(require_employee)) -> dict:
+    """The phone app's management menu — add/edit/deactivate employees,
+    manage zones. Only "secondary_admin" and "admin"; a plain supervisor
+    works the floor (assign tasks, the supervisor queue, coverage, the event
+    feed) but can't change who exists or how the floor is laid out. READING
+    the employee/zone lists and history stays open to supervisors — the
+    dashboard itself needs them (assignee and zone pickers, the event feed).
+    Manage Users stays admin-only (require_employee_admin)."""
+    if user["employee"].get("role") not in ("secondary_admin", "admin"):
+        raise HTTPException(status_code=403, detail="Admin or Secondary Admin role required")
     return user
 
 
@@ -1269,8 +1282,8 @@ async def add_employee(body: AddEmployeeRequest, user=Depends(require_supervisor
     ok, reason = validate_phone(body.phone)
     if not ok:
         return JSONResponse(status_code=400, content={"error": reason})
-    if body.role not in ("employee", "supervisor", "admin"):
-        return JSONResponse(status_code=400, content={"error": "role must be 'employee', 'supervisor', or 'admin'"})
+    if body.role not in ("employee", "supervisor", "secondary_admin", "admin"):
+        return JSONResponse(status_code=400, content={"error": "role must be 'employee', 'supervisor', 'secondary_admin', or 'admin'"})
     if not body.department.strip():
         return JSONResponse(status_code=400, content={"error": "department is required"})
     ok, reason = validate_channel(body.channel)
@@ -1325,8 +1338,8 @@ async def edit_employee(employee_number: str, body: EditEmployeeRequest, user=De
     ok, reason = validate_phone(body.phone)
     if not ok:
         return JSONResponse(status_code=400, content={"error": reason})
-    if body.role not in ("employee", "supervisor", "admin"):
-        return JSONResponse(status_code=400, content={"error": "role must be 'employee', 'supervisor', or 'admin'"})
+    if body.role not in ("employee", "supervisor", "secondary_admin", "admin"):
+        return JSONResponse(status_code=400, content={"error": "role must be 'employee', 'supervisor', 'secondary_admin', or 'admin'"})
     if not body.department.strip():
         return JSONResponse(status_code=400, content={"error": "department is required"})
     ok, reason = validate_primary_contact(body.role, body.is_primary_contact)
@@ -1904,15 +1917,15 @@ async def employee_dashboard_list_employees(
 
 
 @app.post("/api/employee/dashboard/employees")
-async def employee_dashboard_add_employee(body: AddEmployeeRequest, user=Depends(require_employee_supervisor)):
+async def employee_dashboard_add_employee(body: AddEmployeeRequest, user=Depends(require_employee_manager)):
     ok, reason = validate_employee_number(body.employee_number)
     if not ok:
         return JSONResponse(status_code=400, content={"error": reason})
     ok, reason = validate_phone(body.phone)
     if not ok:
         return JSONResponse(status_code=400, content={"error": reason})
-    if body.role not in ("employee", "supervisor", "admin"):
-        return JSONResponse(status_code=400, content={"error": "role must be 'employee', 'supervisor', or 'admin'"})
+    if body.role not in ("employee", "supervisor", "secondary_admin", "admin"):
+        return JSONResponse(status_code=400, content={"error": "role must be 'employee', 'supervisor', 'secondary_admin', or 'admin'"})
     if not body.department.strip():
         return JSONResponse(status_code=400, content={"error": "department is required"})
     ok, reason = validate_channel(body.channel)
@@ -1935,7 +1948,7 @@ async def employee_dashboard_add_employee(body: AddEmployeeRequest, user=Depends
 
 @app.put("/api/employee/dashboard/employees/{employee_number}")
 async def employee_dashboard_edit_employee(
-    employee_number: str, body: EditEmployeeRequest, user=Depends(require_employee_supervisor)
+    employee_number: str, body: EditEmployeeRequest, user=Depends(require_employee_manager)
 ):
     existing = await asyncio.to_thread(employee_directory.get, employee_number)
     if existing is None:
@@ -1943,8 +1956,8 @@ async def employee_dashboard_edit_employee(
     ok, reason = validate_phone(body.phone)
     if not ok:
         return JSONResponse(status_code=400, content={"error": reason})
-    if body.role not in ("employee", "supervisor", "admin"):
-        return JSONResponse(status_code=400, content={"error": "role must be 'employee', 'supervisor', or 'admin'"})
+    if body.role not in ("employee", "supervisor", "secondary_admin", "admin"):
+        return JSONResponse(status_code=400, content={"error": "role must be 'employee', 'supervisor', 'secondary_admin', or 'admin'"})
     if not body.department.strip():
         return JSONResponse(status_code=400, content={"error": "department is required"})
     ok, reason = validate_primary_contact(body.role, body.is_primary_contact)
@@ -1960,14 +1973,14 @@ async def employee_dashboard_edit_employee(
 
 
 @app.post("/api/employee/dashboard/employees/{employee_number}/deactivate")
-async def employee_dashboard_deactivate_employee(employee_number: str, user=Depends(require_employee_supervisor)):
+async def employee_dashboard_deactivate_employee(employee_number: str, user=Depends(require_employee_manager)):
     if not await asyncio.to_thread(employee_directory.set_active, employee_number, False):
         return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
     return {"ok": True}
 
 
 @app.post("/api/employee/dashboard/employees/{employee_number}/reactivate")
-async def employee_dashboard_reactivate_employee(employee_number: str, user=Depends(require_employee_supervisor)):
+async def employee_dashboard_reactivate_employee(employee_number: str, user=Depends(require_employee_manager)):
     if not await asyncio.to_thread(employee_directory.set_active, employee_number, True):
         return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
     return {"ok": True}
@@ -1975,7 +1988,7 @@ async def employee_dashboard_reactivate_employee(employee_number: str, user=Depe
 
 @app.post("/api/employee/dashboard/employees/{employee_number}/set-primary-contact")
 async def employee_dashboard_set_primary_contact(
-    employee_number: str, body: SetPrimaryContactRequest, user=Depends(require_employee_supervisor)
+    employee_number: str, body: SetPrimaryContactRequest, user=Depends(require_employee_manager)
 ):
     existing = await asyncio.to_thread(employee_directory.get, employee_number)
     if existing is None:
@@ -1989,7 +2002,7 @@ async def employee_dashboard_set_primary_contact(
 
 @app.post("/api/employee/dashboard/employees/{employee_number}/set-password")
 async def employee_dashboard_set_employee_password(
-    employee_number: str, body: SetEmployeePasswordRequest, user=Depends(require_employee_supervisor)
+    employee_number: str, body: SetEmployeePasswordRequest, user=Depends(require_employee_manager)
 ):
     existing = await asyncio.to_thread(employee_directory.get, employee_number)
     if existing is None:
@@ -2008,7 +2021,7 @@ async def employee_dashboard_list_zones(user=Depends(require_employee_supervisor
 
 
 @app.post("/api/employee/dashboard/zones")
-async def employee_dashboard_add_zone(body: AddZoneRequest, user=Depends(require_employee_supervisor)):
+async def employee_dashboard_add_zone(body: AddZoneRequest, user=Depends(require_employee_manager)):
     ok, reason = validate_zone_id(body.zone_id)
     if not ok:
         return JSONResponse(status_code=400, content={"error": reason})
@@ -2025,7 +2038,7 @@ async def employee_dashboard_add_zone(body: AddZoneRequest, user=Depends(require
 
 
 @app.post("/api/employee/dashboard/zones/{zone_id}/deactivate")
-async def employee_dashboard_deactivate_zone(zone_id: str, user=Depends(require_employee_supervisor)):
+async def employee_dashboard_deactivate_zone(zone_id: str, user=Depends(require_employee_manager)):
     if not await asyncio.to_thread(zone_directory.set_active, zone_id, False):
         return JSONResponse(status_code=404, content={"error": f"zone '{zone_id}' not found"})
     zones_meta.pop(zone_id, None)
@@ -2034,7 +2047,7 @@ async def employee_dashboard_deactivate_zone(zone_id: str, user=Depends(require_
 
 
 @app.post("/api/employee/dashboard/zones/{zone_id}/reactivate")
-async def employee_dashboard_reactivate_zone(zone_id: str, user=Depends(require_employee_supervisor)):
+async def employee_dashboard_reactivate_zone(zone_id: str, user=Depends(require_employee_manager)):
     if not await asyncio.to_thread(zone_directory.set_active, zone_id, True):
         return JSONResponse(status_code=404, content={"error": f"zone '{zone_id}' not found"})
     z = await asyncio.to_thread(next, (z for z in zone_directory.list_all() if z["zone_id"] == zone_id), None)
@@ -2046,7 +2059,7 @@ async def employee_dashboard_reactivate_zone(zone_id: str, user=Depends(require_
 
 @app.post("/api/employee/dashboard/zones/{zone_id}/set-staffed")
 async def employee_dashboard_set_zone_staffed(
-    zone_id: str, body: SetZoneStaffedRequest, user=Depends(require_employee_supervisor)
+    zone_id: str, body: SetZoneStaffedRequest, user=Depends(require_employee_manager)
 ):
     if not await asyncio.to_thread(zone_directory.set_staffed, zone_id, body.staffed):
         return JSONResponse(status_code=404, content={"error": f"zone '{zone_id}' not found"})
@@ -2331,7 +2344,7 @@ async def app_events_ws(ws: WebSocket):
         if employee is None or not employee.get("active", True):
             await ws.close(code=4401)
             return
-        scope = {"all": True} if employee.get("role") in ("supervisor", "admin") else {"employee": payload["sub"]}
+        scope = {"all": True} if employee.get("role") in ("supervisor", "secondary_admin", "admin") else {"employee": payload["sub"]}
     else:
         scope = {"all": True}
     await manager.connect_app(ws, scope)

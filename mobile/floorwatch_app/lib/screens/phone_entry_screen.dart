@@ -50,7 +50,7 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
-          builder: (_) => (role == 'supervisor' || role == 'admin')
+          builder: (_) => (role == 'supervisor' || role == 'secondary_admin' || role == 'admin')
               ? const SupervisorHomeScreen()
               : const TaskListScreen(),
         ),

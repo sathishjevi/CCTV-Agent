@@ -71,7 +71,13 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
 
   @override
   Widget build(BuildContext context) {
-    final canManage = _role == 'admin' || _role == 'supervisor';
+    // The menu is for admin and Secondary Admin only: a phone-login
+    // 'secondary_admin', or a dashboard-account 'supervisor' (which is what
+    // "Secondary Admin" is called there). A plain phone-login supervisor
+    // just gets the dashboard content, no menu.
+    final canManage = _role == 'admin' ||
+        _role == 'secondary_admin' ||
+        (_role == 'supervisor' && widget.dashboardLogin);
     void open(Widget screen) {
       Navigator.of(context).pop(); // close the drawer
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen));
@@ -80,14 +86,18 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
     return Scaffold(
       // The default leading button for a Scaffold with a drawer is the
       // burger (☰) icon.
-      drawer: Drawer(
+      drawer: !canManage
+          ? null
+          : Drawer(
         child: SafeArea(
           child: ListView(
             children: [
               ListTile(
                 title: Text(_name.isEmpty ? 'Floorwatch' : _name,
                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-                subtitle: Text(_role == 'supervisor' && widget.dashboardLogin ? 'Secondary Admin' : _role),
+                subtitle: Text(_role == 'secondary_admin' || (_role == 'supervisor' && widget.dashboardLogin)
+                    ? 'Secondary Admin'
+                    : _role),
               ),
               const Divider(),
               // Same gates as the web dashboard's top menu.
@@ -103,7 +113,8 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
                   title: const Text('Manage Zones'),
                   onTap: () => open(const ManageZonesScreen()),
                 ),
-              ListTile(
+              if (canManage)
+                ListTile(
                 leading: const Icon(Icons.history),
                 title: const Text('History'),
                 onTap: () => open(const HistoryScreen()),
@@ -144,6 +155,13 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
                 ],
               ),
         actions: [
+          // No menu for a plain supervisor, so change-password lives here.
+          if (!canManage)
+            IconButton(
+              icon: const Icon(Icons.lock_reset),
+              tooltip: 'Change password',
+              onPressed: () => showChangePasswordDialog(context),
+            ),
           IconButton(icon: const Icon(Icons.logout), onPressed: _logout),
         ],
       ),

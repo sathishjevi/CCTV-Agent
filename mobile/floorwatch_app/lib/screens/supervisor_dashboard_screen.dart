@@ -57,7 +57,7 @@ class _SupervisorDashboardScreenState extends State<SupervisorDashboardScreen> w
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     TokenStorage.instance.readRole().then((role) {
-      if (mounted) setState(() => _canAssign = role == 'admin' || role == 'supervisor');
+      if (mounted) setState(() => _canAssign = role == 'admin' || role == 'secondary_admin' || role == 'supervisor');
     });
     _load();
     LiveUpdates.instance.start();

@@ -291,6 +291,7 @@
         <select id="newEmpRole" style="width:100%;box-sizing:border-box;font-family:var(--sans);font-size:13px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:9px 10px;">
           <option value="employee" selected>employee</option>
           <option value="supervisor">supervisor</option>
+          <option value="secondary_admin">Secondary Admin</option>
           <option value="admin">admin</option>
         </select>
       </div>
@@ -324,6 +325,7 @@
         <select id="editEmpRole" style="width:100%;box-sizing:border-box;font-family:var(--sans);font-size:13px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:9px 10px;">
           <option value="employee">employee</option>
           <option value="supervisor">supervisor</option>
+          <option value="secondary_admin">Secondary Admin</option>
           <option value="admin">admin</option>
         </select>
       </div>
@@ -1575,7 +1577,7 @@
       <tr style="border-bottom:1px solid var(--line);">
         <td style="padding:8px;font-family:var(--mono);">${escapeHtml(e.employee_number)}</td>
         <td style="padding:8px;overflow-wrap:anywhere;">${escapeHtml(e.name)}</td>
-        <td style="padding:8px;font-family:var(--mono);">${escapeHtml(e.role)}${e.is_primary_contact ? ' <span title="Primary contact for this department" style="color:var(--accent);">★</span>' : ''}</td>
+        <td style="padding:8px;font-family:var(--mono);">${escapeHtml(e.role === 'secondary_admin' ? 'Secondary Admin' : e.role)}${e.is_primary_contact ? ' <span title="Primary contact for this department" style="color:var(--accent);">★</span>' : ''}</td>
         <td style="padding:8px;">${escapeHtml(e.department)}</td>
         <td style="padding:8px;font-family:var(--mono);font-size:11px;">${escapeHtml(e.phone)}</td>
         <td style="padding:8px;color:${e.active ? 'var(--ok)' : 'var(--red)'};">${e.active ? 'active' : 'deactivated'}</td>

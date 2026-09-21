@@ -148,9 +148,9 @@ def test_admin_role_satisfies_require_employee_supervisor(app_client):
     assert resp.status_code == 200
 
 
-def test_supervisor_can_manage_employees_via_dashboard(app_client):
+def test_secondary_admin_can_manage_employees_via_dashboard(app_client):
     client, main_module, _url = app_client
-    _add_employee(client, "300", "supervisor", "+15559000300")
+    _add_employee(client, "300", "secondary_admin", "+15559000300")
     body = _set_password_and_login(client, "300", "+15559000300")
     headers = {"Authorization": f"Bearer {body['token']}"}
 
@@ -178,11 +178,11 @@ def test_supervisor_can_manage_employees_via_dashboard(app_client):
     assert setpass_resp.status_code == 200
 
 
-def test_supervisor_can_add_admin_employee_via_dashboard(app_client):
+def test_secondary_admin_can_add_admin_employee_via_dashboard(app_client):
     """The role validation on both add/edit must accept "admin" now,
     not just "employee"/"supervisor"."""
     client, main_module, _url = app_client
-    _add_employee(client, "300", "supervisor", "+15559000300")
+    _add_employee(client, "300", "secondary_admin", "+15559000300")
     body = _set_password_and_login(client, "300", "+15559000300")
     headers = {"Authorization": f"Bearer {body['token']}"}
 
@@ -192,9 +192,9 @@ def test_supervisor_can_add_admin_employee_via_dashboard(app_client):
     assert resp.status_code == 200, resp.text
 
 
-def test_supervisor_can_manage_zones_via_dashboard(app_client):
+def test_secondary_admin_can_manage_zones_via_dashboard(app_client):
     client, main_module, _url = app_client
-    _add_employee(client, "300", "supervisor", "+15559000300")
+    _add_employee(client, "300", "secondary_admin", "+15559000300")
     body = _set_password_and_login(client, "300", "+15559000300")
     headers = {"Authorization": f"Bearer {body['token']}"}
 
@@ -312,6 +312,46 @@ def test_zone_directive_endpoints_are_supervisor_gated(app_client):
     emp_headers = {"Authorization": f"Bearer {emp['token']}"}
     assert client.post("/api/employee/dashboard/queue/zone/lobby/approve", headers=emp_headers).status_code == 403
     assert client.post("/api/employee/dashboard/queue/zone/lobby/reassign", headers=emp_headers).status_code == 403
+
+
+def test_plain_supervisor_can_read_but_not_change_employees_and_zones(app_client):
+    """A supervisor's dashboard needs the employee/zone lists and history
+    (assignee and zone pickers, the event feed) — but changing who exists
+    or how the floor is laid out is the management menu's job."""
+    client, main_module, _url = app_client
+    _add_employee(client, "300", "supervisor", "+15559000300")
+    body = _set_password_and_login(client, "300", "+15559000300")
+    headers = {"Authorization": f"Bearer {body['token']}"}
+
+    assert client.get("/api/employee/dashboard/employees", headers=headers).status_code == 200
+    assert client.get("/api/employee/dashboard/zones", headers=headers).status_code == 200
+    assert client.get("/api/employee/dashboard/history", headers=headers).status_code == 200
+
+    assert client.post("/api/employee/dashboard/employees", json={
+        "employee_number": "500", "name": "X", "role": "employee",
+        "department": "ops", "phone": "+15559000500"}, headers=headers).status_code == 403
+    assert client.put("/api/employee/dashboard/employees/300", json={
+        "name": "X", "role": "admin", "department": "ops", "phone": "+15559000300"},
+        headers=headers).status_code == 403  # no promoting yourself
+    assert client.post("/api/employee/dashboard/employees/300/deactivate", headers=headers).status_code == 403
+    assert client.post("/api/employee/dashboard/employees/300/set-password",
+                       json={"password": "correct-horse-battery"}, headers=headers).status_code == 403
+    assert client.post("/api/employee/dashboard/zones", json={
+        "zone_id": "z1", "name": "Z", "role_tag": "usher"}, headers=headers).status_code == 403
+    assert client.post("/api/employee/dashboard/zones/theatre3/deactivate", headers=headers).status_code == 403
+
+
+def test_secondary_admin_gets_supervisor_features_but_not_manage_users(app_client):
+    client, main_module, _url = app_client
+    _add_employee(client, "310", "secondary_admin", "+15559000310")
+    body = _set_password_and_login(client, "310", "+15559000310")
+    assert body["role"] == "secondary_admin"
+    headers = {"Authorization": f"Bearer {body['token']}"}
+
+    assert client.get("/api/employee/dashboard/state", headers=headers).status_code == 200
+    assert client.post("/api/employee/dashboard/tasks", json={
+        "task_name": "T", "zone_id": "theatre3", "assigned_minutes": 10}, headers=headers).status_code == 200
+    assert client.get("/api/employee/admin/users", headers=headers).status_code == 403
 
 
 def test_supervisor_can_reassign_and_complete_via_dashboard(app_client):

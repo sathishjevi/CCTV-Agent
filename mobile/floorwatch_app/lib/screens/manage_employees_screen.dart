@@ -87,6 +87,7 @@ class _ManageEmployeesScreenState extends State<ManageEmployeesScreen> {
                   items: const [
                     DropdownMenuItem(value: 'employee', child: Text('employee')),
                     DropdownMenuItem(value: 'supervisor', child: Text('supervisor')),
+                    DropdownMenuItem(value: 'secondary_admin', child: Text('Secondary Admin')),
                     DropdownMenuItem(value: 'admin', child: Text('admin')),
                   ],
                   onChanged: (v) => setDialogState(() => role = v ?? 'employee'),
@@ -178,7 +179,7 @@ class _ManageEmployeesScreenState extends State<ManageEmployeesScreen> {
                             children: [
                               Text('${e.name} (#${e.employeeNumber})',
                                   style: const TextStyle(fontWeight: FontWeight.bold)),
-                              Text('${e.role} · ${e.department} · ${e.phone}'
+                              Text('${e.role == 'secondary_admin' ? 'Secondary Admin' : e.role} · ${e.department} · ${e.phone}'
                                   '${e.isPrimaryContact ? " · primary contact" : ""}'),
                               Text(e.active ? 'active' : 'deactivated',
                                   style: TextStyle(color: e.active ? Colors.green : Colors.red)),

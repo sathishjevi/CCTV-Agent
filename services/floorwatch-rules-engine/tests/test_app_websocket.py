@@ -121,3 +121,15 @@ def test_app_socket_accepts_a_dashboard_account_token(app_client):
         task_id = _assign(client, "")
         hint = ws.receive_json()
     assert hint["task_id"] == task_id
+
+
+def test_app_socket_tells_a_secondary_admin_about_everything(app_client):
+    client, _main_module, _url = app_client
+    token = _employee_token(client, "310", "secondary_admin", "+15559000310")
+    _employee_token(client, "202", "employee", "+15559000202")
+
+    with client.websocket_connect(f"/ws/app?token={token}") as ws:
+        other = _assign(client, "202")
+        hint = ws.receive_json()
+
+    assert hint["task_id"] == other
