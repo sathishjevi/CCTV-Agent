@@ -109,26 +109,34 @@ class PushService {
     try {
       await ApiClient.instance.markTaskSeen(taskId);
     } catch (_) {}
-    final nav = navigatorKey.currentState;
-    if (nav == null) return;
-    final role = await TokenStorage.instance.readRole() ?? 'employee';
-    final destination = (role == 'supervisor' || role == 'secondary_admin' || role == 'admin')
-        ? const SupervisorHomeScreen(initialTab: 0) // My Tasks, not the Dashboard tab it defaults to
-        : const TaskListScreen();
-    nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => destination), (route) => false);
 
-    // Land on that SPECIFIC task, not just the list it lives in — fetch
-    // the assignee's own open tasks (the same call My Tasks itself makes)
-    // and, if this one's still open, push its detail screen on top.
-    // Best-effort: no match (already completed/reassigned away by the
-    // time they tapped) just leaves them on My Tasks, not an error.
+    // Resolve the target task and the role BEFORE touching the Navigator
+    // at all — one atomic navigation (My Tasks as the new base, the
+    // task's own detail screen on top of it if found) instead of two
+    // separate pushes racing each other and the app's own cold-start
+    // navigation (this whole method can run mid-startup, from inside
+    // _StartupGate's own call to initialize() — see main.dart).
+    final role = await TokenStorage.instance.readRole() ?? 'employee';
+    EmployeeTask? match;
     try {
       final tasks = await ApiClient.instance.fetchTasks();
-      final EmployeeTask? match =
-          tasks.cast<EmployeeTask?>().firstWhere((t) => t?.taskId == taskId, orElse: () => null);
-      if (match != null) {
-        navigatorKey.currentState?.push(MaterialPageRoute(builder: (_) => TaskDetailScreen(task: match)));
-      }
-    } catch (_) {}
+      match = tasks.cast<EmployeeTask?>().firstWhere((t) => t?.taskId == taskId, orElse: () => null);
+    } catch (e) {
+      // Best-effort — no match just means they land on My Tasks instead
+      // of the specific task (already completed/reassigned away, or a
+      // transient network failure at cold start). Logged, not silent,
+      // so a real recurring failure here is visible via `flutter logs`.
+      debugPrint('PushService: could not resolve tapped task $taskId: $e');
+    }
+
+    final nav = navigatorKey.currentState;
+    if (nav == null) return;
+    final tasksScreen = (role == 'supervisor' || role == 'secondary_admin' || role == 'admin')
+        ? const SupervisorHomeScreen(initialTab: 0) // My Tasks, not the Dashboard tab it defaults to
+        : const TaskListScreen();
+    nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => tasksScreen), (route) => false);
+    if (match != null) {
+      nav.push(MaterialPageRoute(builder: (_) => TaskDetailScreen(task: match!)));
+    }
   }
 }
