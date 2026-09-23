@@ -27,6 +27,7 @@ class FloorwatchApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Floorwatch',
+      navigatorKey: PushService.navigatorKey,
       scaffoldMessengerKey: PushService.messengerKey,
       theme: ThemeData(
         useMaterial3: true,

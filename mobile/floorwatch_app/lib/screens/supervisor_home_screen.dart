@@ -22,7 +22,13 @@ import 'task_list_screen.dart';
 /// admin+supervisor, History for everyone, Manage Users for admin only.
 class SupervisorHomeScreen extends StatefulWidget {
   final bool dashboardLogin;
-  const SupervisorHomeScreen({super.key, this.dashboardLogin = false});
+  // Which tab shows first: 0 = My Tasks, 1 = Dashboard (the default — see
+  // _SupervisorHomeScreenState.initState). A tapped push notification
+  // about one of THIS user's own tasks (main.py includes task_id in the
+  // FCM data payload) routes here with 0, since that's what they tapped
+  // to see — see push_service.dart's notification-tap handling.
+  final int initialTab;
+  const SupervisorHomeScreen({super.key, this.dashboardLogin = false, this.initialTab = 1});
 
   @override
   State<SupervisorHomeScreen> createState() => _SupervisorHomeScreenState();
@@ -39,7 +45,7 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
     // Order is [My Tasks, Dashboard] but a supervisor's default landing
     // tab is Dashboard (index 1) — they're checking on the floor first,
     // not their own task list.
-    _tabController = TabController(length: 2, vsync: this, initialIndex: 1);
+    _tabController = TabController(length: 2, vsync: this, initialIndex: widget.initialTab);
     _loadRole();
   }
 

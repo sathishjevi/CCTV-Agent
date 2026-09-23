@@ -482,6 +482,28 @@ def test_fcm_sender_sends_a_high_priority_notification():
     assert kwargs["token"] == "device-token"
 
 
+def test_fcm_sender_includes_task_id_in_data_for_deep_linking():
+    """The app's notification-tap handler (push_service.dart) needs the
+    task_id out-of-band from the notification text — it rides in `data`."""
+    from notifications import FcmSender
+    modules, _credentials, messaging = _fake_firebase()
+    with patch.dict(sys.modules, modules):
+        sender = FcmSender(credentials_json='{"type": "service_account"}')
+        sender.send({"fcm_token": "device-token", "task_id": "task-123"}, "Task assigned")
+    kwargs = messaging.Message.call_args.kwargs
+    assert kwargs["data"] == {"task_id": "task-123"}
+
+
+def test_fcm_sender_omits_data_when_no_task_id_given():
+    from notifications import FcmSender
+    modules, _credentials, messaging = _fake_firebase()
+    with patch.dict(sys.modules, modules):
+        sender = FcmSender(credentials_json='{"type": "service_account"}')
+        sender.send({"fcm_token": "device-token"}, "Task assigned")
+    kwargs = messaging.Message.call_args.kwargs
+    assert kwargs["data"] is None
+
+
 def test_fcm_sender_without_a_token_skips_instead_of_guessing():
     from notifications import FcmSender
     modules, _credentials, messaging = _fake_firebase()

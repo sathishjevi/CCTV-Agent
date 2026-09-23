@@ -52,7 +52,11 @@ def _now_iso() -> str:
 #   unassigned          — no assignee (auto-assignment found nobody, or
 #                          assigned_to never provided); supervisor queue
 #                          surfaces these
-#   notified            — assignment message sent to the assignee
+#   notified            — assignment message sent to the assignee. The UI
+#                          further splits this on TaskRuntime.notification_seen
+#                          (not a workflow_status of its own): unseen ->
+#                          "Notification sent", seen -> "Notified — waiting
+#                          to start". See mark_notification_seen().
 #   notify_failed       — has an assignee but the message couldn't be
 #                          sent (no phone on file / sender error) — the
 #                          assignee does NOT know about this task
@@ -91,6 +95,13 @@ class TaskRuntime:
     assigned_to: Optional[str] = None      # employee_number from the directory
     assigned_by: Optional[str] = None      # "auto:<event_type>" or "user:<username>"
     workflow_status: str = "unassigned"
+    notification_seen: bool = False        # cosmetic only, never gates a transition — flips True
+                                            # once the assignee opens the push notification or the
+                                            # task itself (mark_notification_seen()), so the UI can
+                                            # tell "message sent, not yet looked at" apart from
+                                            # "notified — waiting to start" without a THIRD
+                                            # workflow_status. Reset False on every fresh
+                                            # mark_notified() (a reassignment is a new notification).
     status_nudge_sent: bool = False        # budget-expiry "what's the status?" nudge — once only
     reopened_for_review: bool = False      # set by confirm_flag() — lets resolve_after_review()
                                             # close the task directly without re-running the
@@ -232,6 +243,7 @@ class EffortEngine:
                                 action_type=action_type, message=message)
         evt["assigned_to"] = t.assigned_to
         evt["workflow_status"] = t.workflow_status
+        evt["notification_seen"] = t.notification_seen
         return evt
 
     def mark_notified(self, task_id: str) -> Optional[dict]:
@@ -239,9 +251,25 @@ class EffortEngine:
         if t is None or t.status != "open" or t.workflow_status not in ("unassigned", "notify_failed"):
             return None
         t.workflow_status = "notified"
+        t.notification_seen = False  # a fresh send is a fresh, unseen notification
         return self._workflow_event(t, "notified",
             f'Assignment message sent to employee {t.assigned_to} for "{t.task_name}" '
             f"({t.assigned_minutes:.0f} min allocated).")
+
+    def mark_notification_seen(self, task_id: str) -> Optional[dict]:
+        """The assignee opened the push notification, or opened the task
+        itself, for this assignment. Purely cosmetic — it never gates
+        Start/Complete/etc (those all key off workflow_status, unchanged
+        here) — it only lets the UI distinguish "sent, not yet looked at"
+        from "notified — waiting to start" (see TaskRuntime.notification_seen).
+        Idempotent: a second call once already seen is a no-op, same
+        no-corrupting-state contract as every other transition here."""
+        t = self.tasks.get(task_id)
+        if t is None or t.notification_seen:
+            return None
+        t.notification_seen = True
+        return self._workflow_event(t, "notification_seen",
+            f'Employee {t.assigned_to} opened the notification for "{t.task_name}".')
 
     def mark_notify_failed(self, task_id: str, reason: str = "") -> Optional[dict]:
         t = self.tasks.get(task_id)

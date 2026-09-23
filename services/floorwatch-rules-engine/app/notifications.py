@@ -288,8 +288,14 @@ class FcmSender:
             log(f"No FCM token on file for {_mask_context(to_context)} — skipping push send")
             return NotificationResult(sent=False, channel="fcm", detail="no fcm token on file")
         try:
+            # task_id rides in `data`, not the notification payload — lets a
+            # tapped notification deep-link straight to that task (see
+            # push_service.dart's onMessageOpenedApp/getInitialMessage) instead
+            # of landing on whatever screen the app happens to open to.
+            task_id = to_context.get("task_id")
             msg = messaging.Message(
                 notification=messaging.Notification(title="Floorwatch", body=message),
+                data={"task_id": task_id} if task_id else None,
                 # High priority so an assignment reaches a phone that's dozing,
                 # not just whenever Android next wakes the radio.
                 android=messaging.AndroidConfig(priority="high"),

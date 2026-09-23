@@ -633,6 +633,7 @@ class _SupervisorDashboardScreenState extends State<SupervisorDashboardScreen> w
   static const _workflowLabels = {
     'unassigned': ('Unassigned', Colors.blueGrey),
     'notified': ('Notified — waiting to start', Colors.blueGrey),
+    'notification_sent': ('Notification sent — not yet seen', Colors.blueGrey),
     'notify_failed': ('Notification failed — assignee not reached', Colors.red),
     'in_progress': ('In progress', Colors.green),
     'awaiting_update': ('Pending — waiting for update from employee', Colors.orange),
@@ -654,7 +655,12 @@ class _SupervisorDashboardScreenState extends State<SupervisorDashboardScreen> w
     } else if (pct < expectedPct - 10) {
       barColor = Colors.orange;
     }
-    final workflow = _workflowLabels[task.workflowStatus];
+    // "notified" splits into two badges on notificationSeen — see
+    // effort_engine.TaskRuntime.notification_seen's docstring.
+    final workflowKey = (task.workflowStatus == 'notified' && !task.notificationSeen)
+        ? 'notification_sent'
+        : task.workflowStatus;
+    final workflow = _workflowLabels[workflowKey];
     // "On track" is only about active-time pace — next to a workflow badge
     // that already signals a problem it reads as a contradiction, so it's
     // dropped there (same rule as the web card).

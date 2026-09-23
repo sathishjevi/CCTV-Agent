@@ -792,6 +792,7 @@
   const WORKFLOW_LABELS = {
     unassigned:          {text: 'Unassigned',                                       cls: 'wf-neutral'},
     notified:            {text: 'Notified — waiting to start',                      cls: 'wf-neutral'},
+    notification_sent:   {text: 'Notification sent — not yet seen',                 cls: 'wf-neutral'},
     notify_failed:       {text: 'Notification failed — assignee not reached',       cls: 'wf-bad'},
     in_progress:         {text: 'In progress',                                      cls: 'wf-ok'},
     awaiting_update:     {text: 'Pending — waiting for update from employee',        cls: 'wf-warn'},
@@ -851,7 +852,11 @@
         statusClass='ok';
       }
       const assigneeText = employeeLabel(t.assignedTo);
-      const wf = WORKFLOW_LABELS[t.workflowStatus] || null;
+      // "notified" splits into two badges on t.notificationSeen — see
+      // effort_engine.TaskRuntime.notification_seen's docstring — not a
+      // real workflow_status of its own, purely cosmetic here too.
+      const wfKey = (t.workflowStatus === 'notified' && !t.notificationSeen) ? 'notification_sent' : t.workflowStatus;
+      const wf = WORKFLOW_LABELS[wfKey] || null;
       const div = document.createElement('div');
       div.className = 'taskcard';
       div.innerHTML = `
@@ -1122,7 +1127,7 @@
           name: evt.task_name, zone: zoneLabel(evt),
           assignedMin: evt.assigned_minutes, activeMin: 0, elapsedMin: 0,
           assignedAtMs: Date.now(), status: 'ok',
-          assignedTo: evt.assigned_to || null, workflowStatus: 'unassigned',
+          assignedTo: evt.assigned_to || null, workflowStatus: 'unassigned', notificationSeen: false,
         };
         logEvent('eff', `Task assigned: "${escapeHtml(evt.task_name)}", ${escapeHtml(zoneLabel(evt))}, ${evt.assigned_minutes} min budget`
           + (evt.assigned_to ? ` — to ${escapeHtml(employeeLabel(evt.assigned_to) || evt.assigned_to)}.` : '.'));
@@ -1132,6 +1137,7 @@
       case 'task_reassigned':
         if(tasks[evt.task_id]){
           tasks[evt.task_id].workflowStatus = evt.workflow_status;
+          if(typeof evt.notification_seen === 'boolean') tasks[evt.task_id].notificationSeen = evt.notification_seen;
           tasks[evt.task_id].assignedTo = evt.assigned_to || tasks[evt.task_id].assignedTo;
           // Every engine event already carries the task's CURRENT budget
           // (_base_event always sets assigned_minutes) — extend_task()
@@ -1279,6 +1285,7 @@
           assignedMin: t.assigned_minutes, activeMin: t.active_minutes, elapsedMin: t.elapsed_minutes,
           assignedAtMs: Date.now() - t.elapsed_minutes * 60000, status,
           assignedTo: t.assigned_to || null, workflowStatus: t.workflow_status || 'unassigned',
+          notificationSeen: !!t.notification_seen,
           reopenedForReview: !!t.reopened_for_review, resolutionType: t.resolution_type || null,
         };
       });

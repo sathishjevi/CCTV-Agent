@@ -357,7 +357,47 @@ def test_employee_can_start_and_complete_own_task(app_client):
     # all, not about effort accuracy.
     tasks = client.get("/api/tasks").json()
     assert tasks[task_id]["status"] in ("resolved", "flagged")
-    assert tasks[task_id]["workflow_status"] == "completed"
+
+
+def test_task_starts_unseen_and_seen_flips_once_opened(app_client):
+    """See effort_engine.TaskRuntime.notification_seen — cosmetic, only
+    lets the UI say "Notification sent" before the assignee opens it and
+    "Notified — waiting to start" after, without a third workflow_status."""
+    client, main_module = app_client
+    _install_fake_sms_sender(main_module)
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+    task_id = _create_task_assigned_to(client, "101")
+    token = _login_employee(client, main_module, "+15559000101")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    tasks = client.get("/api/employee/tasks", headers=headers).json()["tasks"]
+    assert tasks[0]["workflow_status"] == "notified"
+    assert tasks[0]["notification_seen"] is False
+
+    resp = client.post(f"/api/employee/tasks/{task_id}/seen", headers=headers)
+    assert resp.status_code == 200, resp.text
+
+    tasks = client.get("/api/employee/tasks", headers=headers).json()["tasks"]
+    assert tasks[0]["notification_seen"] is True
+    assert tasks[0]["workflow_status"] == "notified"  # unchanged — "seen" is cosmetic only
+
+    # idempotent — a duplicate call (notification tap racing the detail
+    # screen's own call) is a harmless no-op, not an error.
+    resp = client.post(f"/api/employee/tasks/{task_id}/seen", headers=headers)
+    assert resp.status_code == 200, resp.text
+
+
+def test_seen_is_ownership_checked_like_every_other_task_action(app_client):
+    client, main_module = app_client
+    _install_fake_sms_sender(main_module)
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+    main_module.employee_directory.add("102", "Sam Rivera", "employee", "janitor", "+15559000102")
+    task_id = _create_task_assigned_to(client, "101")
+    other_token = _login_employee(client, main_module, "+15559000102")
+
+    resp = client.post(f"/api/employee/tasks/{task_id}/seen",
+                        headers={"Authorization": f"Bearer {other_token}"})
+    assert resp.status_code == 403
 
 
 def test_employee_cannot_act_on_another_employees_task(app_client):

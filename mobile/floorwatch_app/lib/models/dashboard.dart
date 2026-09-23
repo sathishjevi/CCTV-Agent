@@ -25,6 +25,10 @@ class DashboardTask {
   final double elapsedMinutes;
   final String status; // open | flagged | resolved
   final String workflowStatus;
+  // Cosmetic only, splits workflowStatus=='notified' in two for display —
+  // see effort_engine.TaskRuntime.notification_seen's docstring. Never
+  // gates an action; those all key off workflowStatus alone.
+  final bool notificationSeen;
   final String? assignedTo;
   final bool reopenedForReview;
 
@@ -38,6 +42,7 @@ class DashboardTask {
     required this.elapsedMinutes,
     required this.status,
     required this.workflowStatus,
+    required this.notificationSeen,
     required this.assignedTo,
     required this.reopenedForReview,
   });
@@ -55,6 +60,7 @@ class DashboardTask {
       elapsedMinutes: (json['elapsed_minutes'] as num?)?.toDouble() ?? 0,
       status: json['status'] as String? ?? 'open',
       workflowStatus: json['workflow_status'] as String? ?? 'unassigned',
+      notificationSeen: json['notification_seen'] as bool? ?? false,
       assignedTo: json['assigned_to'] as String?,
       reopenedForReview: json['reopened_for_review'] as bool? ?? false,
     );

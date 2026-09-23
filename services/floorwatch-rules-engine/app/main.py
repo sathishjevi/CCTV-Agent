@@ -384,6 +384,7 @@ async def _refresh_snapshots():
                   "elapsed_minutes": round((now - t.start_monotonic) / 60.0, 2),
                   "assigned_to": t.assigned_to, "assigned_by": t.assigned_by,
                   "workflow_status": t.workflow_status, "short_code": effort_engine.short_code(task_id),
+                  "notification_seen": t.notification_seen,
                   "reopened_for_review": t.reopened_for_review, "resolution_type": t.resolution_type}
         for task_id, t in effort_engine.tasks.items()
     }
@@ -452,7 +453,7 @@ def _resolve_task_channel(employee: dict) -> str | None:
     return employee.get("channel") or ("fcm" if employee.get("password_hash") else None) or DEFAULT_TASK_CHANNEL
 
 
-def _send_task_notification(employee_number, message) -> dict:
+def _send_task_notification(employee_number, message, task_id: str | None = None) -> dict:
     """Synchronous — always run via asyncio.to_thread from async callers,
     same as event_history.record(). Global Constraint 4 applies here
     exactly as it does to the zone/effort engines' own on_notify() path:
@@ -484,7 +485,7 @@ def _send_task_notification(employee_number, message) -> dict:
     if sender is None:
         log(f"Employee {employee_number} has unrecognized channel {channel!r} — skipping send", level="warning")
         return {"sent": False, "channel": "none", "detail": f"unrecognized channel {channel!r}"}
-    to_context = {"phone": employee.get("phone"), "fcm_token": employee.get("fcm_token")}
+    to_context = {"phone": employee.get("phone"), "fcm_token": employee.get("fcm_token"), "task_id": task_id}
     result = sender.send(to_context, message)
     return result.to_dict()
 
@@ -511,7 +512,7 @@ async def _notify_assignee(task_id: str):
         f'Floorwatch: "{task_name}" ({t.assigned_minutes:.0f}m). '
         f"Reply START/DONE/MORE/REVIEW. Code {effort_engine.short_code(task_id)}."
     )
-    result = await asyncio.to_thread(_send_task_notification, t.assigned_to, message)
+    result = await asyncio.to_thread(_send_task_notification, t.assigned_to, message, task_id)
     if result.get("sent") or result.get("channel") == "shadow_mode_suppressed":
         follow = effort_engine.mark_notified(task_id)
     else:
@@ -948,7 +949,8 @@ async def tick_loop():
             if evt.get("event_type") == "task_status_nudge":
                 # the event's own message already has the full text —
                 # reuse it verbatim rather than building it twice.
-                await asyncio.to_thread(_send_task_notification, evt.get("assigned_to"), evt.get("message", ""))
+                await asyncio.to_thread(
+                    _send_task_notification, evt.get("assigned_to"), evt.get("message", ""), evt.get("task_id"))
         # active_seconds/elapsed_minutes keep changing even on ticks that
         # produce no events — refresh regardless so /api/tasks doesn't
         # go stale between events.
@@ -1680,10 +1682,30 @@ async def employee_tasks(user=Depends(require_employee)):
             "active_minutes": round(t.active_seconds / 60.0, 2),
             "elapsed_minutes": round((now - t.start_monotonic) / 60.0, 2),
             "workflow_status": t.workflow_status, "short_code": effort_engine.short_code(t.task_id),
+            "notification_seen": t.notification_seen,
         }
         for t in effort_engine.open_tasks_for(employee_number)
     ]
     return {"tasks": tasks}
+
+
+@app.post("/api/employee/tasks/{task_id}/seen")
+async def employee_task_seen(task_id: str, user=Depends(require_employee)):
+    """Called by the app when the assignee opens the push notification
+    (see PushService's onMessageOpenedApp/getInitialMessage handling) or
+    opens the task's own detail screen — flips TaskRuntime.notification_seen
+    so the UI can stop saying "Notification sent" and start saying
+    "Notified — waiting to start". Purely cosmetic: unlike every other
+    /api/employee/tasks/{id}/* endpoint this never 400s on a stale state,
+    since a duplicate or late-arriving "seen" call (e.g. the notification
+    tap racing the detail screen's own call) is harmless, not an error."""
+    t, err = _own_task_or_403(task_id, _employee_number(user))
+    if err:
+        return err
+    evt = effort_engine.mark_notification_seen(task_id)
+    if evt:
+        await _emit(evt)
+    return {"ok": True}
 
 
 @app.post("/api/employee/tasks/{task_id}/start")

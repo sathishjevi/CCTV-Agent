@@ -194,6 +194,15 @@ class ApiClient {
     return list.map((e) => EmployeeTask.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  /// Tells the backend the assignee opened the push notification or the
+  /// task itself — see effort_engine.mark_notification_seen()'s docstring.
+  /// Cosmetic only (never changes whether Start/Complete/etc are allowed),
+  /// so callers fire this and ignore the result.
+  Future<void> markTaskSeen(String taskId) async {
+    final resp = await _post('/api/employee/tasks/$taskId/seen', headers: await _authHeaders());
+    _decode(resp);
+  }
+
   Future<void> startTask(String taskId) async {
     final resp = await _post('/api/employee/tasks/$taskId/start', headers: await _authHeaders());
     _decode(resp);

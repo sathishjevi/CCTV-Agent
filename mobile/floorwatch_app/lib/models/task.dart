@@ -11,6 +11,11 @@ class EmployeeTask {
   final double activeMinutes;
   final double elapsedMinutes;
   final String workflowStatus;
+  // Cosmetic only — splits workflowStatus=='notified' into "sent, not yet
+  // seen" vs "notified, waiting to start" for display. Never gates an
+  // action; canStart/isActionable below key off workflowStatus alone. See
+  // effort_engine.TaskRuntime.notification_seen's docstring.
+  final bool notificationSeen;
   final String shortCode;
 
   EmployeeTask({
@@ -23,6 +28,7 @@ class EmployeeTask {
     required this.activeMinutes,
     required this.elapsedMinutes,
     required this.workflowStatus,
+    required this.notificationSeen,
     required this.shortCode,
   });
 
@@ -37,6 +43,7 @@ class EmployeeTask {
       activeMinutes: (json['active_minutes'] as num).toDouble(),
       elapsedMinutes: (json['elapsed_minutes'] as num).toDouble(),
       workflowStatus: json['workflow_status'] as String? ?? 'unassigned',
+      notificationSeen: json['notification_seen'] as bool? ?? false,
       shortCode: json['short_code'] as String? ?? '',
     );
   }
@@ -49,7 +56,7 @@ class EmployeeTask {
       case 'unassigned':
         return 'Unassigned';
       case 'notified':
-        return 'Waiting for you to start';
+        return notificationSeen ? 'Waiting for you to start' : 'Notification sent — not yet seen';
       case 'notify_failed':
         return 'Notification failed';
       case 'in_progress':

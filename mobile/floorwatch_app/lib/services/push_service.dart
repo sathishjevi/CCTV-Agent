@@ -3,7 +3,10 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../screens/supervisor_home_screen.dart';
+import '../screens/task_list_screen.dart';
 import 'api_client.dart';
+import 'token_storage.dart';
 
 /// Push notifications — receives the SAME notifications the SMS/Twilio
 /// path sends today, once an employee's channel is "fcm" (see
@@ -27,6 +30,12 @@ class PushService {
   /// MaterialApp uses this so a push that arrives while the app is open can
   /// show a banner (the OS only draws notifications for a backgrounded app).
   static final GlobalKey<ScaffoldMessengerState> messengerKey = GlobalKey<ScaffoldMessengerState>();
+
+  /// MaterialApp's own navigatorKey — lets a tapped notification jump
+  /// straight to My Tasks (see _openFromMessage below) from wherever a
+  /// tap happens to resume the app, without every screen needing to know
+  /// about push.
+  static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
   FirebaseMessaging get _messaging => FirebaseMessaging.instance;
   bool _initialized = false;
@@ -80,5 +89,30 @@ class PushService {
         ?..hideCurrentSnackBar()
         ..showSnackBar(SnackBar(content: Text(body), duration: const Duration(seconds: 6)));
     });
+
+    // The user tapped a notification to open/resume the app — land on My
+    // Tasks (not whatever screen the app would otherwise cold-start to),
+    // since that's what they tapped to see. Covers both cases: app was
+    // backgrounded (onMessageOpenedApp) and app was fully closed
+    // (getInitialMessage, checked once here at startup).
+    FirebaseMessaging.onMessageOpenedApp.listen(_openFromMessage);
+    final initialMessage = await _messaging.getInitialMessage();
+    if (initialMessage != null) await _openFromMessage(initialMessage);
+  }
+
+  Future<void> _openFromMessage(RemoteMessage message) async {
+    final taskId = message.data['task_id'];
+    if (taskId == null || taskId.isEmpty) return;
+    // Best-effort — a failed "seen" call must never block navigation.
+    try {
+      await ApiClient.instance.markTaskSeen(taskId);
+    } catch (_) {}
+    final nav = navigatorKey.currentState;
+    if (nav == null) return;
+    final role = await TokenStorage.instance.readRole() ?? 'employee';
+    final destination = (role == 'supervisor' || role == 'secondary_admin' || role == 'admin')
+        ? const SupervisorHomeScreen(initialTab: 0) // My Tasks, not the Dashboard tab it defaults to
+        : const TaskListScreen();
+    nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => destination), (route) => false);
   }
 }

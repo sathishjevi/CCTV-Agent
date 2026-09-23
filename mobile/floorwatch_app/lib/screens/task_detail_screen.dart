@@ -23,17 +23,33 @@ class _TaskDetailScreenState extends State<TaskDetailScreen> {
   // action actually succeeds, so the button row and the status line
   // both reflect it immediately without needing to back out and refetch.
   late String _workflowStatus = widget.task.workflowStatus;
+  // Flips true as soon as this screen opens (see initState) — cosmetic
+  // only, see EmployeeTask.notificationSeen's docstring.
+  late bool _notificationSeen = widget.task.notificationSeen;
 
   bool get _canStart =>
       _workflowStatus == 'notified' || _workflowStatus == 'notify_failed' || _workflowStatus == 'awaiting_update';
   bool get _isActionable => _workflowStatus != 'completed';
+
+  @override
+  void initState() {
+    super.initState();
+    // Opening the task IS the assignee checking it — flip the "seen" flag
+    // so the list/dashboard stop saying "Notification sent" for this task.
+    // Fire-and-forget: purely cosmetic, never worth surfacing an error for.
+    if (_workflowStatus == 'notified' && !_notificationSeen) {
+      ApiClient.instance.markTaskSeen(widget.task.taskId).then((_) {
+        if (mounted) setState(() => _notificationSeen = true);
+      }).catchError((_) {});
+    }
+  }
 
   String get _statusLabel {
     switch (_workflowStatus) {
       case 'unassigned':
         return 'Unassigned';
       case 'notified':
-        return 'Waiting for you to start';
+        return _notificationSeen ? 'Waiting for you to start' : 'Notification sent — not yet seen';
       case 'notify_failed':
         return 'Notification failed';
       case 'in_progress':
