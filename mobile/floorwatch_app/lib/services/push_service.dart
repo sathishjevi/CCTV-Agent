@@ -3,7 +3,9 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/task.dart';
 import '../screens/supervisor_home_screen.dart';
+import '../screens/task_detail_screen.dart';
 import '../screens/task_list_screen.dart';
 import 'api_client.dart';
 import 'token_storage.dart';
@@ -114,5 +116,19 @@ class PushService {
         ? const SupervisorHomeScreen(initialTab: 0) // My Tasks, not the Dashboard tab it defaults to
         : const TaskListScreen();
     nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => destination), (route) => false);
+
+    // Land on that SPECIFIC task, not just the list it lives in — fetch
+    // the assignee's own open tasks (the same call My Tasks itself makes)
+    // and, if this one's still open, push its detail screen on top.
+    // Best-effort: no match (already completed/reassigned away by the
+    // time they tapped) just leaves them on My Tasks, not an error.
+    try {
+      final tasks = await ApiClient.instance.fetchTasks();
+      final EmployeeTask? match =
+          tasks.cast<EmployeeTask?>().firstWhere((t) => t?.taskId == taskId, orElse: () => null);
+      if (match != null) {
+        navigatorKey.currentState?.push(MaterialPageRoute(builder: (_) => TaskDetailScreen(task: match)));
+      }
+    } catch (_) {}
   }
 }
