@@ -487,6 +487,14 @@ def _send_task_notification(employee_number, message, task_id: str | None = None
         return {"sent": False, "channel": "none", "detail": f"unrecognized channel {channel!r}"}
     to_context = {"phone": employee.get("phone"), "fcm_token": employee.get("fcm_token"), "task_id": task_id}
     result = sender.send(to_context, message)
+    if getattr(result, "stale_token", False):
+        # FCM told us this token is permanently dead (uninstalled/reinstalled
+        # — a fresh install always gets a new token). Clear it now so every
+        # assignment after this one doesn't keep retrying, and failing, the
+        # exact same dead token — the employee logging back in on the app
+        # registers a fresh one and clears this on its own from there.
+        log(f"FCM token for employee {employee_number} is no longer registered — clearing it", level="warning")
+        employee_directory.set_fcm_token(employee_number, None)
     return result.to_dict()
 
 

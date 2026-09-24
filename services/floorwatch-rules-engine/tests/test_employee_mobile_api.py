@@ -470,3 +470,38 @@ def test_employee_device_token_does_not_override_explicit_sms_channel(app_client
                 headers={"Authorization": f"Bearer {token}"})
     entry = main_module.employee_directory.get("101")
     assert entry["channel"] == "sms"  # left alone — an explicit choice, not blank
+
+
+def test_a_dead_fcm_token_gets_cleared_after_notregistered(app_client):
+    """Reinstalling the app gets a NEW token — every assignment sent to
+    the OLD one FCM will ever accept is a permanent "NotRegistered", not
+    a one-off glitch. main.py must clear it right away so the NEXT
+    assignment doesn't retry, and fail, the exact same dead token —
+    see notifications.py's stale_token."""
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+    main_module.employee_directory.set_fcm_token("101", "dead-token")
+    main_module.employee_directory.set_channel("101", "fcm")
+
+    from notifications import NotificationResult
+
+    class DeadTokenFcmSender:
+        def send(self, to_context, message):
+            return NotificationResult(sent=False, channel="fcm",
+                                       detail="Requested entity was not found. (NotRegistered)",
+                                       stale_token=True)
+
+    main_module.TASK_CHANNEL_SENDERS["fcm"] = DeadTokenFcmSender()
+    main_module.config.SHADOW_MODE = False  # so _send_task_notification actually reaches the sender
+    try:
+        task_id = _create_task_assigned_to(client, "101")
+
+        tasks = client.get("/api/tasks").json()
+        assert tasks[task_id]["workflow_status"] == "notify_failed"
+        assert main_module.employee_directory.get("101")["fcm_token"] is None
+    finally:
+        # SHADOW_MODE lives on the shared config module, not per-test state
+        # — leaving it False here would silently flip every later test in
+        # the run to "really send" mode (see test_reassignment.py's own
+        # identical mutation/reset pattern).
+        main_module.config.SHADOW_MODE = True

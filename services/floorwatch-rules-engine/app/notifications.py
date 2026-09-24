@@ -123,13 +123,20 @@ class ContactBook:
 
 
 class NotificationResult:
-    def __init__(self, sent: bool, channel: str, detail: str = ""):
+    def __init__(self, sent: bool, channel: str, detail: str = "", stale_token: bool = False):
         self.sent = sent
         self.channel = channel
         self.detail = detail
+        # True only for FCM's own "this token doesn't exist anymore" reply
+        # (uninstalled, reinstalled — a fresh install gets a NEW token, so
+        # every prior one on file is permanently dead, not just temporarily
+        # unreachable). Lets main.py clear it immediately instead of
+        # retrying the same dead token on every future assignment until
+        # the employee happens to log in again.
+        self.stale_token = stale_token
 
     def to_dict(self) -> dict:
-        return {"sent": self.sent, "channel": self.channel, "detail": self.detail}
+        return {"sent": self.sent, "channel": self.channel, "detail": self.detail, "stale_token": self.stale_token}
 
 
 class NoOpSender:
@@ -306,7 +313,15 @@ class FcmSender:
             return NotificationResult(sent=True, channel="fcm", detail=message_id)
         except Exception as e:
             log(f"FCM send failed: {e}")
-            return NotificationResult(sent=False, channel="fcm", detail=str(e))
+            # FCM's way of saying "this token doesn't exist anymore" varies
+            # by SDK version — a dedicated exception class in newer
+            # firebase-admin, but always the literal string "NotRegistered"
+            # or "not a valid FCM registration token" somewhere in the
+            # message in every version seen in practice. Matching on text
+            # rather than importing the exception class keeps this working
+            # across firebase-admin versions without pinning one.
+            stale = "NotRegistered" in str(e) or "not a valid FCM registration token" in str(e)
+            return NotificationResult(sent=False, channel="fcm", detail=str(e), stale_token=stale)
 
 
 def build_sender(channel: str, config):

@@ -504,6 +504,33 @@ def test_fcm_sender_omits_data_when_no_task_id_given():
     assert kwargs["data"] is None
 
 
+def test_fcm_sender_flags_a_dead_token_as_stale():
+    """A reinstalled app gets a brand-new FCM token — every prior one on
+    file for that employee is permanently dead, not just unreachable, and
+    FCM says so via "NotRegistered". main.py uses stale_token to clear it
+    immediately rather than retrying the same dead token forever."""
+    from notifications import FcmSender
+    modules, _credentials, messaging = _fake_firebase()
+    messaging.send.side_effect = Exception("Requested entity was not found. (NotRegistered)")
+    with patch.dict(sys.modules, modules):
+        sender = FcmSender(credentials_json='{"type": "service_account"}')
+        result = sender.send({"fcm_token": "dead-token"}, "Task assigned")
+    assert result.sent is False
+    assert result.stale_token is True
+    assert result.to_dict()["stale_token"] is True
+
+
+def test_fcm_sender_does_not_flag_an_ordinary_send_failure_as_stale():
+    from notifications import FcmSender
+    modules, _credentials, messaging = _fake_firebase()
+    messaging.send.side_effect = Exception("Internal error")
+    with patch.dict(sys.modules, modules):
+        sender = FcmSender(credentials_json='{"type": "service_account"}')
+        result = sender.send({"fcm_token": "some-token"}, "Task assigned")
+    assert result.sent is False
+    assert result.stale_token is False
+
+
 def test_fcm_sender_without_a_token_skips_instead_of_guessing():
     from notifications import FcmSender
     modules, _credentials, messaging = _fake_firebase()
