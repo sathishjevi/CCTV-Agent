@@ -1090,8 +1090,21 @@ async def coverage_ui():
 @app.get("/healthz")
 async def healthz():
     from notifications import FcmSender
+    # Each of these four stores independently falls back to a local
+    # JSON/JSONL file if FLOORWATCH_POSTGRES_DSN is unset OR the connection
+    # fails — silently, with only a log line, not an error anyone sees by
+    # default. A wrong/unreachable DSN looks EXACTLY like "never configured
+    # one" from the outside otherwise. This makes "is Postgres actually
+    # being used, right now" a one-line check instead of a log dive.
+    postgres_backends = {
+        "employees": type(employee_directory).__name__,
+        "zones": type(zone_directory).__name__,
+        "history": type(event_history).__name__,
+        "tasks": type(task_store).__name__,
+    }
     return {"ok": True, "fcm_ready": isinstance(TASK_CHANNEL_SENDERS.get("fcm"), FcmSender), "app_push_config_ready": bool(config.FIREBASE_API_KEY), "shadow_mode": config.SHADOW_MODE, "connections": len(manager.active) + len(manager.app_scopes),
-            "replica_id": REPLICA_ID, "is_leader": leadership.is_leader}
+            "replica_id": REPLICA_ID, "is_leader": leadership.is_leader,
+            "postgres_configured": bool(config.POSTGRES_DSN), "storage_backend": postgres_backends}
 
 
 class LoginRequest(BaseModel):
