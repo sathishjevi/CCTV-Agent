@@ -45,8 +45,8 @@ from zone_directory import build_zone_directory, validate_zone_id  # noqa: E402
 
 from floorwatch_auth import (  # noqa: E402
     VALID_ROLES, RevocationStore, build_user_store, hash_password, issue_token, make_auth_dependency,
-    make_employee_auth_dependency, validate_password_strength, validate_username, verify_password,
-    verify_ws_token,
+    make_employee_auth_dependency, revocation_subject, validate_password_strength, validate_username,
+    verify_password, verify_ws_token,
 )
 from floorwatch_logging import get_logger  # noqa: E402
 from floorwatch_rate_limit import RateLimiter  # noqa: E402
@@ -59,6 +59,10 @@ from cluster_bus import (  # noqa: E402
 from leader_election import LeaderElection, leadership_loop  # noqa: E402
 
 log = get_logger("rules-engine")
+
+# Before the FastAPI app is created, so its integration hooks in.
+from error_monitoring import init_error_monitoring  # noqa: E402
+init_error_monitoring(config.SENTRY_DSN, config.SENTRY_ENVIRONMENT, config.SENTRY_RELEASE)
 
 users = build_user_store(config.POSTGRES_DSN, config.USERS_PATH)
 
@@ -156,18 +160,49 @@ class ConnectionManager:
         # Mobile-app sockets (/ws/app) — kept apart from `active` (the web
         # dashboard's full-event sockets) so they only ever receive hints.
         self.app_scopes: dict[WebSocket, dict] = {}
+        # Who each open socket belongs to: (revocation subject, token issue
+        # time). A token is only checked when a socket CONNECTS, so without
+        # this a revoked login would keep receiving updates until it
+        # happened to reconnect. See close_revoked().
+        self.identity: dict[WebSocket, tuple[str, int]] = {}
 
-    async def connect(self, ws: WebSocket):
+    async def connect(self, ws: WebSocket, identity: tuple[str, int] | None = None):
         await ws.accept()
         self.active.add(ws)
+        if identity:
+            self.identity[ws] = identity
 
-    async def connect_app(self, ws: WebSocket, scope: dict):
+    async def connect_app(self, ws: WebSocket, scope: dict, identity: tuple[str, int] | None = None):
         await ws.accept()
         self.app_scopes[ws] = scope
+        if identity:
+            self.identity[ws] = identity
 
     def disconnect(self, ws: WebSocket):
         self.active.discard(ws)
         self.app_scopes.pop(ws, None)
+        self.identity.pop(ws, None)
+
+    async def close_revoked(self, store) -> int:
+        """Closes every open socket whose login has been revoked since it
+        connected. Runs on EVERY replica (revocation lives in Redis, so a
+        revoke handled by one replica still reaches sockets held by
+        another), which is why this is a periodic sweep rather than
+        something the revoking request does directly."""
+        closed = 0
+        for ws, (subject, issued_at) in list(self.identity.items()):
+            try:
+                revoked = await store.is_revoked(subject, issued_at)
+            except Exception:
+                continue  # Redis blip — try again next sweep, never drop everyone
+            if revoked:
+                try:
+                    await ws.close(code=4401)
+                except Exception:
+                    pass
+                self.disconnect(ws)
+                closed += 1
+        return closed
 
     async def broadcast(self, event: dict):
         dead = []
@@ -949,24 +984,47 @@ async def motion_consumer_loop():
 async def tick_loop():
     while True:
         await asyncio.sleep(config.TICK_INTERVAL_SECONDS)
-        for evt in engine.tick():
-            await _emit(evt)
-            await _maybe_auto_assign(evt)
-        for evt in effort_engine.tick():
-            await _emit(evt)
-            if evt.get("event_type") == "task_status_nudge":
-                # the event's own message already has the full text —
-                # reuse it verbatim rather than building it twice.
-                await asyncio.to_thread(
-                    _send_task_notification, evt.get("assigned_to"), evt.get("message", ""), evt.get("task_id"))
-        # active_seconds/elapsed_minutes keep changing even on ticks that
-        # produce no events — refresh regardless so /api/tasks doesn't
-        # go stale between events.
-        await _refresh_snapshots()
+        try:
+            await _tick_once()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            # One bad tick (a transient database error while recording an
+            # event, say) used to end this loop for good — coverage
+            # monitoring would silently stop until the next restart.
+            log(f"tick failed, will retry next interval: {type(e).__name__}: {e}", level="error")
+
+
+async def _tick_once():
+    for evt in engine.tick():
+        await _emit(evt)
+        await _maybe_auto_assign(evt)
+    for evt in effort_engine.tick():
+        await _emit(evt)
+        if evt.get("event_type") == "task_status_nudge":
+            # the event's own message already has the full text —
+            # reuse it verbatim rather than building it twice.
+            await asyncio.to_thread(
+                _send_task_notification, evt.get("assigned_to"), evt.get("message", ""), evt.get("task_id"))
+    # active_seconds/elapsed_minutes keep changing even on ticks that
+    # produce no events — refresh regardless so /api/tasks doesn't
+    # go stale between events.
+    await _refresh_snapshots()
 
 
 leadership = LeaderElection(cluster_redis, owner_id=REPLICA_ID)
 _leader_tasks: list = []
+
+
+def _report_if_crashed(task: "asyncio.Task"):
+    """These loops are meant to run forever. If one ends with an exception
+    the service keeps answering requests but silently stops doing that
+    job — so it has to be loud."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log(f"background loop crashed and is no longer running: {type(exc).__name__}: {exc}", level="error")
 
 
 async def _start_leader_tasks():
@@ -994,6 +1052,8 @@ async def _start_leader_tasks():
         asyncio.create_task(tick_loop()),
         asyncio.create_task(command_consumer_loop()),
     ]
+    for _task in _leader_tasks:
+        _task.add_done_callback(_report_if_crashed)
 
 
 async def _stop_leader_tasks():
@@ -1011,6 +1071,15 @@ async def _on_leadership_change(is_leader: bool):
         await _start_leader_tasks()
     else:
         await _stop_leader_tasks()
+
+
+async def revoked_socket_sweep_loop():
+    while True:
+        await asyncio.sleep(config.SOCKET_REVOCATION_SWEEP_SECONDS)
+        try:
+            await manager.close_revoked(revocation_store)
+        except Exception as e:
+            log(f"revoked-socket sweep failed: {e}", level="warning")
 
 
 @asynccontextmanager
@@ -1032,12 +1101,14 @@ async def lifespan(app: FastAPI):
     broadcast_task = asyncio.create_task(
         broadcast_subscriber_loop(cluster_redis, REPLICA_ID, manager.broadcast))
     leadership_task = asyncio.create_task(leadership_loop(leadership, _on_leadership_change))
+    sweep_task = asyncio.create_task(revoked_socket_sweep_loop())
 
     log(f"Rules engine started. shadow_mode={config.SHADOW_MODE} replica_id={REPLICA_ID} "
         f"leader={leadership.is_leader}")
     yield
     leadership_task.cancel()
     broadcast_task.cancel()
+    sweep_task.cancel()
     await _stop_leader_tasks()
     await leadership.release()
     await cluster_redis.aclose()
@@ -2434,7 +2505,7 @@ async def events_ws(ws: WebSocket):
     if payload.get("role") == "employee":
         await ws.close(code=4403)
         return
-    await manager.connect(ws)
+    await manager.connect(ws, (revocation_subject(payload), payload["iat"]))
     try:
         while True:
             await ws.receive_text()  # dashboard doesn't send anything; just keep the connection open
@@ -2461,7 +2532,7 @@ async def app_events_ws(ws: WebSocket):
         scope = {"all": True} if employee.get("role") in ("supervisor", "secondary_admin", "admin") else {"employee": payload["sub"]}
     else:
         scope = {"all": True}
-    await manager.connect_app(ws, scope)
+    await manager.connect_app(ws, scope, (revocation_subject(payload), payload["iat"]))
     try:
         while True:
             await ws.receive_text()

@@ -14,3 +14,6 @@ python-dotenv>=1.0
 # skills/lib/floorwatch_auth.py's build_user_store()). Lazily imported,
 # so a deployment on the JSON fallback doesn't need this installed.
 psycopg[binary]>=3.1
+
+# Optional error monitoring — only active when FLOORWATCH_SENTRY_DSN / SENTRY_DSN is set.
+sentry-sdk[fastapi]>=2.0

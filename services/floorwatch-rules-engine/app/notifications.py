@@ -178,7 +178,7 @@ class TwilioSmsSender:
             log(f"Twilio SMS sent to {_mask_phone(to_number)}, sid={msg.sid}")
             return NotificationResult(sent=True, channel="twilio_sms", detail=msg.sid)
         except Exception as e:
-            log(f"Twilio send failed: {e}")
+            log(f"Twilio send failed: {e}", level="error")
             return NotificationResult(sent=False, channel="twilio_sms", detail=str(e))
 
 
@@ -220,7 +220,7 @@ class Msg91SmsSender:
             log(f"MSG91 send failed (HTTP {resp.status_code}): {body}")
             return NotificationResult(sent=False, channel="msg91_sms", detail=str(body))
         except Exception as e:
-            log(f"MSG91 send failed: {e}")
+            log(f"MSG91 send failed: {e}", level="error")
             return NotificationResult(sent=False, channel="msg91_sms", detail=str(e))
 
 
@@ -273,7 +273,7 @@ class Fast2SmsSender:
             log(f"Fast2SMS send failed (HTTP {resp.status_code}): {body}")
             return NotificationResult(sent=False, channel="fast2sms_sms", detail=str(body))
         except Exception as e:
-            log(f"Fast2SMS send failed: {e}")
+            log(f"Fast2SMS send failed: {e}", level="error")
             return NotificationResult(sent=False, channel="fast2sms_sms", detail=str(e))
 
 
@@ -312,7 +312,10 @@ class FcmSender:
             log(f"FCM push sent, message_id={message_id}")
             return NotificationResult(sent=True, channel="fcm", detail=message_id)
         except Exception as e:
-            log(f"FCM send failed: {e}")
+            # A dead token is routine (reinstalled app; handled by clearing
+            # it) — anything else is a real delivery problem worth an alert.
+            stale_token = "NotRegistered" in str(e) or "not a valid FCM registration token" in str(e)
+            log(f"FCM send failed: {e}", level="warning" if stale_token else "error")
             # FCM's way of saying "this token doesn't exist anymore" varies
             # by SDK version — a dedicated exception class in newer
             # firebase-admin, but always the literal string "NotRegistered"

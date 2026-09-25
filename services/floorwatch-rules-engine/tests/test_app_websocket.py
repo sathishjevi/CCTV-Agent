@@ -133,3 +133,32 @@ def test_app_socket_tells_a_secondary_admin_about_everything(app_client):
         hint = ws.receive_json()
 
     assert hint["task_id"] == other
+
+
+def test_revoked_login_has_its_open_socket_closed(app_client):
+    """A token is only checked when a socket connects — without the sweep, a
+    logged-out (or force-logged-out) phone would keep receiving updates
+    until it happened to reconnect."""
+    from starlette.websockets import WebSocketDisconnect
+    client, main_module, _url = app_client
+    token = _employee_token(client, "101", "employee", "+15559000101")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with client.websocket_connect(f"/ws/app?token={token}") as ws:
+        assert client.post("/api/employee/auth/logout", headers=headers).status_code == 200
+        closed = client.portal.call(main_module.manager.close_revoked, main_module.revocation_store)
+        assert closed == 1
+        with pytest.raises(WebSocketDisconnect) as exc:
+            ws.receive_text()
+        assert exc.value.code == 4401
+
+
+def test_sweep_leaves_unrevoked_sockets_alone(app_client):
+    client, main_module, _url = app_client
+    token = _employee_token(client, "101", "employee", "+15559000101")
+    other = _employee_token(client, "102", "employee", "+15559000102")
+
+    with client.websocket_connect(f"/ws/app?token={token}"):
+        client.post("/api/employee/auth/logout", headers={"Authorization": f"Bearer {other}"})
+        closed = client.portal.call(main_module.manager.close_revoked, main_module.revocation_store)
+        assert closed == 0

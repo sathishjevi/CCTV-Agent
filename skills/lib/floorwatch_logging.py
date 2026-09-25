@@ -26,7 +26,18 @@ own operational logging only.
 import json
 import sys
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Callable, Optional
+
+# Optional hook so a monitoring backend (see rules-engine's
+# error_monitoring.py) can be told about every error-level log line without
+# each call site knowing it exists. Called as reporter(service, message,
+# fields); any exception it raises is swallowed — logging never fails.
+_error_reporter: Optional[Callable[[str, str, dict], None]] = None
+
+
+def set_error_reporter(reporter: Optional[Callable[[str, str, dict], None]]):
+    global _error_reporter
+    _error_reporter = reporter
 
 
 def get_logger(service: str) -> Callable[..., None]:
@@ -58,5 +69,10 @@ def get_logger(service: str) -> Callable[..., None]:
         }
         record.update(fields)
         print(json.dumps(record), file=sys.stderr, flush=True)
+        if level in ("error", "critical") and _error_reporter is not None:
+            try:
+                _error_reporter(service, message, fields)
+            except Exception:
+                pass
 
     return log
