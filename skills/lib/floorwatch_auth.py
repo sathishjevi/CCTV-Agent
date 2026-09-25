@@ -230,6 +230,13 @@ def verify_token(secret: str, token: str) -> Optional[dict]:
 # A deployment that actually needs revocation to work must pass a real
 # Redis client here, not rely on the fallback.
 
+def revocation_subject(payload: dict) -> str:
+    """The key a token is revoked under. Employee tokens (sub = an
+    employee_number) are namespaced so an employee "104" and a dashboard
+    account named "104" — both legal — can never revoke each other."""
+    return f"employee:{payload['sub']}" if payload.get("role") == "employee" else payload["sub"]
+
+
 class RevocationStore:
     _KEY_PREFIX = "floorwatch:revoked:"
 
@@ -659,7 +666,7 @@ def make_auth_dependency(secret: str, required_role: Optional[str] = None,
         payload = verify_token(secret, token)
         if payload is None:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
-        if revocation_store is not None and await revocation_store.is_revoked(payload["sub"], payload["iat"]):
+        if revocation_store is not None and await revocation_store.is_revoked(revocation_subject(payload), payload["iat"]):
             raise HTTPException(status_code=401, detail="Token revoked — please log in again")
         if required_rank is not None and ROLE_RANK.get(payload.get("role"), -1) < required_rank:
             raise HTTPException(status_code=403, detail=f"{required_role.capitalize()} role required")
@@ -699,7 +706,7 @@ def make_employee_auth_dependency(secret: str, employee_directory, revocation_st
             raise HTTPException(status_code=401, detail="Invalid or expired token")
         if payload.get("role") != "employee":
             raise HTTPException(status_code=403, detail="Employee role required")
-        if revocation_store is not None and await revocation_store.is_revoked(payload["sub"], payload["iat"]):
+        if revocation_store is not None and await revocation_store.is_revoked(revocation_subject(payload), payload["iat"]):
             raise HTTPException(status_code=401, detail="Token revoked — please log in again")
         import asyncio
         employee = await asyncio.to_thread(employee_directory.get, payload["sub"])
@@ -722,6 +729,6 @@ async def verify_ws_token(secret: str, websocket,
     payload = verify_token(secret, token)
     if payload is None:
         return None
-    if revocation_store is not None and await revocation_store.is_revoked(payload["sub"], payload["iat"]):
+    if revocation_store is not None and await revocation_store.is_revoked(revocation_subject(payload), payload["iat"]):
         return None
     return payload

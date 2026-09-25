@@ -88,6 +88,7 @@ class _TaskListScreenState extends State<TaskListScreen> with WidgetsBindingObse
 
   Future<void> _logout() async {
     LiveUpdates.instance.stop();
+    await ApiClient.instance.logout(); // needs the token, so before it's cleared
     await TokenStorage.instance.clear();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(

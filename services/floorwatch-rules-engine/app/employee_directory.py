@@ -254,6 +254,17 @@ class PostgresEmployeeDirectory:
                 (fcm_token, employee_number))
             return cur.rowcount > 0
 
+    def clear_fcm_token_from_others(self, fcm_token: str, keep_employee_number: str) -> int:
+        """A push token identifies one app INSTALL, not one person. When a
+        second employee logs in on the same phone, the first employee's
+        record must stop pointing at it — otherwise the first employee's
+        task notifications keep landing on the second person's screen."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE floorwatch_employees SET fcm_token=NULL WHERE fcm_token=%s AND employee_number<>%s",
+                (fcm_token, keep_employee_number))
+            return cur.rowcount
+
     def set_channel(self, employee_number: str, channel: Optional[str]) -> bool:
         with self._connect() as conn:
             cur = conn.execute(
@@ -361,6 +372,17 @@ class JsonEmployeeDirectory:
         data[employee_number]["fcm_token"] = fcm_token
         self._save(data)
         return True
+
+    def clear_fcm_token_from_others(self, fcm_token: str, keep_employee_number: str) -> int:
+        data = self._load()
+        cleared = 0
+        for number, record in data.items():
+            if number != keep_employee_number and record.get("fcm_token") == fcm_token:
+                record["fcm_token"] = None
+                cleared += 1
+        if cleared:
+            self._save(data)
+        return cleared
 
     def set_channel(self, employee_number: str, channel: Optional[str]) -> bool:
         data = self._load()

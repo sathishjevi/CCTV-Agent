@@ -380,6 +380,27 @@ class ApiClient {
     _decode(resp);
   }
 
+  /// Signs the employee out on every device without deactivating them —
+  /// for a lost or shared phone.
+  Future<void> forceLogoutEmployee(String employeeNumber) async {
+    final resp = await _post(
+      '/api/employee/dashboard/employees/$employeeNumber/logout', headers: await _authHeaders());
+    _decode(resp);
+  }
+
+  /// Server-side logout for the CURRENT session, so a copied token stops
+  /// working (and this phone stops receiving the employee's pushes).
+  /// Best-effort by design: logging out must always succeed locally, even
+  /// offline, so any failure or a slow server is swallowed.
+  Future<void> logout() async {
+    try {
+      final path = await TokenStorage.instance.readKind() == 'dashboard'
+          ? '/api/logout'
+          : '/api/employee/auth/logout';
+      await _post(path, headers: await _authHeaders()).timeout(const Duration(seconds: 4));
+    } catch (_) {}
+  }
+
   Future<void> reactivateEmployee(String employeeNumber) async {
     final resp = await _post(
       '/api/employee/dashboard/employees/$employeeNumber/reactivate', headers: await _authHeaders());

@@ -1145,6 +1145,14 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
+@app.post("/api/logout")
+async def dashboard_logout(user=Depends(require_auth)):
+    """Server-side logout for dashboard accounts (username/password) — see
+    employee_logout. Without it a copied browser token outlived the logout."""
+    await revocation_store.revoke(user["sub"])
+    return {"ok": True}
+
+
 @app.post("/api/change-password")
 async def change_password(body: ChangePasswordRequest, user=Depends(require_auth)):
     """Self-service — any authenticated user changes their own password.
@@ -1381,6 +1389,7 @@ async def edit_employee(employee_number: str, body: EditEmployeeRequest, user=De
 async def deactivate_employee(employee_number: str, user=Depends(require_supervisor)):
     if not await asyncio.to_thread(employee_directory.set_active, employee_number, False):
         return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
+    await _end_employee_sessions(employee_number)
     return {"ok": True}
 
 
@@ -1656,6 +1665,26 @@ async def employee_change_password(body: ChangeEmployeePasswordRequest, user=Dep
     return {"ok": True}
 
 
+@app.post("/api/employee/auth/logout")
+async def employee_logout(user=Depends(require_employee)):
+    """Server-side logout: the app used to only forget its token locally,
+    so a copied token stayed valid until it expired. This kills it, and
+    stops pushes to this phone so the next person to use it doesn't get
+    the previous employee's task notifications."""
+    await _end_employee_sessions(_employee_number(user))
+    return {"ok": True}
+
+
+@app.post("/api/admin/employees/{employee_number}/logout")
+async def force_logout_employee(employee_number: str, user=Depends(require_supervisor)):
+    """Force-logout without deactivating — e.g. a lost or shared phone."""
+    if await asyncio.to_thread(employee_directory.get, employee_number) is None:
+        return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
+    await _end_employee_sessions(employee_number)
+    log(f"'{user['sub']}' force-logged-out employee {employee_number}")
+    return {"ok": True}
+
+
 class SetEmployeePasswordRequest(BaseModel):
     password: str
 
@@ -1672,11 +1701,32 @@ async def set_employee_password(
         return JSONResponse(status_code=400, content={"error": error})
     password_hash = hash_password(body.password)
     await asyncio.to_thread(employee_directory.set_password_hash, employee_number, password_hash)
+    # Replacing an EXISTING password is the "this login may be compromised"
+    # lever — the old password stops working, so the old sessions must too.
+    # Setting the very first password (the normal onboarding step) has no
+    # earlier sessions to kill, and revoking then would also reject a login
+    # made in the same second as the set (tokens carry whole-second issue times).
+    if existing.get("password_hash"):
+        await _end_employee_sessions(employee_number)
     return {"ok": True}
 
 
 def _employee_number(user: dict) -> str:
     return user["employee"]["employee_number"]
+
+
+async def _end_employee_sessions(employee_number: str):
+    """Kills every login this employee currently holds AND stops pushing to
+    their phone. Used by logout, deactivation, an admin-set password and
+    force-logout. Revocation is per-employee (a cutoff on token issue
+    time), so it signs out all of that person's devices at once, not one
+    phone; they can log straight back in with a fresh token.
+
+    Deactivation is covered by the live "active" check too, but revoking
+    matters: without it, deactivating and later REACTIVATING someone
+    would bring back a token that was issued before they were let go."""
+    await revocation_store.revoke(f"employee:{employee_number}")
+    await asyncio.to_thread(employee_directory.set_fcm_token, employee_number, None)
 
 
 def _own_task_or_403(task_id: str, employee_number: str):
@@ -1819,6 +1869,10 @@ class DeviceTokenRequest(BaseModel):
 async def employee_register_device_token(body: DeviceTokenRequest, user=Depends(require_employee)):
     employee = user["employee"]
     await asyncio.to_thread(employee_directory.set_fcm_token, employee["employee_number"], body.fcm_token)
+    # One phone install = one person. If someone else was last signed in on
+    # this device, their record still points at this token — drop it.
+    await asyncio.to_thread(
+        employee_directory.clear_fcm_token_from_others, body.fcm_token, employee["employee_number"])
     if not employee.get("channel"):
         # First-time app registration switches this employee over to
         # push automatically — see dazzling-hopping-comet.md's "Deferred"
@@ -2019,6 +2073,7 @@ async def employee_dashboard_edit_employee(
 async def employee_dashboard_deactivate_employee(employee_number: str, user=Depends(require_employee_manager)):
     if not await asyncio.to_thread(employee_directory.set_active, employee_number, False):
         return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
+    await _end_employee_sessions(employee_number)
     return {"ok": True}
 
 
@@ -2043,6 +2098,15 @@ async def employee_dashboard_set_primary_contact(
     return {"ok": True}
 
 
+@app.post("/api/employee/dashboard/employees/{employee_number}/logout")
+async def employee_dashboard_force_logout(employee_number: str, user=Depends(require_employee_manager)):
+    if await asyncio.to_thread(employee_directory.get, employee_number) is None:
+        return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
+    await _end_employee_sessions(employee_number)
+    log(f"employee:{user['sub']} force-logged-out employee {employee_number}")
+    return {"ok": True}
+
+
 @app.post("/api/employee/dashboard/employees/{employee_number}/set-password")
 async def employee_dashboard_set_employee_password(
     employee_number: str, body: SetEmployeePasswordRequest, user=Depends(require_employee_manager)
@@ -2055,6 +2119,13 @@ async def employee_dashboard_set_employee_password(
         return JSONResponse(status_code=400, content={"error": reason})
     password_hash = hash_password(body.password)
     await asyncio.to_thread(employee_directory.set_password_hash, employee_number, password_hash)
+    # Replacing an EXISTING password is the "this login may be compromised"
+    # lever — the old password stops working, so the old sessions must too.
+    # Setting the very first password (the normal onboarding step) has no
+    # earlier sessions to kill, and revoking then would also reject a login
+    # made in the same second as the set (tokens carry whole-second issue times).
+    if existing.get("password_hash"):
+        await _end_employee_sessions(employee_number)
     return {"ok": True}
 
 

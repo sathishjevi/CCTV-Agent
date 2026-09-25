@@ -197,6 +197,11 @@ class _ManageEmployeesScreenState extends State<ManageEmployeesScreen> {
                                   if (e.active)
                                     OutlinedButton(
                                         onPressed: () => _runAction(
+                                            () => ApiClient.instance.forceLogoutEmployee(e.employeeNumber)),
+                                        child: const Text('Force logout')),
+                                  if (e.active)
+                                    OutlinedButton(
+                                        onPressed: () => _runAction(
                                             () => ApiClient.instance.deactivateEmployee(e.employeeNumber)),
                                         child: const Text('Deactivate'))
                                   else

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../services/api_client.dart';
 import '../services/live_updates.dart';
 import '../services/token_storage.dart';
 import 'change_password_dialog.dart';
@@ -67,6 +68,7 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
 
   Future<void> _logout() async {
     LiveUpdates.instance.stop();
+    await ApiClient.instance.logout(); // needs the token, so before it's cleared
     await TokenStorage.instance.clear();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(

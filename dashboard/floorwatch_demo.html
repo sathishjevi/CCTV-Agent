@@ -1389,6 +1389,11 @@
   };
 
   document.getElementById('logoutBtn').onclick = () => {
+    // Tell the server too, so a copied token stops working — fire and
+    // forget; logging out locally must never wait on the network.
+    if(currentAuth){
+      fetch(`${currentAuth.backendBase}/api/logout`, {method: 'POST', headers: {'Authorization': `Bearer ${currentAuth.token}`}}).catch(()=>{});
+    }
     clearStoredAuth();
     currentAuth = null;
     if(ws) ws.close();
@@ -1593,7 +1598,8 @@
             <button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="edit" data-emp="${escapeHtml(e.employee_number)}">Edit</button>
             <button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="set-password" data-emp="${escapeHtml(e.employee_number)}">Set password</button>
             ${e.active
-              ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="deactivate" data-emp="${escapeHtml(e.employee_number)}">Deactivate</button>`
+              ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="force-logout" data-emp="${escapeHtml(e.employee_number)}" title="Sign this person out of every device (lost or shared phone)">Force logout</button>
+                 <button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="deactivate" data-emp="${escapeHtml(e.employee_number)}">Deactivate</button>`
               : `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reactivate" data-emp="${escapeHtml(e.employee_number)}">Reactivate</button>`}
             ${e.role === 'supervisor'
               ? `<label style="display:flex;align-items:center;gap:4px;font-size:10.5px;color:var(--dim);cursor:pointer;">
@@ -1685,6 +1691,12 @@
         return;
       } else if(action === 'set-password'){
         openSetPasswordModal(employeeNumber);
+        return;
+      } else if(action === 'force-logout'){
+        if(!confirm(`Sign employee #${employeeNumber} out of every device? They can log straight back in.`)) return;
+        const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees/${encodeURIComponent(employeeNumber)}/logout`, {method: 'POST'});
+        if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+        errEl.textContent = `Employee #${employeeNumber} signed out.`;
         return;
       } else if(action === 'deactivate'){
         if(!confirm(`Deactivate employee #${employeeNumber}? They will no longer be assignable to new tasks.`)) return;
