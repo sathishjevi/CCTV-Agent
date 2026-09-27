@@ -15,5 +15,5 @@ python-dotenv>=1.0
 # so a deployment on the JSON fallback doesn't need this installed.
 psycopg[binary]>=3.1
 
-# Optional error monitoring — only active when FLOORWATCH_SENTRY_DSN / SENTRY_DSN is set.
-sentry-sdk[fastapi]>=2.0
+# Optional error monitoring — only active when FLOORWATCH_POSTHOG_API_KEY is set.
+posthog>=7.0

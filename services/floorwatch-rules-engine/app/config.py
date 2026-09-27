@@ -229,11 +229,16 @@ USERS_PATH = Path(os.environ.get("FLOORWATCH_USERS_PATH", SERVICE_DIR / "users.j
 TOKEN_TTL_SECONDS = int(os.environ.get("FLOORWATCH_TOKEN_TTL_SECONDS", 12 * 3600))
 # How often open live-update sockets are re-checked against the revocation
 # list. A revoked login's socket is closed within this long.
-# Error monitoring (Sentry) — see error_monitoring.py. Off when no DSN is set.
-SENTRY_DSN = os.environ.get("FLOORWATCH_SENTRY_DSN") or os.environ.get("SENTRY_DSN") or ""
-SENTRY_ENVIRONMENT = os.environ.get("FLOORWATCH_SENTRY_ENVIRONMENT", "production")
+# Error monitoring (PostHog Error Tracking) — see error_monitoring.py. Off
+# when no API key is set. The project API key (starts "phc_") is write-only:
+# it can send events into your project, not read anything back.
+POSTHOG_API_KEY = os.environ.get("FLOORWATCH_POSTHOG_API_KEY") or os.environ.get("POSTHOG_API_KEY") or ""
+# US cloud is the default; use https://eu.i.posthog.com for the EU cloud, or
+# your own address if self-hosting.
+POSTHOG_HOST = os.environ.get("FLOORWATCH_POSTHOG_HOST") or os.environ.get("POSTHOG_HOST") or "https://us.i.posthog.com"
+MONITORING_ENVIRONMENT = os.environ.get("FLOORWATCH_MONITORING_ENVIRONMENT", "production")
 # Railway sets this on every deploy, so an error can be tied to the release.
-SENTRY_RELEASE = os.environ.get("RAILWAY_GIT_COMMIT_SHA", "")
+MONITORING_RELEASE = os.environ.get("RAILWAY_GIT_COMMIT_SHA", "")
 SOCKET_REVOCATION_SWEEP_SECONDS = float(os.environ.get("FLOORWATCH_SOCKET_REVOCATION_SWEEP_SECONDS", 15))
 
 # ── Rate limiting (DATA_PROTECTION_SECURITY_ANALYSIS.md DP-H3) ──────────

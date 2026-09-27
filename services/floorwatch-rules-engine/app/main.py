@@ -61,8 +61,9 @@ from leader_election import LeaderElection, leadership_loop  # noqa: E402
 log = get_logger("rules-engine")
 
 # Before the FastAPI app is created, so its integration hooks in.
-from error_monitoring import init_error_monitoring  # noqa: E402
-init_error_monitoring(config.SENTRY_DSN, config.SENTRY_ENVIRONMENT, config.SENTRY_RELEASE)
+import error_monitoring  # noqa: E402
+_error_monitoring_on = error_monitoring.init_error_monitoring(
+    config.POSTHOG_API_KEY, config.POSTHOG_HOST, config.MONITORING_ENVIRONMENT, config.MONITORING_RELEASE)
 
 users = build_user_store(config.POSTGRES_DSN, config.USERS_PATH)
 
@@ -1112,6 +1113,7 @@ async def lifespan(app: FastAPI):
     await _stop_leader_tasks()
     await leadership.release()
     await cluster_redis.aclose()
+    error_monitoring.shutdown()  # flush the last queued error reports
 
 
 app = FastAPI(
@@ -1125,6 +1127,8 @@ app.add_middleware(
     CORSMiddleware, allow_origins=config.CORS_ALLOWED_ORIGINS,
     allow_methods=["*"], allow_headers=["*"], allow_credentials=True,
 )
+if _error_monitoring_on:
+    app.add_middleware(error_monitoring.ErrorReportingMiddleware)
 install_security_headers(app)  # DP-M2 — see floorwatch_security_headers.py
 
 
