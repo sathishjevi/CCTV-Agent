@@ -31,6 +31,11 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+# The Flutter template's /build/ above only matches THIS directory's own
+# build output — it does NOT match android/build/ or ios/build/ (each
+# native platform project's own Gradle/Xcode output), which is why
+# android/build/reports/... ended up committed once already.
+**/build/
 /coverage/
 
 # Symbolication related
