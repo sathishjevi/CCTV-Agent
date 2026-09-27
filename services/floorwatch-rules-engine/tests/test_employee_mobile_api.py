@@ -256,7 +256,7 @@ def test_app_config_is_null_until_the_firebase_api_key_is_set(app_client):
 
     resp = client.get("/api/employee/app-config", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
-    assert resp.json() == {"firebase": None}
+    assert resp.json() == {"firebase": None, "posthog": None}
 
 
 def test_app_config_serves_firebase_settings_to_a_logged_in_employee_only(app_client, monkeypatch):
@@ -271,6 +271,24 @@ def test_app_config_serves_firebase_settings_to_a_logged_in_employee_only(app_cl
     assert firebase["projectId"] and firebase["appId"] and firebase["messagingSenderId"]
 
     # not handed out to an unauthenticated caller
+    assert client.get("/api/employee/app-config", headers={"Authorization": "Bearer garbage"}).status_code == 401
+
+
+def test_app_config_serves_the_posthog_token_only_when_configured(app_client, monkeypatch):
+    client, main_module = app_client
+    main_module.employee_directory.add("101", "Alex Chen", "employee", "janitor", "+15559000101")
+    client.post("/api/admin/employees/101/set-password", json={"password": "correct-horse-battery"})
+    token = _login_with_password(client, "+15559000101", "correct-horse-battery").json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    assert client.get("/api/employee/app-config", headers=headers).json()["posthog"] is None
+
+    monkeypatch.setattr(main_module.config, "POSTHOG_API_KEY", "phc_abc")
+    monkeypatch.setattr(main_module.config, "POSTHOG_HOST", "https://us.i.posthog.com")
+    posthog = client.get("/api/employee/app-config", headers=headers).json()["posthog"]
+    assert posthog == {"apiKey": "phc_abc", "host": "https://us.i.posthog.com"}
+
+    # login-gated, same as the Firebase settings
     assert client.get("/api/employee/app-config", headers={"Authorization": "Bearer garbage"}).status_code == 401
 
 

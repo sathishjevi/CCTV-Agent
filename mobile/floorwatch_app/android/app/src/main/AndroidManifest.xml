@@ -5,7 +5,7 @@
     <!-- Android 13+ won't show push notifications without this. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
-        android:label="floorwatch_app"
+        android:label="Floorwatch"
         android:name=".FloorwatchApplication"
         android:icon="@mipmap/ic_launcher">
         <activity

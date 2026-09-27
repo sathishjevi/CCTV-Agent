@@ -401,11 +401,27 @@ SNAPSHOT_TASKS_KEY = "floorwatch:snapshot:tasks"
 SNAPSHOT_QUEUE_TASKS_KEY = "floorwatch:snapshot:queue_tasks"
 
 
+_snapshot_lock = asyncio.Lock()
+
+
 async def _refresh_snapshots():
     """Called by the LEADER after any state change (stream-driven or
     command-driven) and on every tick — recomputes exactly what each GET
     endpoint used to compute inline from engine/effort_engine, and writes
-    it where every replica can read it."""
+    it where every replica can read it.
+
+    Serialized, and computed INSIDE the lock: two refreshes used to be able
+    to interleave — the tick's refresh computes the state, yields on its
+    first Redis write, a command handler changes state and writes its own
+    fresh snapshot, then the tick's stale snapshot lands last and wins. The
+    dashboard then showed the old state until the next tick. With the
+    compute under the lock, whichever refresh runs last always reads state
+    that includes every change made before it was called."""
+    async with _snapshot_lock:
+        await _refresh_snapshots_locked()
+
+
+async def _refresh_snapshots_locked():
     state = {
         zone_id: {"status": z.status, "camera_id": z.camera_id, "role_tag": z.role_tag,
                    "nudge_count_shift": z.nudge_count_shift}
@@ -1925,15 +1941,20 @@ async def employee_reassign_task(task_id: str, body: EmployeeReassignRequest, us
 
 @app.get("/api/employee/app-config")
 async def employee_app_config(user=Depends(require_employee)):
-    """Firebase client settings for the mobile app, from Railway variables.
+    """Client settings for the mobile app, from Railway variables.
     Login-gated (the app only needs them after signing in) so they aren't
-    handed to anyone who finds the URL. {"firebase": null} when the API key
-    isn't set — the app then just runs without push."""
+    handed to anyone who finds the URL.
+      - "firebase": null when the API key isn't set — the app then just runs
+        without push.
+      - "posthog": null when no PostHog token is set — the app then just runs
+        without crash reporting. Same token the backend reports errors with
+        (a write-only project token), so both land in one project."""
     fields = {
         "apiKey": config.FIREBASE_API_KEY, "appId": config.FIREBASE_APP_ID,
         "projectId": config.FIREBASE_PROJECT_ID, "messagingSenderId": config.FIREBASE_SENDER_ID,
     }
-    return {"firebase": fields if all(fields.values()) else None}
+    posthog = {"apiKey": config.POSTHOG_API_KEY, "host": config.POSTHOG_HOST} if config.POSTHOG_API_KEY else None
+    return {"firebase": fields if all(fields.values()) else None, "posthog": posthog}
 
 
 class DeviceTokenRequest(BaseModel):

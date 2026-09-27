@@ -528,10 +528,16 @@ class ApiClient {
   /// served from the backend's Railway variables so they never live in git
   /// or the build. Null when push isn't configured on the server.
   Future<Map<String, String>?> fetchFirebaseConfig() async {
-    final resp = await _get('/api/employee/app-config', headers: await _authHeaders());
-    final firebase = _decode(resp)['firebase'];
+    final firebase = (await fetchAppConfig())['firebase'];
     if (firebase is! Map) return null;
     return firebase.map((k, v) => MapEntry(k.toString(), v.toString()));
+  }
+
+  /// Everything the server hands the app after login, from Railway variables:
+  /// {"firebase": {...}|null, "posthog": {"apiKey", "host"}|null}.
+  Future<Map<String, dynamic>> fetchAppConfig() async {
+    final resp = await _get('/api/employee/app-config', headers: await _authHeaders());
+    return _decode(resp);
   }
 
   Future<void> registerDeviceToken(String fcmToken) async {

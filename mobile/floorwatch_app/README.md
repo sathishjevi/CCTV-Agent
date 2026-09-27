@@ -75,3 +75,66 @@ flutter build apk --dart-define=FLOORWATCH_API_BASE_URL=https://your-deployment.
 
 The resulting APK can be sideloaded directly for testing — no Play
 Console account needed until you want Play Store distribution.
+
+## Releasing to staff (Android)
+
+Debug builds (`flutter build apk --debug`) are for developers only. Staff get a
+**release** build signed with your own release key.
+
+### One-time: create the release key
+
+```bash
+keytool -genkeypair -v -keystore floorwatch-release.jks -alias floorwatch \
+  -keyalg RSA -keysize 2048 -validity 10000
+```
+
+Keep `floorwatch-release.jks` **outside the repo** and **back it up somewhere
+safe** (a password manager or company vault). Google Play will not accept an
+update signed with a different key, and a lost key can't be recovered.
+
+Then create `android/key.properties` (gitignored — never commit it):
+
+```properties
+storePassword=<the keystore password>
+keyPassword=<the key password>
+keyAlias=floorwatch
+storeFile=C:/path/to/floorwatch-release.jks
+```
+
+### Each release
+
+1. Raise the build number in `pubspec.yaml` — `version: 1.0.0+2` means version
+   name `1.0.0`, build number `2`. Play rejects a build number it has seen before.
+2. Build:
+
+```bash
+# Play Console upload (recommended for staff rollout)
+flutter build appbundle --release --dart-define=FLOORWATCH_API_BASE_URL=https://your-deployment.up.railway.app
+
+# or a directly-installable APK (e.g. a handful of test phones)
+flutter build apk --release --dart-define=FLOORWATCH_API_BASE_URL=https://your-deployment.up.railway.app
+```
+
+Outputs: `build/app/outputs/bundle/release/app-release.aab` and
+`build/app/outputs/flutter-apk/app-release.apk`.
+
+`bundleRelease` refuses to run without `android/key.properties`, so a bundle
+signed with the debug key can't be produced by accident.
+
+### Play Console (staff-only distribution)
+
+Use the **Internal testing** track: add staff emails as testers, and they install
+from the Play Store with no public listing. You'll need a Play Console account
+($25 one-time), the app's store details, a privacy policy URL (the app handles
+phone numbers) and the Data safety form.
+
+### Firebase after switching to release builds
+
+Add the release key's SHA-1 to the Android app in the Firebase console. Get it with:
+
+```bash
+keytool -list -v -keystore floorwatch-release.jks -alias floorwatch
+```
+
+If you use Play App Signing (the default), also add the SHA-1 shown under Play
+Console → App integrity.

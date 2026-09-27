@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 
+import 'services/crash_reporting.dart';
 import 'services/dev_http_overrides.dart';
 import 'services/push_service.dart';
 import 'services/token_storage.dart';
@@ -13,10 +14,13 @@ void main() async {
   // for Dart's own networking only in debug builds — see
   // dev_http_overrides.dart's doc comment for why this exists and why
   // it's structurally impossible for it to affect a release build.
+  WidgetsFlutterBinding.ensureInitialized();
   if (kDebugMode) {
-    WidgetsFlutterBinding.ensureInitialized();
     await installDevCertificateOverride();
   }
+  // Before runApp, so a crash while starting up is reported too (uses the
+  // token cached from the last login; see crash_reporting.dart).
+  await CrashReporting.startFromCache();
   runApp(const FloorwatchApp());
 }
 
@@ -76,7 +80,9 @@ class _StartupGateState extends State<_StartupGate> {
       if (kind == 'employee') {
         try {
           await PushService.instance.initialize();
-        } catch (_) {}
+        } catch (e, st) {
+          CrashReporting.report(e, st, where: 'push_init');
+        }
       }
     }
     if (!mounted) return;

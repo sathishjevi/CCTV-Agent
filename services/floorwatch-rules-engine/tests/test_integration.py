@@ -46,6 +46,10 @@ def app_client(fake_redis_url, monkeypatch, tmp_path):
     monkeypatch.setattr(config, "EMPLOYEE_DIRECTORY_PATH", tmp_path / "employee_directory.json")
     monkeypatch.setattr(config, "TASK_STORE_PATH", tmp_path / "tasks.json")
     monkeypatch.setattr(config, "AUTH_SECRET", "test-fixture-secret-needs-32-bytes-minimum")
+    # Some tests flip config.SHADOW_MODE directly ("so the sender is really reached"). Registering
+    # it here makes monkeypatch restore the original at teardown whatever they do to it, instead
+    # of leaking into every later test (which is how test file ORDER used to decide pass/fail).
+    monkeypatch.setattr(config, "SHADOW_MODE", config.SHADOW_MODE)
 
     sys.modules.pop("main", None)
     sys.modules.pop("engine", None)
@@ -351,3 +355,36 @@ def test_history_requires_authentication(app_client):
     client, main_module, _url = app_client
     resp = client.get("/api/history", headers={"Authorization": ""})
     assert resp.status_code == 401
+
+
+def test_overlapping_snapshot_refreshes_never_leave_a_stale_snapshot(app_client):
+    """A refresh computes the state, then yields on its first Redis write. If
+    another refresh (with newer state) finishes in that gap, the slow one's
+    OLDER snapshot used to land last and win — the dashboard showed stale
+    state until the next tick. Refreshes are now serialized and compute
+    inside the lock."""
+    import asyncio
+    client, main_module, _url = app_client
+    real_write = main_module.write_snapshot
+    writes = {"n": 0}
+
+    async def stalls_on_first_write(redis_client, key, value):
+        writes["n"] += 1
+        if writes["n"] == 1:
+            await asyncio.sleep(0.25)  # the first refresh stalls mid-write
+        await real_write(redis_client, key, value)
+
+    async def scenario(refresh):
+        main_module.write_snapshot = stalls_on_first_write
+        try:
+            first = asyncio.create_task(refresh())
+            await asyncio.sleep(0.05)                       # first has started, and is stalled
+            # state changes meanwhile: a task appears
+            assert main_module.effort_engine.assign_task("Late task", "theatre3", 30, task_id="late") is not None
+            await refresh()                                 # a newer refresh completes
+            await first
+        finally:
+            main_module.write_snapshot = real_write
+
+    client.portal.call(scenario, main_module._refresh_snapshots)
+    assert "late" in client.get("/api/tasks").json()

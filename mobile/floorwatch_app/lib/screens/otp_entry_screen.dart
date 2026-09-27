@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/api_client.dart';
+import '../services/crash_reporting.dart';
 import '../services/token_storage.dart';
 import '../services/push_service.dart';
 import 'task_list_screen.dart';
@@ -41,7 +42,9 @@ class _OtpEntryScreenState extends State<OtpEntryScreen> {
       // docstring for what's required before this actually delivers push.
       try {
         await PushService.instance.initialize();
-      } catch (_) {}
+      } catch (e, st) {
+        CrashReporting.report(e, st, where: 'push_init');
+      }
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const TaskListScreen()),

@@ -8,6 +8,7 @@ import '../screens/supervisor_home_screen.dart';
 import '../screens/task_detail_screen.dart';
 import '../screens/task_list_screen.dart';
 import 'api_client.dart';
+import 'crash_reporting.dart';
 import 'token_storage.dart';
 
 /// Push notifications — receives the SAME notifications the SMS/Twilio
@@ -44,8 +45,13 @@ class PushService {
 
   Future<void> initialize() async {
     if (_initialized) return;
-    final config = await ApiClient.instance.fetchFirebaseConfig();
-    if (config == null) return; // push not configured server-side
+    final appConfig = await ApiClient.instance.fetchAppConfig();
+    // Crash reporting is independent of push: start (or stop) it first, so it
+    // works even when push isn't configured, or fails further down.
+    await CrashReporting.configure(appConfig['posthog']);
+    final firebase = appConfig['firebase'];
+    if (firebase is! Map) return; // push not configured server-side
+    final config = firebase.map((k, v) => MapEntry(k.toString(), v.toString()));
     // Cache for the native side (read on the NEXT process start).
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('firebase_api_key', config['apiKey']!);

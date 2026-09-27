@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/api_client.dart';
+import '../services/crash_reporting.dart';
 import '../services/push_service.dart';
 import '../services/token_storage.dart';
 import 'admin_login_screen.dart';
@@ -46,7 +47,9 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
       // Best-effort — push not being configured yet must never block login.
       try {
         await PushService.instance.initialize();
-      } catch (_) {}
+      } catch (e, st) {
+        CrashReporting.report(e, st, where: 'push_init');
+      }
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
