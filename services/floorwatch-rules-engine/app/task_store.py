@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+import floorwatch_db
 from floorwatch_logging import get_logger
 
 _log = get_logger("rules-engine.task_store")
@@ -134,18 +135,12 @@ class PostgresTaskStore:
     ]
 
     def __init__(self, dsn: str):
-        import psycopg
         self.dsn = dsn
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as conn:
-            conn.execute(self.SCHEMA_SQL)
-            for stmt in self.MIGRATION_SQL:
-                conn.execute(stmt)
-            for stmt in self.INDEX_SQL:
-                conn.execute(stmt)
+        with floorwatch_db.connection(dsn) as conn:
+            floorwatch_db.apply_schema(conn, "tasks", [self.SCHEMA_SQL, *self.MIGRATION_SQL, *self.INDEX_SQL])
 
     def _connect(self):
-        import psycopg
-        return psycopg.connect(self.dsn, autocommit=True, connect_timeout=5)
+        return floorwatch_db.connection(self.dsn)   # pooled — see skills/lib/floorwatch_db.py
 
     def upsert(self, record: dict):
         with self._connect() as conn:
@@ -180,16 +175,24 @@ class PostgresTaskStore:
     def list_open(self) -> list:
         with self._connect() as conn:
             rows = conn.execute(
-                f"SELECT {', '.join(_FIELDS)} FROM floorwatch_tasks WHERE status='open' "
+                f"SELECT {', '.join(_FIELDS)} FROM floorwatch_tasks WHERE status='open' "  # nosec B608 - only a constant column list / fixed clause text is interpolated; every value is a bound %s parameter
                 f"ORDER BY started_at").fetchall()
         return self._rows_to_dicts(rows)
 
     def get(self, task_id: str) -> Optional[dict]:
         with self._connect() as conn:
             row = conn.execute(
-                f"SELECT {', '.join(_FIELDS)} FROM floorwatch_tasks WHERE task_id=%s",
+                f"SELECT {', '.join(_FIELDS)} FROM floorwatch_tasks WHERE task_id=%s",  # nosec B608 - only a constant column list / fixed clause text is interpolated; every value is a bound %s parameter
                 (task_id,)).fetchone()
         return self._rows_to_dicts([row])[0] if row else None
+
+    def list_for_employee(self, employee_number: str) -> list:
+        """Open AND finished tasks assigned to one employee (for their data export)."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT {', '.join(_FIELDS)} FROM floorwatch_tasks WHERE assigned_to=%s "  # nosec B608 - constant column list; value is a bound parameter
+                f"ORDER BY started_at DESC", (employee_number,)).fetchall()
+        return self._rows_to_dicts(rows)
 
     def purge_older_than(self, days: int) -> int:
         """Only non-open (finished) tasks are ever purged — an open task
@@ -232,6 +235,10 @@ class JsonTaskStore:
     def get(self, task_id: str) -> Optional[dict]:
         return self._load().get(task_id)
 
+    def list_for_employee(self, employee_number: str) -> list:
+        return sorted((r for r in self._load().values() if r.get("assigned_to") == employee_number),
+                      key=lambda r: r.get("started_at") or "", reverse=True)
+
     def purge_older_than(self, days: int) -> int:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
         data = self._load()
@@ -248,7 +255,7 @@ def build_task_store(postgres_dsn: Optional[str], fallback_path: Path):
     if postgres_dsn:
         try:
             store = PostgresTaskStore(postgres_dsn)
-            _log(f"Using PostgresTaskStore at {postgres_dsn}")
+            _log(f"Using PostgresTaskStore at {floorwatch_db.safe_target(postgres_dsn)}")
             return store
         except Exception as e:
             _log(f"could not connect to Postgres for the task store ({e}) — falling back to "

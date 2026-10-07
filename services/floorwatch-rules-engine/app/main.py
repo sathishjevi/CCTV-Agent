@@ -41,15 +41,31 @@ from notifications import ContactBook, NotificationDispatcher, _mask_phone, buil
 from roster import Roster  # noqa: E402
 from sms_webhook import parse_sms_command, reply_twiml, validate_signature  # noqa: E402
 from task_store import build_task_store, rehydrate_tasks, task_runtime_to_record  # noqa: E402
+from privacy_notice import build_privacy_notice, render_privacy_page  # noqa: E402
+from privacy_requests import KINDS as PRIVACY_REQUEST_KINDS, OUTCOMES as PRIVACY_REQUEST_OUTCOMES  # noqa: E402
+from privacy_requests import build_privacy_requests  # noqa: E402
+import retention_jobs  # noqa: E402
+from mfa_service import RESULT_INVALID, RESULT_OK_RECOVERY, RESULT_RATE_LIMITED, MfaService  # noqa: E402
+from mfa_store import build_mfa_store  # noqa: E402
 from zone_directory import build_zone_directory, validate_zone_id  # noqa: E402
 
 from floorwatch_auth import (  # noqa: E402
-    VALID_ROLES, RevocationStore, build_user_store, hash_password, issue_token, make_auth_dependency,
-    make_employee_auth_dependency, revocation_subject, validate_password_strength, validate_username,
-    verify_password, verify_ws_token,
+    VALID_ROLES, RevocationStore, build_user_store, hash_password, issue_mfa_challenge, issue_token,
+    make_auth_dependency, make_employee_auth_dependency, password_needs_rehash, revocation_subject,
+    validate_password_strength, validate_username, verify_mfa_challenge, verify_password, verify_password_dummy,
+    verify_ws_token,
 )
+from floorwatch_crypto import FieldCipher  # noqa: E402
 from floorwatch_logging import get_logger  # noqa: E402
+from schemas import (  # noqa: E402
+    AssignedMinutes, ChallengeToken, ExtraMinutes, Identifier, MfaCode, Name, Note, OtpCode, Password, Phone,
+    PushToken, StrictModel, Username,
+)
 from floorwatch_rate_limit import RateLimiter  # noqa: E402
+from floorwatch_request_guard import (  # noqa: E402
+    GlobalRateLimitMiddleware, client_ip_from_headers, install_error_handlers,
+)
+from floorwatch_security_events import SecurityMonitor  # noqa: E402
 from floorwatch_schema import validate_event  # noqa: E402
 from floorwatch_security_headers import install_security_headers  # noqa: E402
 from cluster_bus import (  # noqa: E402
@@ -61,9 +77,10 @@ from leader_election import LeaderElection, leadership_loop  # noqa: E402
 log = get_logger("rules-engine")
 
 # Before the FastAPI app is created, so its integration hooks in.
-import error_monitoring  # noqa: E402
+import floorwatch_error_monitoring as error_monitoring  # noqa: E402
 _error_monitoring_on = error_monitoring.init_error_monitoring(
-    config.POSTHOG_API_KEY, config.POSTHOG_HOST, config.MONITORING_ENVIRONMENT, config.MONITORING_RELEASE)
+    config.POSTHOG_API_KEY, config.POSTHOG_HOST, config.MONITORING_ENVIRONMENT, config.MONITORING_RELEASE,
+    service="rules-engine")
 
 users = build_user_store(config.POSTGRES_DSN, config.USERS_PATH)
 
@@ -97,18 +114,18 @@ login_rate_limiter_by_username = RateLimiter(config.LOGIN_RATE_LIMIT_PER_USERNAM
 admin_rate_limiter = RateLimiter(config.ADMIN_RATE_LIMIT_PER_MINUTE, window_seconds=60.0)
 
 
+security_monitor = SecurityMonitor(log)
+
+
 def client_ip(request: Request) -> str:
-    """Prefers X-Forwarded-For (Railway and most reverse proxies set this
-    — request.client.host alone would just be the proxy's own address,
-    making every caller look identical for rate-limiting purposes).
-    Takes the leftmost address (the original client, per the standard
-    left-to-right append order of that header) and falls back to
-    request.client.host if the header isn't present (e.g. local dev,
-    direct connection)."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """The caller's address behind Railway's proxy — request.client.host alone
+    is the proxy's own address, which would make every caller look identical
+    to every rate limiter. Trusts only what OUR proxy appended to
+    X-Forwarded-For (config.TRUSTED_PROXY_HOPS); the old leftmost-entry rule
+    let a client pick its own "IP" with a header and dodge the per-IP login
+    limiter. See skills/lib/floorwatch_request_guard.py."""
+    return client_ip_from_headers(
+        request.headers, request.client.host if request.client else None, config.TRUSTED_PROXY_HOPS)
 
 
 def _seed_admin_from_env():
@@ -312,6 +329,19 @@ employee_login_rate_limiter_by_ip = RateLimiter(
 employee_login_rate_limiter_by_phone = RateLimiter(
     config.EMPLOYEE_LOGIN_RATE_LIMIT_PER_PHONE_PER_MINUTE, window_seconds=60.0)
 task_store = build_task_store(config.POSTGRES_DSN, config.TASK_STORE_PATH)
+privacy_requests = build_privacy_requests(config.POSTGRES_DSN, config.PRIVACY_REQUESTS_PATH)
+privacy_export_rate_limiter = RateLimiter(5, window_seconds=3600.0)       # downloads of one's own data, per hour
+privacy_request_rate_limiter = RateLimiter(10, window_seconds=3600.0)     # new privacy requests, per hour
+last_retention_run: dict = {}
+
+# Two-step verification. Authenticator secrets are encrypted at rest with a key from the environment.
+field_cipher = FieldCipher(config.DATA_ENCRYPTION_KEY, config.AUTH_SECRET)
+if not field_cipher.dedicated:
+    log("FLOORWATCH_DATA_ENCRYPTION_KEY is not set — authenticator secrets are encrypted with a key derived from "
+        "the auth secret, so rotating the auth secret would make them unreadable. Set a dedicated key.", level="warning")
+mfa = MfaService(build_mfa_store(config.POSTGRES_DSN, config.MFA_STORE_PATH), field_cipher,
+                 config.MFA_ISSUER or config.ORG_NAME or "Floorwatch", config.MFA_REQUIRED_ROLES,
+                 security_monitor, log)
 
 # TaskRuntime only holds a MONOTONIC start (meaningless across a
 # restart) — this tracks the real wall-clock start per task_id so
@@ -1033,6 +1063,41 @@ leadership = LeaderElection(cluster_redis, owner_id=REPLICA_ID)
 _leader_tasks: list = []
 
 
+async def _retention_once():
+    """One pass of automatic deletion (see retention_jobs.py). Only the leader runs this."""
+    loop = asyncio.get_running_loop()
+
+    def end_sessions(number: str):
+        asyncio.run_coroutine_threadsafe(_end_employee_sessions(number), loop).result(timeout=15)
+        mfa.store.disable(mfa.subject("employee", number))
+
+    try:
+        summary = await asyncio.to_thread(
+            retention_jobs.run_retention, config=config, digest_path=config.DIGEST_PATH, users=users,
+            event_history=event_history, task_store=task_store, employee_directory=employee_directory,
+            privacy_requests=privacy_requests, archive_dir=None, dry_run=config.AUTO_RETENTION_DRY_RUN,
+            on_employee_erased=end_sessions)
+    except Exception as e:
+        log(f"retention pass failed: {type(e).__name__}: {e}", level="error")
+        return
+    last_retention_run.clear()
+    last_retention_run.update(summary)
+    log("retention pass finished" + (" (DRY RUN — nothing deleted)" if summary["dry_run"] else ""),
+        retention_summary=summary)
+    overdue = (summary.get("privacy_requests") or {}).get("overdue", 0)
+    if overdue:
+        # error level on purpose: this is what reaches error monitoring, i.e. what gets a human to look.
+        log(f"{overdue} privacy request(s) are past their deadline — see Privacy requests in the dashboard",
+            level="error", security_event="privacy_request_overdue")
+
+
+async def retention_loop():
+    await asyncio.sleep(config.RETENTION_FIRST_RUN_DELAY_SECONDS)
+    while True:
+        await _retention_once()
+        await asyncio.sleep(max(60.0, config.RETENTION_INTERVAL_HOURS * 3600))
+
+
 def _report_if_crashed(task: "asyncio.Task"):
     """These loops are meant to run forever. If one ends with an exception
     the service keeps answering requests but silently stops doing that
@@ -1069,6 +1134,8 @@ async def _start_leader_tasks():
         asyncio.create_task(tick_loop()),
         asyncio.create_task(command_consumer_loop()),
     ]
+    if config.AUTO_RETENTION_ENABLED:
+        _leader_tasks.append(asyncio.create_task(retention_loop()))
     for _task in _leader_tasks:
         _task.add_done_callback(_report_if_crashed)
 
@@ -1141,11 +1208,26 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware, allow_origins=config.CORS_ALLOWED_ORIGINS,
-    allow_methods=["*"], allow_headers=["*"], allow_credentials=True,
+    # Only what the dashboards and apps actually use — a wildcard here would
+    # also permit methods and headers nothing legitimate ever sends.
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"], allow_credentials=True,
+)
+app.add_middleware(
+    GlobalRateLimitMiddleware, secret=config.AUTH_SECRET,
+    anonymous_per_minute=config.GLOBAL_RATE_LIMIT_ANONYMOUS_PER_MINUTE,
+    identity_per_minute=config.GLOBAL_RATE_LIMIT_IDENTITY_PER_MINUTE,
+    ip_total_per_minute=config.GLOBAL_RATE_LIMIT_IP_TOTAL_PER_MINUTE,
+    trusted_hops=config.TRUSTED_PROXY_HOPS,
+    on_limited=lambda why, ip, ident: security_monitor.record(
+        "request_rate_limited", keys=[f"ip:{ip}"], limited_by=why, ip=ip, identity=ident),
 )
 if _error_monitoring_on:
     app.add_middleware(error_monitoring.ErrorReportingMiddleware)
 install_security_headers(app)  # DP-M2 — see floorwatch_security_headers.py
+
+
+install_error_handlers(app, security_monitor, client_ip)
 
 
 @app.middleware("http")
@@ -1180,27 +1262,66 @@ async def coverage_ui():
 
 @app.get("/healthz")
 async def healthz():
+    """Public liveness probe — deliberately says nothing about configuration.
+    It used to also report push/Postgres/replica details to anyone who asked;
+    that now lives behind admin login at /api/admin/diagnostics."""
+    return {"ok": True}
+
+
+def _db_tls_status() -> dict:
+    if not config.POSTGRES_DSN:
+        return {"configured": False}
+    import floorwatch_db
+    return floorwatch_db.tls_status(config.POSTGRES_DSN)
+
+
+def _privacy_diagnostics() -> dict:
+    notice = build_privacy_notice(config)
+    open_requests = privacy_requests.list(status="open")
+    return {"notice_configured": notice["configured"], "notice_version": notice["version"],
+            "open_requests": len(open_requests), "overdue_requests": sum(1 for r in open_requests if r["overdue"])}
+
+
+@app.get("/api/admin/diagnostics")
+async def diagnostics(user=Depends(require_admin)):
+    """What /healthz used to show, plus whether the database connection is
+    encrypted and the security-event counters. Admin only."""
     from notifications import FcmSender
-    # Each of these four stores independently falls back to a local
-    # JSON/JSONL file if FLOORWATCH_POSTGRES_DSN is unset OR the connection
-    # fails — silently, with only a log line, not an error anyone sees by
-    # default. A wrong/unreachable DSN looks EXACTLY like "never configured
-    # one" from the outside otherwise. This makes "is Postgres actually
-    # being used, right now" a one-line check instead of a log dive.
     postgres_backends = {
         "employees": type(employee_directory).__name__,
         "zones": type(zone_directory).__name__,
         "history": type(event_history).__name__,
         "tasks": type(task_store).__name__,
     }
-    return {"ok": True, "fcm_ready": isinstance(TASK_CHANNEL_SENDERS.get("fcm"), FcmSender), "app_push_config_ready": bool(config.FIREBASE_API_KEY), "shadow_mode": config.SHADOW_MODE, "connections": len(manager.active) + len(manager.app_scopes),
-            "replica_id": REPLICA_ID, "is_leader": leadership.is_leader,
-            "postgres_configured": bool(config.POSTGRES_DSN), "storage_backend": postgres_backends}
+    return {
+        "ok": True,
+        "release": (config.MONITORING_RELEASE or "")[:12] or None,
+        "fcm_ready": isinstance(TASK_CHANNEL_SENDERS.get("fcm"), FcmSender),
+        "app_push_config_ready": bool(config.FIREBASE_API_KEY),
+        "error_monitoring_enabled": _error_monitoring_on,
+        "shadow_mode": config.SHADOW_MODE,
+        "connections": len(manager.active) + len(manager.app_scopes),
+        "replica_id": REPLICA_ID, "is_leader": leadership.is_leader,
+        "postgres_configured": bool(config.POSTGRES_DSN), "storage_backend": postgres_backends,
+        "database_connection": await asyncio.to_thread(_db_tls_status),
+        "security_events": dict(security_monitor.counts),
+        "retention": {"enabled": config.AUTO_RETENTION_ENABLED, "dry_run": config.AUTO_RETENTION_DRY_RUN,
+                      "interval_hours": config.RETENTION_INTERVAL_HOURS,
+                      # only the current leader replica runs retention, so a follower shows None
+                      "last_run": dict(last_retention_run) or None},
+        "privacy": await asyncio.to_thread(_privacy_diagnostics),
+        "two_step_verification": {
+            "required_roles": sorted(config.MFA_REQUIRED_ROLES),
+            "enrolled_accounts": len(await asyncio.to_thread(mfa.store.enabled_subjects)),
+            "encryption_key": ("dedicated" if field_cipher.dedicated else
+                               "derived from the auth secret — set FLOORWATCH_DATA_ENCRYPTION_KEY"),
+        },
+    }
 
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
+class LoginRequest(StrictModel):
+    username: Username
+    password: Password
 
 
 @app.post("/api/login")
@@ -1218,22 +1339,37 @@ async def login(body: LoginRequest, request: Request):
             status_code=429, content={"error": "Too many login attempts for this account — try again shortly."},
             headers={"Retry-After": str(int(retry_after) + 1)},
         )
-    auth_result = users.authenticate(body.username, body.password)
+    # Hashing is deliberately slow — off the event loop, or every login would
+    # stall the websockets and the monitoring tick for its duration.
+    auth_result = await asyncio.to_thread(users.authenticate, body.username, body.password)
     if auth_result is None:
+        security_monitor.record("login_failed", keys=[f"ip:{ip}", f"user:{body.username}"],
+                                account_type="dashboard", ip=ip, username=body.username)
         return JSONResponse(status_code=401, content={"error": "invalid username or password"})
     role = auth_result["role"]
-    users.record_login(body.username)
-    token = issue_token(config.AUTH_SECRET, body.username, role, ttl_seconds=config.TOKEN_TTL_SECONDS)
-    return {
-        "token": token, "username": body.username, "role": role,
-        "expires_in": config.TOKEN_TTL_SECONDS,
-        "must_change_password": auth_result["must_change_password"],
-    }
+    # Password is right. If this account uses two-step verification (or its role is required to), no session
+    # yet — only a short-lived challenge that proves "password step done" and can do nothing else.
+    if await mfa.is_enabled("dashboard", body.username):
+        return {"mfa_required": True, "username": body.username,
+                "mfa_token": issue_mfa_challenge(config.AUTH_SECRET, body.username, "dashboard", "verify")}
+    if mfa.required_for(role):
+        return {"mfa_enrollment_required": True, "username": body.username,
+                "mfa_token": issue_mfa_challenge(config.AUTH_SECRET, body.username, "dashboard", "enroll")}
+    return await _dashboard_login_payload(body.username, role, auth_result["must_change_password"], ip)
 
 
-class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
+async def _dashboard_login_payload(username: str, role: str, must_change_password: bool, ip: str) -> dict:
+    """The final step of a dashboard sign-in, however it was reached (password alone, or password + code)."""
+    security_monitor.record("login_succeeded", account_type="dashboard", ip=ip, username=username, role=role)
+    await asyncio.to_thread(users.record_login, username)
+    token = issue_token(config.AUTH_SECRET, username, role, ttl_seconds=config.TOKEN_TTL_SECONDS)
+    return {"token": token, "username": username, "role": role, "expires_in": config.TOKEN_TTL_SECONDS,
+            "must_change_password": must_change_password}
+
+
+class ChangePasswordRequest(StrictModel):
+    current_password: Password
+    new_password: Password
 
 
 @app.post("/api/logout")
@@ -1251,20 +1387,20 @@ async def change_password(body: ChangePasswordRequest, user=Depends(require_auth
     briefly-unattended logged-in session can't be used to lock the real
     owner out by someone else changing it."""
     username = user["sub"]
-    auth_result = users.authenticate(username, body.current_password)
+    auth_result = await asyncio.to_thread(users.authenticate, username, body.current_password)
     if auth_result is None:
         return JSONResponse(status_code=401, content={"error": "current password is incorrect"})
     ok, reason = validate_password_strength(body.new_password, username=username)
     if not ok:
         return JSONResponse(status_code=400, content={"error": reason})
-    users.set_password(username, body.new_password, must_change_password=False)
+    await asyncio.to_thread(users.set_password, username, body.new_password, must_change_password=False)
     return {"ok": True}
 
 
-class CreateUserRequest(BaseModel):
-    username: str
-    password: str
-    role: str = "supervisor"
+class CreateUserRequest(StrictModel):
+    username: Username
+    password: Password
+    role: Identifier = "supervisor"
 
 
 def _check_admin_rate_limit(user) -> "JSONResponse | None":
@@ -1281,11 +1417,17 @@ def _check_admin_rate_limit(user) -> "JSONResponse | None":
     return None
 
 
+async def _users_with_mfa_flag() -> list:
+    enrolled = await asyncio.to_thread(mfa.store.enabled_subjects)
+    return [{**u, "mfa_enabled": f"dashboard:{u['username']}" in enrolled}
+            for u in await asyncio.to_thread(users.list_users)]
+
+
 @app.get("/api/admin/users")
 async def list_users(user=Depends(require_admin)):
     if (limited := _check_admin_rate_limit(user)) is not None:
         return limited
-    return {"users": users.list_users()}
+    return {"users": await _users_with_mfa_flag()}
 
 
 @app.post("/api/admin/users")
@@ -1303,7 +1445,7 @@ async def create_user_endpoint(body: CreateUserRequest, user=Depends(require_adm
         return JSONResponse(status_code=400, content={"error": reason})
     if users.user_exists(body.username):
         return JSONResponse(status_code=409, content={"error": f"user '{body.username}' already exists"})
-    users.create_user(body.username, body.password, role=body.role, created_by=user["sub"])
+    await asyncio.to_thread(users.create_user, body.username, body.password, role=body.role, created_by=user["sub"])
     log(f"Admin '{user['sub']}' created account '{body.username}' with role '{body.role}'")
     return {"ok": True}
 
@@ -1333,8 +1475,8 @@ async def reactivate_user(username: str, user=Depends(require_admin)):
     return {"ok": True}
 
 
-class ResetPasswordRequest(BaseModel):
-    new_password: str
+class ResetPasswordRequest(StrictModel):
+    new_password: Password
 
 
 @app.post("/api/admin/users/{username}/reset-password")
@@ -1348,7 +1490,7 @@ async def reset_password(username: str, body: ResetPasswordRequest, user=Depends
     ok, reason = validate_password_strength(body.new_password, username=username)
     if not ok:
         return JSONResponse(status_code=400, content={"error": reason})
-    if not users.set_password(username, body.new_password, must_change_password=True):
+    if not await asyncio.to_thread(users.set_password, username, body.new_password, must_change_password=True):
         return JSONResponse(status_code=404, content={"error": f"user '{username}' not found"})
     # An admin-forced reset is the "I think this account may be
     # compromised" lever — kill whatever token they're currently holding,
@@ -1369,15 +1511,15 @@ async def reset_password(username: str, body: ResetPasswordRequest, user=Depends
 # every replica reads/writes the same Postgres/JSON store directly, same
 # as floorwatch_users already does.
 
-class AddEmployeeRequest(BaseModel):
-    employee_number: str
-    name: str
-    role: str  # "employee" | "supervisor"
-    department: str
-    phone: str
-    account_username: str | None = None  # links to a floorwatch_users login, if the person has one
-    channel: str | None = None  # "sms" | "fcm" — Feature 1; omit to use the deployment default
-    fcm_token: str | None = None  # required if channel="fcm"
+class AddEmployeeRequest(StrictModel):
+    employee_number: Identifier
+    name: Name
+    role: Identifier  # "employee" | "supervisor"
+    department: Name
+    phone: Phone
+    account_username: Identifier | None = None  # links to a floorwatch_users login, if the person has one
+    channel: Identifier | None = None  # "sms" | "fcm" — Feature 1; omit to use the deployment default
+    fcm_token: PushToken | None = None  # required if channel="fcm"
     is_primary_contact: bool = False  # Feature 2 — must be a "supervisor"; see validate_primary_contact
 
 
@@ -1427,12 +1569,12 @@ async def add_employee(body: AddEmployeeRequest, user=Depends(require_supervisor
     return {"ok": True}
 
 
-class EditEmployeeRequest(BaseModel):
-    name: str
-    role: str  # "employee" | "supervisor"
-    department: str
-    phone: str
-    account_username: str | None = None
+class EditEmployeeRequest(StrictModel):
+    name: Name
+    role: Identifier  # "employee" | "supervisor"
+    department: Name
+    phone: Phone
+    account_username: Identifier | None = None
     is_primary_contact: bool = False
 
 
@@ -1486,12 +1628,15 @@ async def deactivate_employee(employee_number: str, user=Depends(require_supervi
 
 @app.post("/api/admin/employees/{employee_number}/reactivate")
 async def reactivate_employee(employee_number: str, user=Depends(require_supervisor)):
+    if await _is_erased(employee_number):
+        return JSONResponse(status_code=409, content={"error": "this person's personal data has been erased — "
+                                                                "add them as a new employee instead"})
     if not await asyncio.to_thread(employee_directory.set_active, employee_number, True):
         return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
     return {"ok": True}
 
 
-class SetPrimaryContactRequest(BaseModel):
+class SetPrimaryContactRequest(StrictModel):
     is_primary_contact: bool
 
 
@@ -1520,11 +1665,11 @@ async def set_employee_primary_contact(employee_number: str, body: SetPrimaryCon
 # read the coverage board/task list); mutating endpoints are
 # require_supervisor, same split as the employee directory above. ──
 
-class AddZoneRequest(BaseModel):
-    zone_id: str
-    name: str
-    role_tag: str
-    camera_id: str | None = None  # links to floorwatch-coverage/floorwatch-scene-condition's zone calibration
+class AddZoneRequest(StrictModel):
+    zone_id: Identifier
+    name: Name
+    role_tag: Identifier
+    camera_id: Identifier | None = None  # links to floorwatch-coverage/floorwatch-scene-condition's zone calibration
     staffed: bool = True  # roster.py's fallback source for zones not listed in the static roster.json —
                            # see that module's docstring. True by default: adding a zone here is an
                            # assertion it's a real, currently-covered floor section.
@@ -1574,7 +1719,7 @@ async def reactivate_zone(zone_id: str, user=Depends(require_supervisor)):
     return {"ok": True}
 
 
-class SetZoneStaffedRequest(BaseModel):
+class SetZoneStaffedRequest(StrictModel):
     staffed: bool
 
 
@@ -1599,8 +1744,8 @@ async def set_zone_staffed(zone_id: str, body: SetZoneStaffedRequest, user=Depen
 # _handle_sms_reassign above) — that's what makes the web dashboard sync
 # automatically with app-driven actions, not something built separately.
 
-class RequestOtpRequest(BaseModel):
-    phone: str
+class RequestOtpRequest(StrictModel):
+    phone: Phone
 
 
 @app.post("/api/employee/auth/request-otp")
@@ -1647,9 +1792,9 @@ async def request_otp(body: RequestOtpRequest):
     return {"ok": True, "message": "If that number is registered, a code has been sent."}
 
 
-class VerifyOtpRequest(BaseModel):
-    phone: str
-    code: str
+class VerifyOtpRequest(StrictModel):
+    phone: Phone
+    code: OtpCode
 
 
 @app.post("/api/employee/auth/verify-otp")
@@ -1668,9 +1813,9 @@ async def verify_otp(body: VerifyOtpRequest):
     }
 
 
-class EmployeeLoginRequest(BaseModel):
-    phone: str
-    password: str
+class EmployeeLoginRequest(StrictModel):
+    phone: Phone
+    password: Password
 
 
 @app.post("/api/employee/auth/login")
@@ -1681,7 +1826,7 @@ async def employee_login(body: EmployeeLoginRequest, request: Request):
     # discipline as verify-otp: invalid phone and invalid password return
     # the identical generic error.
     phone = normalize_phone(body.phone)
-    ip = request.client.host if request.client else "unknown"
+    ip = client_ip(request)
     if not employee_login_rate_limiter_by_ip.allow(ip):
         retry_after = employee_login_rate_limiter_by_ip.retry_after_seconds(ip)
         return JSONResponse(
@@ -1695,13 +1840,38 @@ async def employee_login(body: EmployeeLoginRequest, request: Request):
             headers={"Retry-After": str(int(retry_after) + 1)},
         )
     employee = await asyncio.to_thread(employee_directory.get_by_phone, phone)
-    if (
-        employee is None
-        or not employee.get("password_hash")
-        or not verify_password(body.password, employee["password_hash"])
-        or not employee.get("active", True)
-    ):
+    stored_hash = employee.get("password_hash") if employee else None
+    if stored_hash:
+        password_ok = await asyncio.to_thread(verify_password, body.password, stored_hash)
+    else:
+        # No such employee / no password set: burn the same time a real check
+        # takes so response time doesn't reveal which phone numbers exist.
+        password_ok = await asyncio.to_thread(verify_password_dummy, body.password)
+    if employee is None or not password_ok or not employee.get("active", True):
+        security_monitor.record("login_failed", keys=[f"ip:{ip}", f"phone:{phone}"], account_type="employee", ip=ip)
         return JSONResponse(status_code=401, content={"error": "Invalid phone or password"})
+    if password_needs_rehash(stored_hash):
+        # Old-format hash, and this is the one moment we hold the plaintext:
+        # upgrade it now. Best effort — never fail a valid login over it.
+        try:
+            new_hash = await asyncio.to_thread(hash_password, body.password)
+            await asyncio.to_thread(employee_directory.set_password_hash, employee["employee_number"], new_hash)
+        except Exception as e:
+            log(f"could not upgrade password hash for employee {employee['employee_number']}: {type(e).__name__}",
+                level="warning")
+    number = employee["employee_number"]
+    if await mfa.is_enabled("employee", number):
+        return {"mfa_required": True,
+                "mfa_token": issue_mfa_challenge(config.AUTH_SECRET, number, "employee", "verify")}
+    if mfa.required_for(employee["role"]):
+        return {"mfa_enrollment_required": True,
+                "mfa_token": issue_mfa_challenge(config.AUTH_SECRET, number, "employee", "enroll")}
+    return await _employee_login_payload(employee, ip)
+
+
+async def _employee_login_payload(employee: dict, ip: str) -> dict:
+    """The final step of a phone sign-in, however it was reached (password alone, or password + code)."""
+    security_monitor.record("login_succeeded", account_type="employee", ip=ip, employee_number=employee["employee_number"])
     if not employee.get("channel"):
         # Logging in with a password IS proof this employee is on the
         # app — switch them off SMS now rather than waiting for a real
@@ -1726,9 +1896,9 @@ async def employee_login(body: EmployeeLoginRequest, request: Request):
     }
 
 
-class ChangeEmployeePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
+class ChangeEmployeePasswordRequest(StrictModel):
+    current_password: Password
+    new_password: Password
 
 
 @app.post("/api/employee/auth/change-password")
@@ -1746,13 +1916,14 @@ async def employee_change_password(body: ChangeEmployeePasswordRequest, user=Dep
             status_code=429, content={"error": "Too many attempts — try again shortly."},
             headers={"Retry-After": str(int(retry_after) + 1)},
         )
-    if not employee.get("password_hash") or not verify_password(body.current_password, employee["password_hash"]):
+    if not employee.get("password_hash") or not await asyncio.to_thread(
+            verify_password, body.current_password, employee["password_hash"]):
         return JSONResponse(status_code=401, content={"error": "current password is incorrect"})
     ok, reason = validate_password_strength(body.new_password)
     if not ok:
         return JSONResponse(status_code=400, content={"error": reason})
-    await asyncio.to_thread(
-        employee_directory.set_password_hash, employee["employee_number"], hash_password(body.new_password))
+    new_hash = await asyncio.to_thread(hash_password, body.new_password)
+    await asyncio.to_thread(employee_directory.set_password_hash, employee["employee_number"], new_hash)
     return {"ok": True}
 
 
@@ -1776,8 +1947,8 @@ async def force_logout_employee(employee_number: str, user=Depends(require_super
     return {"ok": True}
 
 
-class SetEmployeePasswordRequest(BaseModel):
-    password: str
+class SetEmployeePasswordRequest(StrictModel):
+    password: Password
 
 
 @app.post("/api/admin/employees/{employee_number}/set-password")
@@ -1790,7 +1961,7 @@ async def set_employee_password(
     ok, error = validate_password_strength(body.password)
     if not ok:
         return JSONResponse(status_code=400, content={"error": error})
-    password_hash = hash_password(body.password)
+    password_hash = await asyncio.to_thread(hash_password, body.password)
     await asyncio.to_thread(employee_directory.set_password_hash, employee_number, password_hash)
     # Replacing an EXISTING password is the "this login may be compromised"
     # lever — the old password stops working, so the old sessions must too.
@@ -1918,8 +2089,8 @@ async def employee_request_review(task_id: str, user=Depends(require_employee)):
     return {"event": evt}
 
 
-class EmployeeReassignRequest(BaseModel):
-    new_assignee: str
+class EmployeeReassignRequest(StrictModel):
+    new_assignee: Identifier
 
 
 @app.post("/api/employee/tasks/{task_id}/reassign")
@@ -1957,8 +2128,8 @@ async def employee_app_config(user=Depends(require_employee)):
     return {"firebase": fields if all(fields.values()) else None, "posthog": posthog}
 
 
-class DeviceTokenRequest(BaseModel):
-    fcm_token: str
+class DeviceTokenRequest(StrictModel):
+    fcm_token: PushToken
 
 
 @app.post("/api/employee/device-token")
@@ -1976,6 +2147,448 @@ async def employee_register_device_token(body: DeviceTokenRequest, user=Depends(
         # back to SMS.
         await asyncio.to_thread(employee_directory.set_channel, employee["employee_number"], "fcm")
     return {"ok": True}
+
+
+# ── Two-step verification routes ────────────────────────────────────────────────────────────────────
+# Three groups, for each of the two kinds of login (dashboard accounts, phone staff):
+#   sign-in:      /login/mfa            (password was right; enter the code)
+#                 /login/mfa/setup|enable  (a required role signing in for the first time sets one up)
+#   self-service: /mfa/status|setup|enable|disable|recovery-codes   (for someone already signed in)
+#   admin:        .../mfa/reset         (a lost authenticator)
+
+class MfaChallengeBody(StrictModel):
+    mfa_token: ChallengeToken
+    code: MfaCode
+
+
+class MfaTokenBody(StrictModel):
+    mfa_token: ChallengeToken
+
+
+class MfaCodeBody(StrictModel):
+    code: MfaCode
+
+
+class MfaDisableBody(StrictModel):
+    password: Password
+    code: MfaCode
+
+
+_BAD_CODE = {"error": "That code didn't work. Check the code in your authenticator app (and that your phone's clock "
+                      "is set automatically), or use a recovery code."}
+_EXPIRED_STEP = {"error": "This sign-in step has expired — please sign in again."}
+
+
+def _mfa_failure(result: str):
+    if result == RESULT_RATE_LIMITED:
+        return JSONResponse(status_code=429, content={"error": "Too many attempts — wait a few minutes and try again."},
+                            headers={"Retry-After": "300"})
+    return JSONResponse(status_code=401, content=_BAD_CODE)
+
+
+async def _employee_for_mfa(number: str):
+    employee = await asyncio.to_thread(employee_directory.get, number)
+    return employee if employee and employee.get("active", True) else None
+
+
+# -- dashboard accounts: sign-in --
+
+@app.post("/api/login/mfa")
+async def login_mfa(body: MfaChallengeBody, request: Request):
+    ip = client_ip(request)
+    username = verify_mfa_challenge(config.AUTH_SECRET, body.mfa_token, "dashboard", "verify")
+    if username is None:
+        return JSONResponse(status_code=401, content=_EXPIRED_STEP)
+    result = await mfa.verify_code("dashboard", username, body.code, ip)
+    if result in (RESULT_INVALID, RESULT_RATE_LIMITED):
+        return _mfa_failure(result)
+    account = await asyncio.to_thread(users.get_user, username)
+    if account is None or not account["active"]:
+        return JSONResponse(status_code=401, content=_BAD_CODE)
+    payload = await _dashboard_login_payload(username, account["role"], account["must_change_password"], ip)
+    payload["used_recovery_code"] = result == RESULT_OK_RECOVERY
+    return payload
+
+
+@app.post("/api/login/mfa/setup")
+async def login_mfa_setup(body: MfaTokenBody):
+    username = verify_mfa_challenge(config.AUTH_SECRET, body.mfa_token, "dashboard", "enroll")
+    if username is None:
+        return JSONResponse(status_code=401, content=_EXPIRED_STEP)
+    started = await mfa.begin_enrollment("dashboard", username, username)
+    if started is None:
+        return JSONResponse(status_code=409, content={"error": "Two-step verification is already set up for this account."})
+    return started
+
+
+@app.post("/api/login/mfa/enable")
+async def login_mfa_enable(body: MfaChallengeBody, request: Request):
+    ip = client_ip(request)
+    username = verify_mfa_challenge(config.AUTH_SECRET, body.mfa_token, "dashboard", "enroll")
+    if username is None:
+        return JSONResponse(status_code=401, content=_EXPIRED_STEP)
+    codes = await mfa.finish_enrollment("dashboard", username, body.code, ip)
+    if codes is None:
+        return JSONResponse(status_code=400, content=_BAD_CODE)
+    account = await asyncio.to_thread(users.get_user, username)
+    if account is None or not account["active"]:
+        return JSONResponse(status_code=401, content=_BAD_CODE)
+    payload = await _dashboard_login_payload(username, account["role"], account["must_change_password"], ip)
+    payload["recovery_codes"] = codes
+    return payload
+
+
+# -- dashboard accounts: self-service --
+
+@app.get("/api/mfa/status")
+async def mfa_status(user=Depends(require_auth)):
+    return {**await mfa.status("dashboard", user["sub"]), "required": mfa.required_for(user["role"])}
+
+
+@app.post("/api/mfa/setup")
+async def mfa_setup(user=Depends(require_auth)):
+    started = await mfa.begin_enrollment("dashboard", user["sub"], user["sub"])
+    if started is None:
+        return JSONResponse(status_code=409, content={"error": "Two-step verification is already on. Turn it off first to set it up again."})
+    return started
+
+
+@app.post("/api/mfa/enable")
+async def mfa_enable(body: MfaCodeBody, request: Request, user=Depends(require_auth)):
+    codes = await mfa.finish_enrollment("dashboard", user["sub"], body.code, client_ip(request))
+    if codes is None:
+        return JSONResponse(status_code=400, content=_BAD_CODE)
+    return {"ok": True, "recovery_codes": codes}
+
+
+@app.post("/api/mfa/disable")
+async def mfa_disable(body: MfaDisableBody, request: Request, user=Depends(require_auth)):
+    """Needs BOTH the password and a current code — a stolen session alone can't switch it off."""
+    if mfa.required_for(user["role"]):
+        return JSONResponse(status_code=403, content={"error": "Two-step verification is required for your role."})
+    if await asyncio.to_thread(users.authenticate, user["sub"], body.password) is None:
+        return JSONResponse(status_code=401, content={"error": "Password is incorrect."})
+    result = await mfa.verify_code("dashboard", user["sub"], body.code, client_ip(request))
+    if result in (RESULT_INVALID, RESULT_RATE_LIMITED):
+        return _mfa_failure(result)
+    await mfa.disable("dashboard", user["sub"], by=user["sub"])
+    return {"ok": True}
+
+
+@app.post("/api/mfa/recovery-codes")
+async def mfa_new_recovery_codes(body: MfaCodeBody, request: Request, user=Depends(require_auth)):
+    result = await mfa.verify_code("dashboard", user["sub"], body.code, client_ip(request))
+    if result in (RESULT_INVALID, RESULT_RATE_LIMITED):
+        return _mfa_failure(result)
+    codes = await mfa.regenerate_recovery_codes("dashboard", user["sub"])
+    return {"recovery_codes": codes} if codes else JSONResponse(status_code=404, content={"error": "Two-step verification is not on."})
+
+
+@app.post("/api/admin/users/{username}/mfa/reset")
+async def admin_reset_user_mfa(username: Identifier, user=Depends(require_admin)):
+    """A lost authenticator. Also signs that account out, so whoever holds it must start over."""
+    if not await mfa.disable("dashboard", username, by=user["sub"]):
+        return JSONResponse(status_code=404, content={"error": "That account doesn't have two-step verification on."})
+    await revocation_store.revoke(username)
+    return {"ok": True}
+
+
+# -- phone staff: sign-in --
+
+@app.post("/api/employee/auth/login/mfa")
+async def employee_login_mfa(body: MfaChallengeBody, request: Request):
+    ip = client_ip(request)
+    number = verify_mfa_challenge(config.AUTH_SECRET, body.mfa_token, "employee", "verify")
+    if number is None:
+        return JSONResponse(status_code=401, content=_EXPIRED_STEP)
+    result = await mfa.verify_code("employee", number, body.code, ip)
+    if result in (RESULT_INVALID, RESULT_RATE_LIMITED):
+        return _mfa_failure(result)
+    employee = await _employee_for_mfa(number)
+    if employee is None:
+        return JSONResponse(status_code=401, content=_BAD_CODE)
+    payload = await _employee_login_payload(employee, ip)
+    payload["used_recovery_code"] = result == RESULT_OK_RECOVERY
+    return payload
+
+
+@app.post("/api/employee/auth/login/mfa/setup")
+async def employee_login_mfa_setup(body: MfaTokenBody):
+    number = verify_mfa_challenge(config.AUTH_SECRET, body.mfa_token, "employee", "enroll")
+    if number is None:
+        return JSONResponse(status_code=401, content=_EXPIRED_STEP)
+    employee = await _employee_for_mfa(number)
+    if employee is None:
+        return JSONResponse(status_code=401, content=_EXPIRED_STEP)
+    started = await mfa.begin_enrollment("employee", number, f"{employee['name']} (#{number})")
+    if started is None:
+        return JSONResponse(status_code=409, content={"error": "Two-step verification is already set up for this account."})
+    return started
+
+
+@app.post("/api/employee/auth/login/mfa/enable")
+async def employee_login_mfa_enable(body: MfaChallengeBody, request: Request):
+    ip = client_ip(request)
+    number = verify_mfa_challenge(config.AUTH_SECRET, body.mfa_token, "employee", "enroll")
+    if number is None:
+        return JSONResponse(status_code=401, content=_EXPIRED_STEP)
+    codes = await mfa.finish_enrollment("employee", number, body.code, ip)
+    if codes is None:
+        return JSONResponse(status_code=400, content=_BAD_CODE)
+    employee = await _employee_for_mfa(number)
+    if employee is None:
+        return JSONResponse(status_code=401, content=_BAD_CODE)
+    payload = await _employee_login_payload(employee, ip)
+    payload["recovery_codes"] = codes
+    return payload
+
+
+# -- phone staff: self-service --
+
+@app.get("/api/employee/mfa/status")
+async def employee_mfa_status(user=Depends(require_employee)):
+    number = _employee_number(user)
+    return {**await mfa.status("employee", number), "required": mfa.required_for(user["employee"]["role"])}
+
+
+@app.post("/api/employee/mfa/setup")
+async def employee_mfa_setup(user=Depends(require_employee)):
+    employee = user["employee"]
+    started = await mfa.begin_enrollment("employee", employee["employee_number"],
+                                         f"{employee['name']} (#{employee['employee_number']})")
+    if started is None:
+        return JSONResponse(status_code=409, content={"error": "Two-step verification is already on. Turn it off first to set it up again."})
+    return started
+
+
+@app.post("/api/employee/mfa/enable")
+async def employee_mfa_enable(body: MfaCodeBody, request: Request, user=Depends(require_employee)):
+    codes = await mfa.finish_enrollment("employee", _employee_number(user), body.code, client_ip(request))
+    if codes is None:
+        return JSONResponse(status_code=400, content=_BAD_CODE)
+    return {"ok": True, "recovery_codes": codes}
+
+
+@app.post("/api/employee/mfa/disable")
+async def employee_mfa_disable(body: MfaDisableBody, request: Request, user=Depends(require_employee)):
+    employee = user["employee"]
+    if mfa.required_for(employee["role"]):
+        return JSONResponse(status_code=403, content={"error": "Two-step verification is required for your role."})
+    stored = employee.get("password_hash")
+    if not stored or not await asyncio.to_thread(verify_password, body.password, stored):
+        return JSONResponse(status_code=401, content={"error": "Password is incorrect."})
+    result = await mfa.verify_code("employee", employee["employee_number"], body.code, client_ip(request))
+    if result in (RESULT_INVALID, RESULT_RATE_LIMITED):
+        return _mfa_failure(result)
+    await mfa.disable("employee", employee["employee_number"], by=employee["employee_number"])
+    return {"ok": True}
+
+
+@app.post("/api/employee/mfa/recovery-codes")
+async def employee_mfa_new_recovery_codes(body: MfaCodeBody, request: Request, user=Depends(require_employee)):
+    number = _employee_number(user)
+    result = await mfa.verify_code("employee", number, body.code, client_ip(request))
+    if result in (RESULT_INVALID, RESULT_RATE_LIMITED):
+        return _mfa_failure(result)
+    codes = await mfa.regenerate_recovery_codes("employee", number)
+    return {"recovery_codes": codes} if codes else JSONResponse(status_code=404, content={"error": "Two-step verification is not on."})
+
+
+async def _admin_reset_employee_mfa(employee_number: str, by: str):
+    if await asyncio.to_thread(employee_directory.get, employee_number) is None:
+        return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
+    if not await mfa.disable("employee", employee_number, by=by):
+        return JSONResponse(status_code=404, content={"error": "That person doesn't have two-step verification on."})
+    await _end_employee_sessions(employee_number)
+    return {"ok": True}
+
+
+@app.post("/api/admin/employees/{employee_number}/mfa/reset")
+async def admin_reset_employee_mfa(employee_number: Identifier, user=Depends(require_admin)):
+    return await _admin_reset_employee_mfa(employee_number, user["sub"])
+
+
+@app.post("/api/employee/dashboard/employees/{employee_number}/mfa/reset")
+async def employee_dashboard_reset_employee_mfa(employee_number: Identifier, user=Depends(require_employee_manager)):
+    return await _admin_reset_employee_mfa(employee_number, f"employee:{user['sub']}")
+
+
+@app.post("/api/employee/admin/users/{username}/mfa/reset")
+async def employee_admin_reset_user_mfa(username: Identifier, user=Depends(require_employee_admin)):
+    if not await mfa.disable("dashboard", username, by=f"employee:{user['sub']}"):
+        return JSONResponse(status_code=404, content={"error": "That account doesn't have two-step verification on."})
+    await revocation_store.revoke(username)
+    return {"ok": True}
+
+
+# ── Privacy: the notice, access/export, requests, erasure ────────────────────────────────────────
+# The notice is generated from the running configuration (privacy_notice.py) so it can't drift from
+# what the system really does. Everything personal an employee can ask for is reachable by them in the app.
+
+async def _is_erased(employee_number: str) -> bool:
+    state = await asyncio.to_thread(employee_directory.get_privacy_state, employee_number)
+    return bool(state and state.get("anonymized_at"))
+
+
+@app.get("/api/privacy-notice")
+async def privacy_notice_json():
+    """Public: the notice the app and the website show. No authentication — a privacy notice has to be
+    readable before you sign in (and app stores require a public privacy-policy URL)."""
+    notice = build_privacy_notice(config)
+    return {k: notice[k] for k in ("version", "title", "configured", "text", "sections")}
+
+
+@app.get("/privacy")
+async def privacy_page():
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(render_privacy_page(build_privacy_notice(config)))
+
+
+def _employee_data_export(employee_number: str) -> dict:
+    """Everything held about one employee, in a machine-readable form (right of access + portability).
+    Never includes credentials: no password hash, and the push token is reported only as present/absent."""
+    record = employee_directory.get(employee_number) or {}
+    state = employee_directory.get_privacy_state(employee_number) or {}
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "employee_number": employee_number,
+        "profile": {
+            "name": record.get("name"), "role": record.get("role"), "department": record.get("department"),
+            "phone": record.get("phone"), "active": record.get("active"),
+            "account_username": record.get("account_username"), "created_at": record.get("created_at"),
+            "created_by": record.get("created_by"), "notification_channel": record.get("channel"),
+            "push_notifications_registered": bool(record.get("fcm_token")),
+            "login_password_set": bool(record.get("password_hash")),
+            "is_primary_contact": record.get("is_primary_contact"),
+            "deactivated_at": state.get("deactivated_at"),
+            "privacy_notice_version_acknowledged": state.get("privacy_notice_version"),
+            "privacy_notice_acknowledged_at": state.get("privacy_notice_accepted_at"),
+        },
+        "tasks": task_store.list_for_employee(employee_number),
+        "activity_events": event_history.query_for_employee(employee_number),
+        "privacy_requests": privacy_requests.list(subject_id=employee_number),
+        "about_this_export": (
+            "Activity events and task records only ever refer to you by employee number. Zone coverage "
+            "measurements from cameras are not tied to individuals and so are not included. Security logs "
+            "(sign-in attempts and the network addresses they came from) are kept separately for "
+            f"security and are not part of this file. Retention periods are in the privacy notice."),
+    }
+
+
+@app.get("/api/employee/me/privacy")
+async def employee_privacy_status(user=Depends(require_employee)):
+    notice = build_privacy_notice(config)
+    state = await asyncio.to_thread(employee_directory.get_privacy_state, _employee_number(user)) or {}
+    accepted = state.get("privacy_notice_version")
+    return {"notice_version": notice["version"], "accepted_version": accepted,
+            "accepted": accepted == notice["version"], "notice_configured": notice["configured"]}
+
+
+class AcceptNoticeRequest(StrictModel):
+    version: Identifier
+
+
+@app.post("/api/employee/me/privacy-notice/accept")
+async def employee_accept_privacy_notice(body: AcceptNoticeRequest, user=Depends(require_employee)):
+    current = build_privacy_notice(config)["version"]
+    if body.version != current:
+        # they read an older version — make them re-read the one now in force
+        return JSONResponse(status_code=409, content={"error": "the privacy notice has changed — please read the new version",
+                                                      "notice_version": current})
+    await asyncio.to_thread(employee_directory.record_privacy_notice_acceptance, _employee_number(user), current)
+    return {"ok": True, "accepted_version": current}
+
+
+@app.get("/api/employee/me/data-export")
+async def employee_data_export(user=Depends(require_employee)):
+    number = _employee_number(user)
+    if not privacy_export_rate_limiter.allow(number):
+        return JSONResponse(status_code=429, content={"error": "You've downloaded your data several times in the last "
+                                                                "hour — please try again later."})
+    security_monitor.record("data_export", subject="self", employee_number=number)
+    return await asyncio.to_thread(_employee_data_export, number)
+
+
+class PrivacyRequestBody(StrictModel):
+    kind: Identifier
+    details: Note | None = None
+
+
+@app.post("/api/employee/me/privacy-request")
+async def employee_create_privacy_request(body: PrivacyRequestBody, user=Depends(require_employee)):
+    number = _employee_number(user)
+    if body.kind not in PRIVACY_REQUEST_KINDS:
+        return JSONResponse(status_code=400, content={"error": f"kind must be one of {', '.join(PRIVACY_REQUEST_KINDS)}"})
+    if not privacy_request_rate_limiter.allow(number):
+        return JSONResponse(status_code=429, content={"error": "Too many requests submitted — please try again later."})
+    record = await asyncio.to_thread(
+        privacy_requests.create, number, body.kind, body.details, config.PRIVACY_REQUEST_DUE_DAYS)
+    security_monitor.record("privacy_request", kind_of_request=body.kind, employee_number=number)
+    return record
+
+
+@app.get("/api/employee/me/privacy-requests")
+async def employee_list_privacy_requests(user=Depends(require_employee)):
+    return {"requests": await asyncio.to_thread(privacy_requests.list, None, _employee_number(user))}
+
+
+# Admin side (dashboard admin accounts — the privacy officer's tools)
+
+@app.get("/api/admin/privacy-requests")
+async def admin_list_privacy_requests(status: str | None = None, user=Depends(require_admin)):
+    if status not in (None, "open", "resolved"):
+        return JSONResponse(status_code=400, content={"error": "status must be 'open' or 'resolved'"})
+    return {"requests": await asyncio.to_thread(privacy_requests.list, status)}
+
+
+class ResolvePrivacyRequestBody(StrictModel):
+    outcome: Identifier
+    note: Note | None = None
+
+
+@app.post("/api/admin/privacy-requests/{request_id}/resolve")
+async def admin_resolve_privacy_request(request_id: Identifier, body: ResolvePrivacyRequestBody,
+                                        user=Depends(require_admin)):
+    if body.outcome not in PRIVACY_REQUEST_OUTCOMES:
+        return JSONResponse(status_code=400, content={"error": f"outcome must be one of {', '.join(PRIVACY_REQUEST_OUTCOMES)}"})
+    if not await asyncio.to_thread(privacy_requests.resolve, request_id, user["sub"], body.outcome, body.note):
+        return JSONResponse(status_code=404, content={"error": "no open request with that id"})
+    security_monitor.record("admin_action", action="privacy_request_resolved", by=user["sub"], outcome=body.outcome)
+    return {"ok": True}
+
+
+@app.get("/api/admin/employees/{employee_number}/data-export")
+async def admin_employee_data_export(employee_number: Identifier, user=Depends(require_admin)):
+    if await asyncio.to_thread(employee_directory.get, employee_number) is None:
+        return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
+    security_monitor.record("data_export", subject="admin", by=user["sub"], employee_number=employee_number)
+    return await asyncio.to_thread(_employee_data_export, employee_number)
+
+
+class EraseEmployeeBody(StrictModel):
+    confirm_employee_number: Identifier     # must equal the one in the URL — erasing is not undoable
+    request_id: Identifier | None = None    # optionally close the matching privacy request in the same step
+
+
+@app.post("/api/admin/employees/{employee_number}/erase")
+async def admin_erase_employee(employee_number: Identifier, body: EraseEmployeeBody, user=Depends(require_admin)):
+    """Right to erasure. Removes the name, phone, login, push token and account link; keeps the employee
+    NUMBER so task/event history stays coherent but no longer identifies anyone. Not undoable."""
+    if body.confirm_employee_number != employee_number:
+        return JSONResponse(status_code=400, content={"error": "confirm_employee_number must repeat the employee number "
+                                                                "in the URL — erasure cannot be undone"})
+    if await asyncio.to_thread(employee_directory.get, employee_number) is None:
+        return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
+    if await _is_erased(employee_number):
+        return JSONResponse(status_code=409, content={"error": "this person's data has already been erased"})
+    await asyncio.to_thread(employee_directory.anonymize, employee_number)
+    await _end_employee_sessions(employee_number)
+    await asyncio.to_thread(mfa.store.disable, mfa.subject("employee", employee_number))
+    if body.request_id:
+        await asyncio.to_thread(privacy_requests.resolve, body.request_id, user["sub"], "fulfilled",
+                                f"Personal data of employee {employee_number} erased.")
+    security_monitor.record("data_erasure", by=user["sub"], employee_number=employee_number, reason="request")
+    return {"ok": True, "erased": employee_number}
 
 
 # ── Supervisor mobile dashboard — the app's "Dashboard" tab, shown only
@@ -2021,8 +2634,8 @@ async def employee_dashboard_dismiss_flag(task_id: str, user=Depends(require_emp
     return _command_reply_to_response(reply)
 
 
-class DashboardExtendRequest(BaseModel):
-    extra_minutes: float
+class DashboardExtendRequest(StrictModel):
+    extra_minutes: ExtraMinutes
 
 
 @app.post("/api/employee/dashboard/tasks/{task_id}/extend")
@@ -2034,8 +2647,8 @@ async def employee_dashboard_extend_task(
     return _command_reply_to_response(reply, error_status=400)
 
 
-class DashboardReassignRequest(BaseModel):
-    new_assignee: str
+class DashboardReassignRequest(StrictModel):
+    new_assignee: Identifier
 
 
 @app.post("/api/employee/dashboard/tasks/{task_id}/reassign")
@@ -2053,12 +2666,12 @@ async def employee_dashboard_complete_task(task_id: str, user=Depends(require_em
     return _command_reply_to_response(reply)
 
 
-class DashboardAssignTaskRequest(BaseModel):
-    task_name: str
-    zone_id: str
-    assigned_minutes: float
-    task_type: str | None = None
-    assigned_to: str | None = None  # employee_number — omit for an unassigned task
+class DashboardAssignTaskRequest(StrictModel):
+    task_name: Name
+    zone_id: Identifier
+    assigned_minutes: AssignedMinutes
+    task_type: Identifier | None = None
+    assigned_to: Identifier | None = None  # employee_number — omit for an unassigned task
 
 
 @app.post("/api/employee/dashboard/tasks")
@@ -2175,6 +2788,9 @@ async def employee_dashboard_deactivate_employee(employee_number: str, user=Depe
 
 @app.post("/api/employee/dashboard/employees/{employee_number}/reactivate")
 async def employee_dashboard_reactivate_employee(employee_number: str, user=Depends(require_employee_manager)):
+    if await _is_erased(employee_number):
+        return JSONResponse(status_code=409, content={"error": "this person's personal data has been erased — "
+                                                                "add them as a new employee instead"})
     if not await asyncio.to_thread(employee_directory.set_active, employee_number, True):
         return JSONResponse(status_code=404, content={"error": f"employee '{employee_number}' not found"})
     return {"ok": True}
@@ -2213,7 +2829,7 @@ async def employee_dashboard_set_employee_password(
     ok, reason = validate_password_strength(body.password)
     if not ok:
         return JSONResponse(status_code=400, content={"error": reason})
-    password_hash = hash_password(body.password)
+    password_hash = await asyncio.to_thread(hash_password, body.password)
     await asyncio.to_thread(employee_directory.set_password_hash, employee_number, password_hash)
     # Replacing an EXISTING password is the "this login may be compromised"
     # lever — the old password stops working, so the old sessions must too.
@@ -2297,7 +2913,7 @@ async def employee_dashboard_history(
 
 @app.get("/api/employee/admin/users")
 async def employee_admin_list_users(user=Depends(require_employee_admin)):
-    return {"users": users.list_users()}
+    return {"users": await _users_with_mfa_flag()}
 
 
 @app.post("/api/employee/admin/users")
@@ -2313,7 +2929,8 @@ async def employee_admin_create_user(body: CreateUserRequest, user=Depends(requi
         return JSONResponse(status_code=400, content={"error": reason})
     if users.user_exists(body.username):
         return JSONResponse(status_code=409, content={"error": f"user '{body.username}' already exists"})
-    users.create_user(body.username, body.password, role=body.role, created_by=f"employee:{user['sub']}")
+    await asyncio.to_thread(
+        users.create_user, body.username, body.password, role=body.role, created_by=f"employee:{user['sub']}")
     log(f"Admin employee:{user['sub']} created account '{body.username}' with role '{body.role}'")
     return {"ok": True}
 
@@ -2340,7 +2957,7 @@ async def employee_admin_reset_password(username: str, body: ResetPasswordReques
     ok, reason = validate_password_strength(body.new_password, username=username)
     if not ok:
         return JSONResponse(status_code=400, content={"error": reason})
-    if not users.set_password(username, body.new_password, must_change_password=True):
+    if not await asyncio.to_thread(users.set_password, username, body.new_password, must_change_password=True):
         return JSONResponse(status_code=404, content={"error": f"user '{username}' not found"})
     await revocation_store.revoke(username)
     log(f"Admin employee:{user['sub']} reset the password for account '{username}'")
@@ -2438,12 +3055,12 @@ async def reassign_zone(zone_id: str, user=Depends(require_supervisor)):
     return _command_reply_to_response(reply)
 
 
-class TaskAssignRequest(BaseModel):
-    task_name: str
-    zone_id: str
-    assigned_minutes: float
-    task_type: str | None = None
-    assigned_to: str | None = None  # employee_number — omit for an unassigned task
+class TaskAssignRequest(StrictModel):
+    task_name: Name
+    zone_id: Identifier
+    assigned_minutes: AssignedMinutes
+    task_type: Identifier | None = None
+    assigned_to: Identifier | None = None  # employee_number — omit for an unassigned task
 
 
 @app.post("/api/tasks")
@@ -2457,8 +3074,8 @@ async def assign_task(body: TaskAssignRequest, user=Depends(require_supervisor))
     return _command_reply_to_response(reply, error_status=400)
 
 
-class TaskExtendRequest(BaseModel):
-    extra_minutes: float
+class TaskExtendRequest(StrictModel):
+    extra_minutes: ExtraMinutes
 
 
 @app.post("/api/tasks/{task_id}/extend")
@@ -2468,8 +3085,8 @@ async def extend_task(task_id: str, body: TaskExtendRequest, user=Depends(requir
     return _command_reply_to_response(reply, error_status=400)
 
 
-class TaskReassignRequest(BaseModel):
-    new_assignee: str  # employee_number
+class TaskReassignRequest(StrictModel):
+    new_assignee: Identifier  # employee_number
 
 
 @app.post("/api/tasks/{task_id}/reassign")

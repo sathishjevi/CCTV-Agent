@@ -66,8 +66,23 @@ from typing import Optional
 import jwt  # PyJWT
 
 from floorwatch_retention import parse_timestamp  # noqa: E402
+import floorwatch_db  # noqa: E402
 
+# Legacy hashing, kept ONLY so existing accounts can still log in: PBKDF2-HMAC-SHA256.
 PBKDF2_ITERATIONS = 200_000
+# Current hashing: scrypt (memory-hard, so GPU/ASIC cracking is far costlier than
+# PBKDF2). Parameters are OWASP's "N=2^15, r=8, p=3" row (~32 MiB per hash). A
+# stored hash records its own parameters, so these can be raised later and old
+# hashes still verify. ~0.3-0.7 s per hash: callers on the async request path
+# run it in a worker thread (hashlib releases the GIL), never inline.
+SCRYPT_N = 2 ** 15
+SCRYPT_R = 8
+SCRYPT_P = 3
+SCRYPT_DKLEN = 32
+_SCRYPT_MAXMEM = 128 * 1024 * 1024
+# Upper bound on what verify_password will even look at: a megabyte-long
+# "password" must not become a CPU/memory lever.
+MAX_PASSWORD_LENGTH = 1024
 DEFAULT_TOKEN_TTL_SECONDS = 12 * 3600
 
 VALID_ROLES = {"admin", "supervisor", "viewer", "service", "employee"}
@@ -166,6 +181,17 @@ def _utcnow_iso() -> str:
 # ── Password hashing ──────────────────────────────────────────────────────
 
 def hash_password(password: str, salt: Optional[bytes] = None) -> str:
+    """scrypt, stored as `scrypt$N$r$p$salt_hex$digest_hex`."""
+    if salt is None:
+        salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P,
+                            maxmem=_SCRYPT_MAXMEM, dklen=SCRYPT_DKLEN)
+    return f"scrypt${SCRYPT_N}${SCRYPT_R}${SCRYPT_P}${salt.hex()}${digest.hex()}"
+
+
+def _legacy_pbkdf2_hash(password: str, salt: Optional[bytes] = None) -> str:
+    """The OLD format (`salt_hex$digest_hex`). Not used to store anything new —
+    only so tests can build the hashes pre-existing accounts have."""
     if salt is None:
         salt = secrets.token_bytes(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PBKDF2_ITERATIONS)
@@ -173,14 +199,50 @@ def hash_password(password: str, salt: Optional[bytes] = None) -> str:
 
 
 def verify_password(password: str, stored: str) -> bool:
-    try:
-        salt_hex, digest_hex = stored.split("$", 1)
-        salt = bytes.fromhex(salt_hex)
-        expected = bytes.fromhex(digest_hex)
-    except (ValueError, AttributeError):
+    """Accepts both formats. Never raises."""
+    if not isinstance(stored, str) or not isinstance(password, str) or len(password) > MAX_PASSWORD_LENGTH:
         return False
-    actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PBKDF2_ITERATIONS)
+    try:
+        if stored.startswith("scrypt$"):
+            _, n, r, p, salt_hex, digest_hex = stored.split("$")
+            n, r, p = int(n), int(r), int(p)
+            salt, expected = bytes.fromhex(salt_hex), bytes.fromhex(digest_hex)
+            # A corrupted or tampered stored value must not be able to demand
+            # gigabytes of memory or minutes of CPU.
+            if not (2 ** 10 <= n <= 2 ** 20 and n & (n - 1) == 0 and 1 <= r <= 16 and 1 <= p <= 16
+                    and 16 <= len(expected) <= 64):
+                return False
+            actual = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=n, r=r, p=p,
+                                    maxmem=max(_SCRYPT_MAXMEM, 130 * n * r + 130 * r * p), dklen=len(expected))
+        else:
+            salt_hex, digest_hex = stored.split("$", 1)
+            salt, expected = bytes.fromhex(salt_hex), bytes.fromhex(digest_hex)
+            actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PBKDF2_ITERATIONS)
+    except (ValueError, MemoryError):
+        return False
     return hmac.compare_digest(actual, expected)
+
+
+def password_needs_rehash(stored: str) -> bool:
+    """True for old-format hashes and for scrypt hashes made with weaker
+    parameters than today's. Callers re-hash right after a SUCCESSFUL login
+    (the only moment the plaintext is available), so every account migrates
+    the next time its owner signs in, with no forced reset."""
+    return not (isinstance(stored, str) and stored.startswith(f"scrypt${SCRYPT_N}${SCRYPT_R}${SCRYPT_P}$"))
+
+
+_dummy_hash_cache: Optional[str] = None
+
+
+def verify_password_dummy(password: str) -> bool:
+    """Burns the same time a real verification would. Called when the
+    username/phone doesn't exist, so response time doesn't reveal which
+    accounts exist. Always False."""
+    global _dummy_hash_cache
+    if _dummy_hash_cache is None:
+        _dummy_hash_cache = hash_password(secrets.token_hex(16))
+    verify_password(password, _dummy_hash_cache)
+    return False
 
 
 # ── Tokens ─────────────────────────────────────────────────────────────────
@@ -191,6 +253,39 @@ def issue_token(secret: str, username: str, role: str, ttl_seconds: int = DEFAUL
     now = int(time.time())
     payload = {"sub": username, "role": role, "iat": now, "exp": now + ttl_seconds}
     return jwt.encode(payload, secret, algorithm="HS256")
+
+
+# ── Two-step-verification challenge tokens ───────────────────────────────
+# Between "password correct" and "code correct" the caller holds a challenge token, NOT a session token.
+# It is signed with a DIFFERENT key (derived from the auth secret), so it cannot verify as a session
+# token anywhere — not even by a bug — and it names what it allows: `verify` (enter a code) or `enroll`
+# (set up an authenticator, for roles that must have one). Short-lived.
+MFA_CHALLENGE_TTL_SECONDS = 300
+
+
+def _mfa_key(secret: str) -> str:
+    return hashlib.sha256(b"floorwatch-mfa-challenge-v1|" + secret.encode("utf-8")).hexdigest()
+
+
+def issue_mfa_challenge(secret: str, subject: str, kind: str, scope: str,
+                        ttl_seconds: int = MFA_CHALLENGE_TTL_SECONDS) -> str:
+    if kind not in ("dashboard", "employee") or scope not in ("verify", "enroll"):
+        raise ValueError("invalid challenge")
+    now = int(time.time())
+    return jwt.encode({"typ": "mfa", "sub": subject, "kind": kind, "scope": scope, "iat": now, "exp": now + ttl_seconds},
+                      _mfa_key(secret), algorithm="HS256")
+
+
+def verify_mfa_challenge(secret: str, token: str, kind: str, scope: str) -> Optional[str]:
+    """Returns the subject (username / employee number) if this is a valid, unexpired challenge for exactly
+    this kind and scope, else None. Never raises."""
+    try:
+        payload = jwt.decode(token, _mfa_key(secret), algorithms=["HS256"])
+    except jwt.PyJWTError:
+        return None
+    if payload.get("typ") != "mfa" or payload.get("kind") != kind or payload.get("scope") != scope:
+        return None
+    return payload.get("sub")
 
 
 def verify_token(secret: str, token: str) -> Optional[dict]:
@@ -358,12 +453,34 @@ class UserStore:
         already-issued token isn't also revoked immediately."""
         user = self._load().get(username)
         if user is None:
+            verify_password_dummy(password)   # same cost as a real check: no username enumeration by timing
             return None
-        if not user.get("active", True):
+        stored = user.get("password_hash", "")
+        password_ok = verify_password(password, stored)
+        if not user.get("active", True) or not password_ok:
             return None
-        if not verify_password(password, user.get("password_hash", "")):
-            return None
+        if password_needs_rehash(stored):
+            self._upgrade_hash(username, password)
         return {"role": user.get("role", "viewer"),
+                "must_change_password": user.get("must_change_password", False)}
+
+    def _upgrade_hash(self, username: str, password: str):
+        """Re-hash with current parameters. Best effort — a failed upgrade must
+        never fail a login that was otherwise valid."""
+        try:
+            users = self._load()
+            if username in users:
+                users[username]["password_hash"] = hash_password(password)
+                self._save(users)
+        except Exception as e:
+            _log(f"could not upgrade password hash for '{username}': {type(e).__name__}")
+
+    def get_user(self, username: str) -> Optional[dict]:
+        """{"role", "active", "must_change_password"} or None. Never includes the password hash."""
+        user = self._load().get(username)
+        if user is None:
+            return None
+        return {"role": user.get("role", "viewer"), "active": user.get("active", True),
                 "must_change_password": user.get("must_change_password", False)}
 
     def create_user(self, username: str, password: str, role: str = "supervisor",
@@ -455,19 +572,19 @@ class PostgresUserStore:
     """
 
     def __init__(self, dsn: str):
-        import psycopg
         self.dsn = dsn
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as conn:
-            conn.execute(self.SCHEMA_SQL)
-            # DP-M4: added after this table already existed in real
-            # deployments — CREATE TABLE IF NOT EXISTS above is a no-op
-            # against an existing table, so the column needs an explicit
-            # migration here too.
-            conn.execute("ALTER TABLE floorwatch_users ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ;")
+        with floorwatch_db.connection(dsn) as conn:
+            floorwatch_db.apply_schema(conn, "users", [
+                self.SCHEMA_SQL,
+                # DP-M4: added after this table already existed in real
+                # deployments — CREATE TABLE IF NOT EXISTS above is a no-op
+                # against an existing table, so the column needs an explicit
+                # migration here too.
+                "ALTER TABLE floorwatch_users ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ;",
+            ])
 
     def _connect(self):
-        import psycopg
-        return psycopg.connect(self.dsn, autocommit=True, connect_timeout=5)
+        return floorwatch_db.connection(self.dsn)   # pooled — see floorwatch_db.py
 
     def authenticate(self, username: str, password: str) -> Optional[dict]:
         with self._connect() as conn:
@@ -476,13 +593,28 @@ class PostgresUserStore:
                 "FROM floorwatch_users WHERE username=%s", (username,),
             ).fetchone()
         if row is None:
+            verify_password_dummy(password)   # same cost as a real check: no username enumeration by timing
             return None
         password_hash, role, active, must_change_password = row
-        if not active:
+        password_ok = verify_password(password, password_hash)
+        if not active or not password_ok:
             return None
-        if not verify_password(password, password_hash):
-            return None
+        if password_needs_rehash(password_hash):
+            try:
+                with self._connect() as conn:
+                    conn.execute("UPDATE floorwatch_users SET password_hash=%s WHERE username=%s",
+                                 (hash_password(password), username))
+            except Exception as e:
+                _log(f"could not upgrade password hash for '{username}': {type(e).__name__}")
         return {"role": role, "must_change_password": must_change_password}
+
+    def get_user(self, username: str) -> Optional[dict]:
+        """{"role", "active", "must_change_password"} or None. Never includes the password hash."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT role, active, must_change_password FROM floorwatch_users WHERE username=%s",
+                (username,)).fetchone()
+        return None if row is None else {"role": row[0], "active": row[1], "must_change_password": row[2]}
 
     def create_user(self, username: str, password: str, role: str = "supervisor",
                      created_by: Optional[str] = None, must_change_password: bool = True):
@@ -628,7 +760,7 @@ def build_user_store(postgres_dsn: Optional[str], users_path: Path):
     if postgres_dsn:
         try:
             store = PostgresUserStore(postgres_dsn)
-            _log(f"Using PostgresUserStore at {postgres_dsn}")
+            _log(f"Using PostgresUserStore at {floorwatch_db.safe_target(postgres_dsn)}")
             return store
         except Exception as e:
             _log(f"WARNING: could not connect to Postgres ({e}) — falling back to "

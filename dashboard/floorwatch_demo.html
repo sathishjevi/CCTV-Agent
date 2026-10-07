@@ -176,6 +176,106 @@
       <button type="submit" class="btn primary">Sign in</button>
       <div class="login-error" id="loginError"></div>
     </form>
+
+    <!-- Step 2 of sign-in, for accounts that use two-step verification. -->
+    <div id="mfaStep" style="display:none;">
+      <h2>Two-step verification</h2>
+      <p style="font-size:12px;color:var(--dim);line-height:1.5;margin:-6px 0 12px;">Enter the 6-digit code from your authenticator app — or one of your recovery codes if you've lost your phone.</p>
+      <form id="mfaForm">
+        <div class="field"><label for="mfaCode">Code</label><input id="mfaCode" inputmode="text" autocomplete="one-time-code" maxlength="32" required></div>
+        <button type="submit" class="btn primary">Verify</button>
+        <button type="button" class="btn" id="mfaBackBtn">Back</button>
+        <div class="login-error" id="mfaError"></div>
+      </form>
+    </div>
+
+    <!-- Required for this role: set up an authenticator before the first sign-in completes. -->
+    <div id="mfaEnrollStep" style="display:none;">
+      <h2>Set up two-step verification</h2>
+      <div id="mfaEnrollSetup">
+        <p style="font-size:12px;color:var(--dim);line-height:1.5;margin:-6px 0 10px;">Your role requires it. Add this account to an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy…) using the key below, then enter the 6-digit code it shows.</p>
+        <div class="field"><label>Key</label><div id="mfaEnrollSecret" style="font-family:var(--mono);font-size:13px;word-break:break-all;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:9px 10px;user-select:all;"></div></div>
+        <p style="font-size:11.5px;margin:-4px 0 10px;"><a id="mfaEnrollLink" href="#" style="color:var(--accent);">Open in my authenticator app</a> (on a phone)</p>
+        <form id="mfaEnrollForm">
+          <div class="field"><label for="mfaEnrollCode">6-digit code</label><input id="mfaEnrollCode" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required></div>
+          <button type="submit" class="btn primary">Turn on and sign in</button>
+          <div class="login-error" id="mfaEnrollError"></div>
+        </form>
+      </div>
+      <div id="mfaEnrollDone" style="display:none;">
+        <p style="font-size:12px;line-height:1.5;margin:-6px 0 8px;"><strong>Save these recovery codes now.</strong> Each works once if you lose your phone. They are not shown again.</p>
+        <pre id="mfaEnrollCodes" style="font-family:var(--mono);font-size:12.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:10px;margin:0 0 10px;user-select:all;"></pre>
+        <button type="button" class="btn primary" id="mfaEnrollContinue">I've saved them — continue</button>
+      </div>
+    </div>
+
+    <p style="font-size:11px;margin:16px 0 0;text-align:center;"><a href="/privacy" target="_blank" rel="noopener" style="color:var(--dim);">Privacy notice</a></p>
+  </div>
+</div>
+
+<!-- Security: this account's two-step verification. -->
+<div class="login-overlay" id="securityOverlay" style="display:none;align-items:flex-start;padding:40px 20px;overflow-y:auto;">
+  <div class="login-card" style="width:min(460px,100%);">
+    <div class="brand" style="justify-content:space-between;display:flex;">
+      <div style="display:flex;align-items:center;"><div class="brand-mark" style="display:inline-flex;">FW</div><strong style="margin-left:8px;font-size:15px;">Security</strong></div>
+      <button class="btn" id="closeSecurityBtn" style="width:auto;padding:6px 12px;">Close</button>
+    </div>
+    <h2 style="margin-bottom:6px;">Two-step verification</h2>
+    <div id="securityBody" style="font-size:12.5px;line-height:1.55;"></div>
+    <div id="securityError" class="login-error"></div>
+  </div>
+</div>
+
+<!-- System status (admin): what is configured, what is healthy, what needs attention. -->
+<div class="login-overlay" id="systemStatusOverlay" style="display:none;align-items:flex-start;padding:40px 20px;overflow-y:auto;">
+  <div class="login-card" style="width:min(720px,100%);">
+    <div class="brand" style="justify-content:space-between;display:flex;">
+      <div style="display:flex;align-items:center;"><div class="brand-mark" style="display:inline-flex;">FW</div><strong style="margin-left:8px;font-size:15px;">System status</strong></div>
+      <button class="btn" id="closeSystemStatusBtn" style="width:auto;padding:6px 12px;">Close</button>
+    </div>
+    <div id="systemStatusError" class="login-error" style="min-height:0;"></div>
+    <div id="systemStatusBody" style="font-size:12.5px;"></div>
+  </div>
+</div>
+
+<!-- Privacy requests (admin): data-subject requests, exports and erasure. -->
+<div class="login-overlay" id="privacyOverlay" style="display:none;align-items:flex-start;padding:40px 20px;overflow-y:auto;">
+  <div class="login-card" style="width:min(860px,100%);">
+    <div class="brand" style="justify-content:space-between;display:flex;">
+      <div style="display:flex;align-items:center;"><div class="brand-mark" style="display:inline-flex;">FW</div><strong style="margin-left:8px;font-size:15px;">Privacy requests</strong></div>
+      <button class="btn" id="closePrivacyBtn" style="width:auto;padding:6px 12px;">Close</button>
+    </div>
+    <div id="privacyError" class="login-error" style="min-height:0;"></div>
+    <p style="font-size:11.5px;color:var(--dim);line-height:1.5;margin:0 0 10px;">Requests staff make in the app (see a copy of their data, correct it, erase it…). Each has a deadline; overdue ones also raise an alert.</p>
+    <div style="overflow-x:auto;margin:0 0 16px;">
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+        <thead><tr style="text-align:left;color:var(--dim);font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:0.4px;">
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Employee</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Request</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Due</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Status</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Actions</th>
+        </tr></thead>
+        <tbody id="privacyTableBody"></tbody>
+      </table>
+    </div>
+    <div id="privacyResolveBox" style="display:none;border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:16px;">
+      <div style="font-weight:600;margin-bottom:8px;" id="privacyResolveTitle"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+        <div class="field" style="margin-bottom:0;"><label for="privacyResolveOutcome">Outcome</label>
+          <select id="privacyResolveOutcome" style="font-family:var(--sans);font-size:13px;background:var(--panel-2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:9px 10px;">
+            <option value="fulfilled">Fulfilled</option><option value="partially_fulfilled">Partly fulfilled</option><option value="declined">Declined</option></select></div>
+        <div class="field" style="margin-bottom:0;flex:1;min-width:160px;"><label for="privacyResolveNote">Note (what was done / why)</label><input id="privacyResolveNote" maxlength="2000"></div>
+        <button class="btn primary" id="privacyResolveGo" style="width:auto;">Close request</button>
+        <button class="btn" id="privacyResolveCancel" style="width:auto;">Cancel</button>
+      </div>
+    </div>
+    <h2 style="margin:0 0 8px;">Look up an employee</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;">
+      <div class="field" style="margin-bottom:0;"><label for="privacyLookupNumber">Employee number</label><input id="privacyLookupNumber" maxlength="64"></div>
+      <button class="btn" id="privacyLookupExport" style="width:auto;">Download their data</button>
+      <button class="btn" id="privacyLookupErase" style="width:auto;">Erase their data…</button>
+    </div>
   </div>
 </div>
 
@@ -213,13 +313,14 @@
     <div style="overflow-x:auto;margin:12px 0 20px;">
     <table id="usersTable" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12.5px;">
       <colgroup>
-        <col style="width:24%;"><col style="width:14%;"><col style="width:14%;"><col style="width:20%;"><col style="width:28%;">
+        <col style="width:20%;"><col style="width:13%;"><col style="width:12%;"><col style="width:9%;"><col style="width:18%;"><col style="width:28%;">
       </colgroup>
       <thead>
         <tr style="text-align:left;color:var(--dim);font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:0.4px;">
           <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Username</th>
           <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Role</th>
           <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Status</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">2-step</th>
           <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Last login</th>
           <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Actions</th>
         </tr>
@@ -474,6 +575,9 @@
       <button class="btn" id="manageEmployeesBtn" style="padding:4px 10px;font-size:11px;display:none;">Manage Employees</button>
       <button class="btn" id="manageZonesBtn" style="padding:4px 10px;font-size:11px;display:none;">Manage Zones</button>
       <button class="btn" id="historyBtn" style="padding:4px 10px;font-size:11px;">History</button>
+      <button class="btn" id="privacyBtn" style="padding:4px 10px;font-size:11px;display:none;">Privacy requests</button>
+      <button class="btn" id="systemStatusBtn" style="padding:4px 10px;font-size:11px;display:none;">System status</button>
+      <button class="btn" id="securityBtn" style="padding:4px 10px;font-size:11px;">Security</button>
       <button class="btn" id="changePasswordBtn" style="padding:4px 10px;font-size:11px;">Change password</button>
       <button class="btn" id="logoutBtn" style="padding:4px 10px;font-size:11px;">Log out</button>
     </div>
@@ -668,6 +772,8 @@
     document.getElementById('userWho').textContent = `${currentAuth.username} (${currentAuth.role})`;
     document.getElementById('userBadge').style.display = 'flex';
     document.getElementById('manageUsersBtn').style.display = currentAuth.role === 'admin' ? 'inline-block' : 'none';
+    document.getElementById('privacyBtn').style.display = currentAuth.role === 'admin' ? 'inline-block' : 'none';
+    document.getElementById('systemStatusBtn').style.display = currentAuth.role === 'admin' ? 'inline-block' : 'none';
     document.getElementById('manageEmployeesBtn').style.display =
       (currentAuth.role === 'admin' || currentAuth.role === 'supervisor') ? 'inline-block' : 'none';
     document.getElementById('manageZonesBtn').style.display =
@@ -1372,20 +1478,361 @@
       });
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      currentAuth = {token: data.token, username: data.username, role: data.role, backendBase: backend};
-      setStoredAuth(currentAuth);
-      wsUrlInput.value = backend.replace(/^http/, 'ws') + '/events';
       document.getElementById('loginPassword').value = '';
-      hideLoginOverlay();
-      updateUserBadge();
-      if(data.must_change_password){
-        showChangePasswordOverlay({forced: true});
-      } else {
-        connect();
+      if(data.mfa_required){                      // password was right; this account also needs a code
+        pendingLogin = {backend, mfaToken: data.mfa_token};
+        showLoginStep('mfaStep');
+        return;
       }
+      if(data.mfa_enrollment_required){           // this role must have two-step on before it can sign in
+        pendingLogin = {backend, mfaToken: data.mfa_token};
+        await startLoginEnrollment();
+        return;
+      }
+      finishLogin(data, backend);
     } catch(err){
       document.getElementById('loginError').textContent = err.message;
     }
+  };
+
+  // ── Two-step verification at sign-in ──
+  let pendingLogin = null;       // {backend, mfaToken} between "password right" and "code right"
+  let loginResultAfterCodes = null;
+
+  function finishLogin(data, backend){
+    currentAuth = {token: data.token, username: data.username, role: data.role, backendBase: backend};
+    setStoredAuth(currentAuth);
+    wsUrlInput.value = backend.replace(/^http/, 'ws') + '/events';
+    pendingLogin = null;
+    showLoginStep('loginForm');
+    hideLoginOverlay();
+    updateUserBadge();
+    if(data.must_change_password){
+      showChangePasswordOverlay({forced: true});
+    } else {
+      connect();
+    }
+  }
+  function showLoginStep(id){
+    ['loginForm', 'mfaStep', 'mfaEnrollStep'].forEach(x => { document.getElementById(x).style.display = (x === id) ? '' : 'none'; });
+    if(id === 'mfaStep'){ document.getElementById('mfaCode').value = ''; document.getElementById('mfaError').textContent = ''; document.getElementById('mfaCode').focus(); }
+  }
+  async function postJson(url, body){
+    const res = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
+  function groupKey(secret){ return String(secret).replace(/(.{4})/g, '$1 ').trim(); }
+  function setAuthenticatorLink(el, uri){
+    // only ever an otpauth:// link — never let a server value become a script URL
+    if(typeof uri === 'string' && uri.startsWith('otpauth://')){ el.href = uri; el.style.display = ''; } else { el.style.display = 'none'; }
+  }
+
+  document.getElementById('mfaBackBtn').onclick = () => { pendingLogin = null; showLoginStep('loginForm'); };
+  document.getElementById('mfaForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('mfaError');
+    errEl.textContent = '';
+    try {
+      const data = await postJson(`${pendingLogin.backend}/api/login/mfa`,
+        {mfa_token: pendingLogin.mfaToken, code: document.getElementById('mfaCode').value.trim()});
+      const backend = pendingLogin.backend;
+      finishLogin(data, backend);
+      if(data.used_recovery_code){ alert('You signed in with a recovery code, and it is now used up. Open Security to set up a fresh authenticator or get new recovery codes.'); }
+    } catch(err){
+      errEl.textContent = err.message;
+    }
+  };
+
+  async function startLoginEnrollment(){
+    showLoginStep('mfaEnrollStep');
+    document.getElementById('mfaEnrollSetup').style.display = '';
+    document.getElementById('mfaEnrollDone').style.display = 'none';
+    document.getElementById('mfaEnrollError').textContent = '';
+    document.getElementById('mfaEnrollCode').value = '';
+    try {
+      const started = await postJson(`${pendingLogin.backend}/api/login/mfa/setup`, {mfa_token: pendingLogin.mfaToken});
+      document.getElementById('mfaEnrollSecret').textContent = groupKey(started.secret);
+      setAuthenticatorLink(document.getElementById('mfaEnrollLink'), started.otpauth_uri);
+    } catch(err){
+      showLoginStep('loginForm');
+      document.getElementById('loginError').textContent = err.message;
+    }
+  }
+  document.getElementById('mfaEnrollForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('mfaEnrollError');
+    errEl.textContent = '';
+    try {
+      const data = await postJson(`${pendingLogin.backend}/api/login/mfa/enable`,
+        {mfa_token: pendingLogin.mfaToken, code: document.getElementById('mfaEnrollCode').value.trim()});
+      loginResultAfterCodes = {data, backend: pendingLogin.backend};
+      document.getElementById('mfaEnrollCodes').textContent = (data.recovery_codes || []).join('\n');
+      document.getElementById('mfaEnrollSetup').style.display = 'none';
+      document.getElementById('mfaEnrollDone').style.display = '';
+    } catch(err){
+      errEl.textContent = err.message;
+    }
+  };
+  document.getElementById('mfaEnrollContinue').onclick = () => {
+    const r = loginResultAfterCodes;
+    loginResultAfterCodes = null;
+    document.getElementById('mfaEnrollCodes').textContent = '';
+    if(r) finishLogin(r.data, r.backend);
+  };
+
+  // ── Security (this account's two-step verification) ──
+  function openOverlay(id){ document.getElementById(id).style.display = 'flex'; }
+  function closeOverlay(id){ document.getElementById(id).style.display = 'none'; }
+  function el(tag, props, children){
+    const node = document.createElement(tag);
+    Object.entries(props || {}).forEach(([k, v]) => { if(k === 'text') node.textContent = v; else if(k === 'style') node.style.cssText = v; else node[k] = v; });
+    (children || []).forEach(c => node.appendChild(c));
+    return node;
+  }
+  function fieldInput(id, label, opts){
+    const input = el('input', Object.assign({id, maxLength: 256}, opts || {}));
+    return el('div', {className: 'field'}, [el('label', {htmlFor: id, text: label}), input]);
+  }
+  function showRecoveryCodes(body, codes){
+    body.replaceChildren(
+      el('p', {text: 'Save these recovery codes now. Each works once if you lose your phone. They are not shown again.', style: 'font-weight:600;'}),
+      el('pre', {text: (codes || []).join('\n'), style: "font-family:var(--mono);font-size:12.5px;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:10px;user-select:all;"}),
+      el('button', {className: 'btn primary', text: 'Done', onclick: () => renderSecurity()}));
+  }
+  async function renderSecurity(){
+    const body = document.getElementById('securityBody');
+    const errEl = document.getElementById('securityError');
+    errEl.textContent = '';
+    body.replaceChildren(el('p', {text: 'Loading…'}));
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/mfa/status`);
+      const status = await res.json();
+      if(!res.ok) throw new Error(status.error || `HTTP ${res.status}`);
+      if(!status.enabled){
+        body.replaceChildren(
+          el('p', {text: 'Off. Two-step verification asks for a 6-digit code from an app on your phone each time you sign in, so a stolen password alone is not enough.' + (status.required ? ' Your role requires it.' : '')}),
+          el('button', {className: 'btn primary', text: 'Set it up', onclick: beginSecuritySetup}));
+        return;
+      }
+      body.replaceChildren(
+        el('p', {text: `On. ${status.recovery_codes_remaining} recovery code${status.recovery_codes_remaining === 1 ? '' : 's'} left.`, style: 'color:var(--ok);font-weight:600;'}),
+        el('h2', {text: 'Get new recovery codes', style: 'margin-top:14px;'}),
+        fieldInput('secNewCodesCode', 'Current 6-digit code', {autocomplete: 'one-time-code', inputMode: 'numeric'}),
+        el('button', {className: 'btn', text: 'Replace my recovery codes', onclick: replaceRecoveryCodes}),
+        status.required ? el('p', {text: 'Your role requires two-step verification, so it cannot be turned off.', style: 'color:var(--dim);margin-top:14px;'}) : el('div', {}, [
+          el('h2', {text: 'Turn it off', style: 'margin-top:18px;'}),
+          fieldInput('secOffPassword', 'Password', {type: 'password', autocomplete: 'current-password'}),
+          fieldInput('secOffCode', 'Current 6-digit code', {autocomplete: 'one-time-code', inputMode: 'numeric'}),
+          el('button', {className: 'btn', text: 'Turn off two-step verification', onclick: turnOffTwoStep})]));
+    } catch(err){
+      errEl.textContent = err.message;
+      body.replaceChildren();
+    }
+  }
+  async function beginSecuritySetup(){
+    const body = document.getElementById('securityBody');
+    const errEl = document.getElementById('securityError');
+    errEl.textContent = '';
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/mfa/setup`, {method: 'POST'});
+      const started = await res.json();
+      if(!res.ok) throw new Error(started.error || `HTTP ${res.status}`);
+      const link = el('a', {text: 'Open in my authenticator app', style: 'color:var(--accent);'});
+      setAuthenticatorLink(link, started.otpauth_uri);
+      body.replaceChildren(
+        el('p', {text: 'Add this account to an authenticator app (Google Authenticator, Microsoft Authenticator, 1Password, Authy…) with this key, then enter the 6-digit code it shows.'}),
+        el('div', {text: groupKey(started.secret), style: 'font-family:var(--mono);font-size:13px;word-break:break-all;background:var(--panel-2);border:1px solid var(--line);border-radius:6px;padding:9px 10px;margin:8px 0;user-select:all;'}),
+        el('p', {}, [link]),
+        fieldInput('secEnableCode', '6-digit code', {autocomplete: 'one-time-code', inputMode: 'numeric'}),
+        el('button', {className: 'btn primary', text: 'Turn on', onclick: async () => {
+          errEl.textContent = '';
+          try {
+            const r = await authFetch(`${currentAuth.backendBase}/api/mfa/enable`, {
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({code: document.getElementById('secEnableCode').value.trim()})});
+            const d = await r.json();
+            if(!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+            showRecoveryCodes(body, d.recovery_codes);
+          } catch(err){ errEl.textContent = err.message; }
+        }}));
+    } catch(err){
+      errEl.textContent = err.message;
+    }
+  }
+  async function replaceRecoveryCodes(){
+    const errEl = document.getElementById('securityError');
+    errEl.textContent = '';
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/mfa/recovery-codes`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({code: document.getElementById('secNewCodesCode').value.trim()})});
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+      showRecoveryCodes(document.getElementById('securityBody'), d.recovery_codes);
+    } catch(err){ errEl.textContent = err.message; }
+  }
+  async function turnOffTwoStep(){
+    const errEl = document.getElementById('securityError');
+    errEl.textContent = '';
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/mfa/disable`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({password: document.getElementById('secOffPassword').value, code: document.getElementById('secOffCode').value.trim()})});
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+      renderSecurity();
+    } catch(err){ errEl.textContent = err.message; }
+  }
+  document.getElementById('securityBtn').onclick = () => { openOverlay('securityOverlay'); renderSecurity(); };
+  document.getElementById('closeSecurityBtn').onclick = () => closeOverlay('securityOverlay');
+
+  // ── System status (admin) ──
+  function statusRow(level, label, detail){
+    const icon = {ok: '✓', warn: '⚠', bad: '✕'}[level];
+    const color = {ok: 'var(--ok)', warn: 'var(--warn, #b7791f)', bad: 'var(--red)'}[level];
+    return el('div', {style: 'display:flex;gap:10px;padding:7px 0;border-bottom:1px solid var(--line);'}, [
+      el('span', {text: icon, style: `color:${color};font-weight:700;width:16px;flex:none;`}),
+      el('div', {}, [el('div', {text: label, style: 'font-weight:600;'}), el('div', {text: detail, style: 'color:var(--dim);font-size:11.5px;'})])]);
+  }
+  async function renderSystemStatus(){
+    const body = document.getElementById('systemStatusBody');
+    const errEl = document.getElementById('systemStatusError');
+    errEl.textContent = '';
+    body.replaceChildren(el('p', {text: 'Loading…'}));
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/diagnostics`);
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+      const stores = Object.entries(d.storage_backend || {});
+      const allPg = stores.length > 0 && stores.every(([, v]) => v.startsWith('Postgres'));
+      const db = d.database_connection || {};
+      const rows = [
+        statusRow(allPg ? 'ok' : 'bad', 'Database', allPg ? 'All data is in PostgreSQL.' : 'Some data is in local files, which a redeploy erases: ' + stores.filter(([, v]) => !v.startsWith('Postgres')).map(([k]) => k).join(', ')),
+        statusRow(db.error ? 'bad' : (db.tls ? 'ok' : (db.configured === false ? 'warn' : 'warn')), 'Database connection encryption',
+          db.error ? `Could not check (${db.error}).` : db.configured === false ? 'No database configured.' : (db.tls ? `Encrypted (${db.tls_version || 'TLS'}).` : 'Not encrypted. Set FLOORWATCH_DB_REQUIRE_TLS=true once your database supports TLS.')),
+        statusRow(d.error_monitoring_enabled ? 'ok' : 'warn', 'Error monitoring', d.error_monitoring_enabled ? 'Errors are reported to PostHog.' : 'Off — set FLOORWATCH_POSTHOG_API_KEY.'),
+        statusRow(d.fcm_ready ? 'ok' : 'warn', 'Push notifications', d.fcm_ready ? 'Ready.' : 'Not ready — set FLOORWATCH_FCM_CREDENTIALS_JSON.'),
+        statusRow(d.shadow_mode ? 'warn' : 'ok', 'Notifications live', d.shadow_mode ? 'Shadow mode is ON: nothing is actually sent.' : 'Live.'),
+      ];
+      const tsv = d.two_step_verification || {};
+      rows.push(statusRow((tsv.encryption_key || '').startsWith('dedicated') ? 'ok' : 'warn', 'Two-step verification key', tsv.encryption_key || 'unknown'));
+      rows.push(statusRow((tsv.required_roles || []).length ? 'ok' : 'warn', 'Two-step verification required for',
+        (tsv.required_roles || []).length ? tsv.required_roles.join(', ') : 'No role is required to use it. Set FLOORWATCH_MFA_REQUIRED_ROLES (e.g. admin,secondary_admin) once admins have enrolled.'));
+      rows.push(statusRow('ok', 'Accounts with two-step on', String(tsv.enrolled_accounts ?? 0)));
+      const ret = d.retention || {};
+      const last = ret.last_run;
+      rows.push(statusRow(!ret.enabled ? 'bad' : (last ? 'ok' : 'warn'), 'Automatic deletion of old data',
+        !ret.enabled ? 'Off — old data is kept forever.' : ret.dry_run ? 'Dry run: logging what would be deleted, deleting nothing.' : (last ? `Last ran ${new Date(last.ran_at).toLocaleString()}.` : 'Enabled; has not run yet (first run shortly after start).')));
+      const pv = d.privacy || {};
+      rows.push(statusRow(pv.notice_configured ? 'ok' : 'bad', 'Privacy notice', pv.notice_configured ? `Published (version ${pv.notice_version}).` : 'Organisation name / privacy contact not set (FLOORWATCH_ORG_NAME, FLOORWATCH_PRIVACY_CONTACT).'));
+      rows.push(statusRow(pv.overdue_requests ? 'bad' : 'ok', 'Privacy requests', `${pv.open_requests || 0} open, ${pv.overdue_requests || 0} overdue.`));
+      const events = Object.entries(d.security_events || {}).sort();
+      body.replaceChildren(...rows,
+        el('h2', {text: 'Security events since this service started', style: 'margin:16px 0 6px;'}),
+        el('div', {text: events.length ? events.map(([k, v]) => `${k}: ${v}`).join('   ·   ') : 'None yet.', style: 'font-family:var(--mono);font-size:11.5px;color:var(--dim);line-height:1.8;'}),
+        el('div', {text: `Release ${d.release || 'unknown'} · replica ${String(d.replica_id || '').slice(0, 8)}`, style: 'margin-top:12px;font-size:11px;color:var(--dimmer, var(--dim));'}));
+    } catch(err){
+      errEl.textContent = err.message;
+      body.replaceChildren();
+    }
+  }
+  document.getElementById('systemStatusBtn').onclick = () => { openOverlay('systemStatusOverlay'); renderSystemStatus(); };
+  document.getElementById('closeSystemStatusBtn').onclick = () => closeOverlay('systemStatusOverlay');
+
+  // ── Privacy requests (admin) ──
+  let resolvingRequestId = null;
+  function downloadJson(filename, obj){
+    const blob = new Blob([JSON.stringify(obj, null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = el('a', {href: url, download: filename});
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function exportEmployeeData(number){
+    const errEl = document.getElementById('privacyError');
+    errEl.textContent = '';
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees/${encodeURIComponent(number)}/data-export`);
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+      downloadJson(`employee-${number}-data.json`, d);
+    } catch(err){ errEl.textContent = err.message; }
+  }
+  async function eraseEmployeeData(number, requestId){
+    const errEl = document.getElementById('privacyError');
+    errEl.textContent = '';
+    const typed = prompt(`This permanently erases employee #${number}'s name, phone number, login and push token. It cannot be undone.\n\nType the employee number to confirm:`);
+    if(typed === null) return;
+    try {
+      const body = {confirm_employee_number: typed.trim()};
+      if(requestId) body.request_id = requestId;
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/employees/${encodeURIComponent(number)}/erase`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+      errEl.textContent = '';
+      alert(`Employee #${number}'s personal data has been erased.`);
+      renderPrivacyRequests();
+    } catch(err){ errEl.textContent = err.message; }
+  }
+  async function renderPrivacyRequests(){
+    const tbody = document.getElementById('privacyTableBody');
+    const errEl = document.getElementById('privacyError');
+    errEl.textContent = '';
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/privacy-requests`);
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+      if(!d.requests.length){ tbody.replaceChildren(el('tr', {}, [el('td', {colSpan: 5, className: 'empty', text: 'No requests yet.'})])); return; }
+      tbody.replaceChildren(...d.requests.map(r => {
+        const actions = el('div', {style: 'display:flex;flex-wrap:wrap;gap:6px;'});
+        const small = 'padding:4px 8px;font-size:10.5px;width:auto;';
+        actions.appendChild(el('button', {className: 'btn', style: small, text: 'Download data', onclick: () => exportEmployeeData(r.subject_id)}));
+        if(r.status === 'open'){
+          if(r.kind === 'erasure') actions.appendChild(el('button', {className: 'btn', style: small, text: 'Erase…', onclick: () => eraseEmployeeData(r.subject_id, r.request_id)}));
+          actions.appendChild(el('button', {className: 'btn', style: small, text: 'Close request', onclick: () => {
+            resolvingRequestId = r.request_id;
+            document.getElementById('privacyResolveTitle').textContent = `Close the ${r.kind} request from #${r.subject_id}`;
+            document.getElementById('privacyResolveBox').style.display = 'block';
+          }}));
+        }
+        const due = new Date(r.due_at).toLocaleDateString();
+        return el('tr', {style: 'border-bottom:1px solid var(--line);'}, [
+          el('td', {text: `#${r.subject_id}`, style: 'padding:8px;font-family:var(--mono);'}),
+          el('td', {style: 'padding:8px;'}, [el('div', {text: r.kind, style: 'font-weight:600;'}), el('div', {text: r.details || '', style: 'color:var(--dim);font-size:11.5px;overflow-wrap:anywhere;'})]),
+          el('td', {text: r.overdue ? `${due} — OVERDUE` : due, style: `padding:8px;${r.overdue ? 'color:var(--red);font-weight:700;' : ''}`}),
+          el('td', {text: r.status === 'resolved' ? `${r.outcome} (${r.resolved_by})` : 'open', style: 'padding:8px;'}),
+          el('td', {style: 'padding:8px;'}, [actions])]);
+      }));
+    } catch(err){ errEl.textContent = err.message; }
+  }
+  document.getElementById('privacyBtn').onclick = () => { openOverlay('privacyOverlay'); renderPrivacyRequests(); };
+  document.getElementById('closePrivacyBtn').onclick = () => closeOverlay('privacyOverlay');
+  document.getElementById('privacyResolveCancel').onclick = () => { resolvingRequestId = null; document.getElementById('privacyResolveBox').style.display = 'none'; };
+  document.getElementById('privacyResolveGo').onclick = async () => {
+    const errEl = document.getElementById('privacyError');
+    errEl.textContent = '';
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/admin/privacy-requests/${encodeURIComponent(resolvingRequestId)}/resolve`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({outcome: document.getElementById('privacyResolveOutcome').value, note: document.getElementById('privacyResolveNote').value.trim() || null})});
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+      resolvingRequestId = null;
+      document.getElementById('privacyResolveNote').value = '';
+      document.getElementById('privacyResolveBox').style.display = 'none';
+      renderPrivacyRequests();
+    } catch(err){ errEl.textContent = err.message; }
+  };
+  document.getElementById('privacyLookupExport').onclick = () => {
+    const n = document.getElementById('privacyLookupNumber').value.trim();
+    if(n) exportEmployeeData(n);
+  };
+  document.getElementById('privacyLookupErase').onclick = () => {
+    const n = document.getElementById('privacyLookupNumber').value.trim();
+    if(n) eraseEmployeeData(n, null);
   };
 
   document.getElementById('logoutBtn').onclick = () => {
@@ -1455,7 +1902,7 @@
   function renderUsersTable(userList){
     const tbody = document.getElementById('usersTableBody');
     if(!userList.length){
-      tbody.innerHTML = '<tr><td colspan="5" class="empty">No accounts yet.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" class="empty">No accounts yet.</td></tr>';
       return;
     }
     tbody.innerHTML = userList.map(u => {
@@ -1471,10 +1918,12 @@
         <td style="padding:8px;overflow-wrap:anywhere;">${un}${isYou ? ' <span style="color:var(--dimmer);">(you)</span>' : ''}</td>
         <td style="padding:8px;font-family:var(--mono);">${escapeHtml(u.role === 'supervisor' ? 'Secondary Admin' : u.role)}</td>
         <td style="padding:8px;color:${u.active ? 'var(--ok)' : 'var(--red)'};">${u.active ? 'active' : 'deactivated'}</td>
+        <td style="padding:8px;color:${u.mfa_enabled ? 'var(--ok)' : 'var(--dim)'};">${u.mfa_enabled ? 'on' : 'off'}</td>
         <td style="padding:8px;font-family:var(--mono);font-size:11px;color:var(--dim);">${u.last_login_at ? escapeHtml(new Date(u.last_login_at).toLocaleString()) : 'never'}</td>
         <td style="padding:8px;">
           <div style="display:flex;flex-wrap:wrap;gap:6px;">
             <button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reset" data-username="${un}">Reset pw</button>
+            ${u.mfa_enabled ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reset-mfa" data-username="${un}" title="They lost their authenticator">Reset 2-step</button>` : ''}
             ${isYou ? '' : (u.active
               ? `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="deactivate" data-username="${un}">Deactivate</button>`
               : `<button class="btn" style="padding:4px 8px;font-size:10.5px;" data-action="reactivate" data-username="${un}">Reactivate</button>`)}
@@ -1542,6 +1991,10 @@
         if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
       } else if(action === 'reactivate'){
         const res = await authFetch(`${currentAuth.backendBase}/api/admin/users/${encodeURIComponent(username)}/reactivate`, {method: 'POST'});
+        if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+      } else if(action === 'reset-mfa'){
+        if(!confirm(`Turn off two-step verification for '${username}'? They will be signed out, and must set it up again if their role requires it.`)) return;
+        const res = await authFetch(`${currentAuth.backendBase}/api/admin/users/${encodeURIComponent(username)}/mfa/reset`, {method: 'POST'});
         if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
       } else if(action === 'reset'){
         const newPassword = randomTempPassword();

@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
+import floorwatch_db
 from floorwatch_logging import get_logger
 
 _log = get_logger("rules-engine.zone_directory")
@@ -56,16 +57,12 @@ class PostgresZoneDirectory:
     ]
 
     def __init__(self, dsn: str):
-        import psycopg
         self.dsn = dsn
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as conn:
-            conn.execute(self.SCHEMA_SQL)
-            for stmt in self.MIGRATION_SQL:
-                conn.execute(stmt)
+        with floorwatch_db.connection(dsn) as conn:
+            floorwatch_db.apply_schema(conn, "zones", [self.SCHEMA_SQL, *self.MIGRATION_SQL])
 
     def _connect(self):
-        import psycopg
-        return psycopg.connect(self.dsn, autocommit=True, connect_timeout=5)
+        return floorwatch_db.connection(self.dsn)   # pooled — see skills/lib/floorwatch_db.py
 
     @staticmethod
     def _row_to_dict(r) -> dict:
@@ -89,7 +86,7 @@ class PostgresZoneDirectory:
     def get(self, zone_id: str) -> Optional[dict]:
         with self._connect() as conn:
             row = conn.execute(
-                f"SELECT {self._COLUMNS} FROM floorwatch_zones WHERE zone_id=%s", (zone_id,)
+                f"SELECT {self._COLUMNS} FROM floorwatch_zones WHERE zone_id=%s", (zone_id,)  # nosec B608 - only a constant column list / fixed clause text is interpolated; every value is a bound %s parameter
             ).fetchone()
         return self._row_to_dict(row) if row else None
 
@@ -97,7 +94,7 @@ class PostgresZoneDirectory:
         where = "WHERE active = true" if active_only else ""
         with self._connect() as conn:
             rows = conn.execute(
-                f"SELECT {self._COLUMNS} FROM floorwatch_zones {where} ORDER BY zone_id",
+                f"SELECT {self._COLUMNS} FROM floorwatch_zones {where} ORDER BY zone_id",  # nosec B608 - only a constant column list / fixed clause text is interpolated; every value is a bound %s parameter
             ).fetchall()
         return [self._row_to_dict(r) for r in rows]
 
@@ -179,7 +176,7 @@ def build_zone_directory(postgres_dsn: Optional[str], fallback_path: Path):
     if postgres_dsn:
         try:
             directory = PostgresZoneDirectory(postgres_dsn)
-            _log(f"Using PostgresZoneDirectory at {postgres_dsn}")
+            _log(f"Using PostgresZoneDirectory at {floorwatch_db.safe_target(postgres_dsn)}")
             return directory
         except Exception as e:
             _log(f"could not connect to Postgres for zone directory ({e}) — falling back "

@@ -150,16 +150,21 @@ def test_rehydrate_bad_started_at_defaults_to_zero_elapsed(tmp_path):
 
 # ── PostgresTaskStore (mocked — no real Postgres in this sandbox) ────────
 
-def _fake_psycopg_module(fake_conn):
-    fake_psycopg = MagicMock()
-    fake_psycopg.connect.return_value.__enter__ = MagicMock(return_value=fake_conn)
-    fake_psycopg.connect.return_value.__exit__ = MagicMock(return_value=False)
-    return fake_psycopg
+def _fake_db(fake_conn):
+    """Stores reach PostgreSQL through ONE seam — floorwatch_db.connection(), a connection
+    pool — so that is what gets faked: it yields `fake_conn` instead of a pooled connection."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_connection(dsn):
+        yield fake_conn
+
+    return patch("floorwatch_db.connection", fake_connection)
 
 
 def test_postgres_schema_created_on_init():
     fake_conn = MagicMock()
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         PostgresTaskStore("postgresql://fake/dsn")
     all_sql = " ".join(c.args[0] for c in fake_conn.execute.call_args_list)
     assert "CREATE TABLE IF NOT EXISTS floorwatch_tasks" in all_sql
@@ -167,7 +172,7 @@ def test_postgres_schema_created_on_init():
 
 def test_postgres_upsert_uses_on_conflict_update():
     fake_conn = MagicMock()
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         store = PostgresTaskStore("postgresql://fake/dsn")
         store.upsert(task_runtime_to_record(make_runtime(), NOW.isoformat()))
     call_args = fake_conn.execute.call_args_list[-1]
@@ -178,7 +183,7 @@ def test_postgres_upsert_uses_on_conflict_update():
 def test_postgres_purge_excludes_open_tasks():
     fake_conn = MagicMock()
     fake_conn.execute.return_value.rowcount = 2
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         store = PostgresTaskStore("postgresql://fake/dsn")
         assert store.purge_older_than(30) == 2
     call_args = fake_conn.execute.call_args_list[-1]

@@ -38,6 +38,7 @@ from typing import Optional
 import numpy as np
 
 from floorwatch_logging import get_logger
+from floorwatch_db import safe_target
 
 log = get_logger("intelligence.vector_store")
 
@@ -222,7 +223,7 @@ def build_vector_store(config):
     if getattr(config, "POSTGRES_DSN", None):
         try:
             store = PgVectorStore(config.POSTGRES_DSN, config.EMBEDDING_DIM)
-            log(f"Using PgVectorStore at {config.POSTGRES_DSN}")
+            log(f"Using PgVectorStore at {safe_target(config.POSTGRES_DSN)}")
             return store
         except Exception as e:
             log(f"could not connect to Postgres+pgvector ({e}) — "

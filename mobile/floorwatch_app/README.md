@@ -16,6 +16,14 @@ flutter run --dart-define=FLOORWATCH_API_BASE_URL=https://your-deployment.up.rai
 Without it, every API call fails with a clear "not configured" error
 rather than silently pointing at the wrong server.
 
+**Behind SSL inspection (antivirus/corporate proxy)?** Debug builds can trust
+the proxy's root CA, passed as base64 (never committed, ignored by release
+builds):
+
+```bash
+flutter run --dart-define=FLOORWATCH_API_BASE_URL=... --dart-define=FLOORWATCH_DEV_CA_B64=$(base64 -w0 proxy_root.pem)
+```
+
 ## Push notifications — configured in Railway
 
 Nothing Firebase-related is committed or baked into the build. Set these

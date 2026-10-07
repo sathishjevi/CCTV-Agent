@@ -1,9 +1,8 @@
+import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/services.dart' show rootBundle;
-
-/// Trusts this dev machine's Norton Antivirus SSL-inspection root CA, for
-/// Dart's own networking stack specifically (dart:io's HttpClient/
+/// Trusts a developer-supplied root CA (e.g. an antivirus's SSL-inspection
+/// certificate on a dev machine), for Dart's own networking stack specifically (dart:io's HttpClient/
 /// SecureSocket, which is what package:http's IOClient uses on mobile).
 ///
 /// This is NOT the same thing as Android's network_security_config.xml —
@@ -29,18 +28,26 @@ class _DevTrustingHttpOverrides extends HttpOverrides {
   }
 }
 
-/// Loads the bundled Norton root CA (assets/norton_root_ca.pem, added to
-/// pubspec.yaml) into a SecurityContext and installs it as the global
-/// HttpOverrides. Call once, early in main(), before any network call.
-/// Swallows its own failure (e.g. asset missing on a build that stripped
-/// it) rather than crashing app startup over a dev-only convenience —
-/// networking then just falls back to the platform's default trust
-/// store, which is exactly production behavior anyway.
+/// A PEM certificate, base64-encoded, supplied at BUILD time:
+///   flutter run --dart-define=FLOORWATCH_DEV_CA_B64=$(base64 -w0 path/to/ca.pem)
+/// Deliberately NOT a bundled asset: an asset ships inside every build —
+/// including the release APK staff install — even though only debug builds
+/// ever load it. Supplied this way it exists only in the debug builds that
+/// asked for it (main.dart gates the call on kDebugMode, and the compiler
+/// removes the branch from release builds entirely).
+const _devCaBase64 = String.fromEnvironment('FLOORWATCH_DEV_CA_B64');
+
+/// Trusts that certificate for Dart's networking and installs it as the
+/// global HttpOverrides. Call once, early in main(), before any network
+/// call. Does nothing when no certificate was supplied. Swallows its own
+/// failure rather than crashing startup over a dev-only convenience —
+/// networking then falls back to the platform's default trust store, which
+/// is exactly production behavior anyway.
 Future<void> installDevCertificateOverride() async {
+  if (_devCaBase64.isEmpty) return;
   try {
-    final bytes = await rootBundle.load('assets/norton_root_ca.pem');
     final context = SecurityContext(withTrustedRoots: true);
-    context.setTrustedCertificatesBytes(bytes.buffer.asUint8List());
+    context.setTrustedCertificatesBytes(base64Decode(_devCaBase64));
     HttpOverrides.global = _DevTrustingHttpOverrides(context);
   } catch (_) {
     // No-op — see doc comment above.

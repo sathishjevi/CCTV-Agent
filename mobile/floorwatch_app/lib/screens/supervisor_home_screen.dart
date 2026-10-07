@@ -9,6 +9,7 @@ import 'manage_employees_screen.dart';
 import 'manage_users_screen.dart';
 import 'manage_zones_screen.dart';
 import 'phone_entry_screen.dart';
+import 'privacy_security_screen.dart';
 import 'supervisor_dashboard_screen.dart';
 import 'task_list_screen.dart';
 
@@ -135,6 +136,11 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
                 ),
               const Divider(),
               ListTile(
+                leading: const Icon(Icons.shield_outlined),
+                title: const Text('Privacy & security'),
+                onTap: () => open(const PrivacySecurityScreen()),
+              ),
+              ListTile(
                 leading: const Icon(Icons.lock_reset),
                 title: const Text('Change password'),
                 onTap: () {
@@ -163,7 +169,13 @@ class _SupervisorHomeScreenState extends State<SupervisorHomeScreen> with Single
                 ],
               ),
         actions: [
-          // No menu for a plain supervisor, so change-password lives here.
+          // No menu for a plain supervisor, so privacy/security and change-password live here.
+          if (!canManage)
+            IconButton(
+              icon: const Icon(Icons.shield_outlined),
+              tooltip: 'Privacy & security',
+              onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PrivacySecurityScreen())),
+            ),
           if (!canManage)
             IconButton(
               icon: const Icon(Icons.lock_reset),

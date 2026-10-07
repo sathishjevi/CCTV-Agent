@@ -29,7 +29,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install dependencies first (better layer caching — only reinstalls if
 # requirements.txt changes, not on every source edit).
 COPY services/floorwatch-rules-engine/requirements.txt ./services/floorwatch-rules-engine/requirements.txt
-RUN pip install --no-cache-dir -r services/floorwatch-rules-engine/requirements.txt
+# --require-hashes: requirements.txt is a hash-pinned lock (generated from requirements.in). pip
+# refuses any package whose file doesn't match its recorded hash, so a tampered or
+# silently-replaced release can't enter the image. See docs/compliance/DEPENDENCIES.md.
+RUN pip install --no-cache-dir --require-hashes -r services/floorwatch-rules-engine/requirements.txt
 
 # Copy the shared modules this service's config.py imports from/reads —
 # same relative layout as the real repo, so REPO_ROOT-based resolution

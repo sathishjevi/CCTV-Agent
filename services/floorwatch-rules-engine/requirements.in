@@ -1,0 +1,25 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+redis>=5.0
+pydantic>=2.0
+websockets>=12.0
+twilio>=9.0
+firebase-admin>=6.0
+pyjwt>=2.8
+httpx>=0.27
+python-dotenv>=1.0
+
+# Only needed if FLOORWATCH_POSTGRES_DSN is set (accounts stored in
+# Postgres instead of the local users.json fallback — see
+# skills/lib/floorwatch_auth.py's build_user_store()). Lazily imported,
+# so a deployment on the JSON fallback doesn't need this installed.
+psycopg[binary]>=3.1
+# Connection pool shared by every store (skills/lib/floorwatch_db.py): bounded connections, health
+# checks, timeouts — instead of a new connection per query.
+psycopg-pool>=3.2
+
+# Optional error monitoring — only active when FLOORWATCH_POSTHOG_API_KEY is set.
+posthog>=7.0
+
+# Encrypts two-step-verification secrets at rest (skills/lib/floorwatch_crypto.py).
+cryptography>=43.0

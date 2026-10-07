@@ -112,6 +112,26 @@ DOCS_ENABLED = os.environ.get("FLOORWATCH_DOCS_ENABLED", "false").lower() in ("1
 # Anthropic API cost/DoS exposure once a real ANTHROPIC_API_KEY is set.
 CHAT_RATE_LIMIT_PER_MINUTE = int(os.environ.get("FLOORWATCH_CHAT_RATE_LIMIT_PER_MINUTE", 10))
 
+# ── Request guards — same meaning and defaults as floorwatch-rules-engine's
+#    config.py (see skills/lib/floorwatch_request_guard.py). ──────────────
+TRUSTED_PROXY_HOPS = int(os.environ.get("FLOORWATCH_TRUSTED_PROXY_HOPS", 1))
+GLOBAL_RATE_LIMIT_ANONYMOUS_PER_MINUTE = int(os.environ.get("FLOORWATCH_GLOBAL_RATE_LIMIT_ANONYMOUS_PER_MINUTE", 120))
+GLOBAL_RATE_LIMIT_IDENTITY_PER_MINUTE = int(os.environ.get("FLOORWATCH_GLOBAL_RATE_LIMIT_IDENTITY_PER_MINUTE", 600))
+GLOBAL_RATE_LIMIT_IP_TOTAL_PER_MINUTE = int(os.environ.get("FLOORWATCH_GLOBAL_RATE_LIMIT_IP_TOTAL_PER_MINUTE", 3000))
+
+# Longest question / incident note accepted. Every character of a question is
+# sent to a paid LLM API (and every note is embedded), so this is a cost cap
+# as much as an input check. ~2,000 characters is a long paragraph.
+MAX_QUESTION_CHARS = int(os.environ.get("FLOORWATCH_MAX_QUESTION_CHARS", 2000))
+MAX_NOTE_CHARS = int(os.environ.get("FLOORWATCH_MAX_NOTE_CHARS", 4000))
+
+# Error monitoring (PostHog) — see skills/lib/floorwatch_error_monitoring.py.
+# Set on THIS Railway service too: variables aren't shared between services.
+POSTHOG_API_KEY = os.environ.get("FLOORWATCH_POSTHOG_API_KEY") or os.environ.get("POSTHOG_API_KEY") or ""
+POSTHOG_HOST = os.environ.get("FLOORWATCH_POSTHOG_HOST") or os.environ.get("POSTHOG_HOST") or "https://us.i.posthog.com"
+MONITORING_ENVIRONMENT = os.environ.get("FLOORWATCH_MONITORING_ENVIRONMENT", "production")
+MONITORING_RELEASE = os.environ.get("RAILWAY_GIT_COMMIT_SHA", "")
+
 # ── Retention (SECURITY_REVIEW.md M1) ───────────────────────────────────
 # Same default/rationale as floorwatch-rules-engine's config.py — kept in
 # sync deliberately (a system-wide retention window, not per-service).

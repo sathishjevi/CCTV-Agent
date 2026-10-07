@@ -84,6 +84,26 @@ updates:
     schedule:
       interval: "weekly"
 
+  # ── floorwatch-pipeline (Python / pip) — now hash-locked too ─────────
+  - package-ecosystem: "pip"
+    directory: "/services/floorwatch-pipeline"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  # ── Mobile app: Dart/Flutter packages and the Android Gradle build ───
+  - package-ecosystem: "pub"
+    directory: "/mobile/floorwatch_app"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "gradle"
+    directory: "/mobile/floorwatch_app/android"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+
   # ── GitHub Actions workflows ─────────────────────────────────────────
   - package-ecosystem: "github-actions"
     directory: "/"

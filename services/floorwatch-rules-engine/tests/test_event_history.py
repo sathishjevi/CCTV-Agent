@@ -123,16 +123,21 @@ def test_jsonl_purge_archives_before_deleting(tmp_path):
 
 # ── PostgresEventHistoryStore (mocked — no real Postgres in this sandbox) ──
 
-def _fake_psycopg_module(fake_conn):
-    fake_psycopg = MagicMock()
-    fake_psycopg.connect.return_value.__enter__ = MagicMock(return_value=fake_conn)
-    fake_psycopg.connect.return_value.__exit__ = MagicMock(return_value=False)
-    return fake_psycopg
+def _fake_db(fake_conn):
+    """Stores reach PostgreSQL through ONE seam — floorwatch_db.connection(), a connection
+    pool — so that is what gets faked: it yields `fake_conn` instead of a pooled connection."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_connection(dsn):
+        yield fake_conn
+
+    return patch("floorwatch_db.connection", fake_connection)
 
 
 def test_postgres_schema_and_indexes_created_on_init():
     fake_conn = MagicMock()
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         PostgresEventHistoryStore("postgresql://fake/dsn")
 
     all_sql = " ".join(call.args[0] for call in fake_conn.execute.call_args_list)
@@ -142,7 +147,7 @@ def test_postgres_schema_and_indexes_created_on_init():
 
 def test_postgres_record_runs_insert_with_conflict_handling():
     fake_conn = MagicMock()
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         store = PostgresEventHistoryStore("postgresql://fake/dsn")
         store.record(_evt("e1", "task_assigned", zone_id="lobby", task_id="t1"))
 
@@ -154,7 +159,7 @@ def test_postgres_record_runs_insert_with_conflict_handling():
 
 def test_postgres_record_skips_event_with_no_event_id():
     fake_conn = MagicMock()
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         store = PostgresEventHistoryStore("postgresql://fake/dsn")
         calls_before = len(fake_conn.execute.call_args_list)
         store.record({"event_type": "task_assigned"})  # no event_id
@@ -164,7 +169,7 @@ def test_postgres_record_skips_event_with_no_event_id():
 def test_postgres_query_builds_where_clause_from_filters():
     fake_conn = MagicMock()
     fake_conn.execute.return_value.fetchall.return_value = [({"event_id": "e1"},)]
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         store = PostgresEventHistoryStore("postgresql://fake/dsn")
         result = store.query(event_type="task_flag", zone_id="lobby")
 
@@ -178,7 +183,7 @@ def test_postgres_purge_dry_run_does_not_delete():
     fake_conn = MagicMock()
     fake_conn.execute.return_value.fetchall.return_value = [({"event_id": "old"},)]
     fake_conn.execute.return_value.fetchone.return_value = (3,)
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         store = PostgresEventHistoryStore("postgresql://fake/dsn")
         result = store.purge_older_than(30, dry_run=True)
 
@@ -192,7 +197,7 @@ def test_postgres_purge_archives_before_deleting(tmp_path):
     fake_conn = MagicMock()
     fake_conn.execute.return_value.fetchall.return_value = [({"event_id": "old", "event_type": "task_assigned"},)]
     fake_conn.execute.return_value.fetchone.return_value = (0,)
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         store = PostgresEventHistoryStore("postgresql://fake/dsn")
         archive_dir = tmp_path / "archive"
         result = store.purge_older_than(30, archive_dir=archive_dir)

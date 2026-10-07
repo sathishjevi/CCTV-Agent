@@ -6,6 +6,7 @@ import 'services/dev_http_overrides.dart';
 import 'services/push_service.dart';
 import 'services/token_storage.dart';
 import 'screens/phone_entry_screen.dart';
+import 'screens/privacy_notice_screen.dart';
 import 'screens/supervisor_home_screen.dart';
 import 'screens/task_list_screen.dart';
 
@@ -101,6 +102,11 @@ class _StartupGateState extends State<_StartupGate> {
     }
     if (!_loggedIn) return const PhoneEntryScreen();
     if (_kind == 'dashboard') return const SupervisorHomeScreen(dashboardLogin: true);
-    return (_role == 'supervisor' || _role == 'secondary_admin' || _role == 'admin') ? const SupervisorHomeScreen() : const TaskListScreen();
+    // Employees see the privacy notice (once per version) — see PrivacyGate.
+    return PrivacyGate(
+      child: (_role == 'supervisor' || _role == 'secondary_admin' || _role == 'admin')
+          ? const SupervisorHomeScreen()
+          : const TaskListScreen(),
+    );
   }
 }

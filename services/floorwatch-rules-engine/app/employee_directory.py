@@ -20,12 +20,18 @@ infrastructure.
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
+import floorwatch_db
 from floorwatch_logging import get_logger
 
 _log = get_logger("rules-engine.employee_directory")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 # employee < supervisor < secondary_admin < admin. "secondary_admin" (shown as
 # "Secondary Admin") gets the management menu (employees, zones, history)
@@ -124,6 +130,16 @@ class PostgresEmployeeDirectory:
         # same scheme as dashboard login accounts — never stored in
         # plaintext, never logged.
         "ALTER TABLE floorwatch_employees ADD COLUMN IF NOT EXISTS password_hash TEXT;",
+        # Privacy: when someone was deactivated (so a retention pass can find people deactivated
+        # long enough ago), when their personal data was erased, and which version of the privacy
+        # notice they last acknowledged in the app.
+        "ALTER TABLE floorwatch_employees ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ;",
+        "ALTER TABLE floorwatch_employees ADD COLUMN IF NOT EXISTS anonymized_at TIMESTAMPTZ;",
+        "ALTER TABLE floorwatch_employees ADD COLUMN IF NOT EXISTS privacy_notice_version TEXT;",
+        "ALTER TABLE floorwatch_employees ADD COLUMN IF NOT EXISTS privacy_notice_accepted_at TIMESTAMPTZ;",
+        # People deactivated before deactivation was timestamped: start their retention clock NOW
+        # instead of guessing an age (same rule as dashboard accounts' retention).
+        "UPDATE floorwatch_employees SET deactivated_at = now() WHERE active = false AND deactivated_at IS NULL;",
     ]
     INDEX_SQL = [
         "CREATE INDEX IF NOT EXISTS floorwatch_employees_dept_idx "
@@ -133,18 +149,12 @@ class PostgresEmployeeDirectory:
     ]
 
     def __init__(self, dsn: str):
-        import psycopg
         self.dsn = dsn
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as conn:
-            conn.execute(self.SCHEMA_SQL)
-            for stmt in self.MIGRATION_SQL:
-                conn.execute(stmt)
-            for stmt in self.INDEX_SQL:
-                conn.execute(stmt)
+        with floorwatch_db.connection(dsn) as conn:
+            floorwatch_db.apply_schema(conn, "employees", [self.SCHEMA_SQL, *self.MIGRATION_SQL, *self.INDEX_SQL])
 
     def _connect(self):
-        import psycopg
-        return psycopg.connect(self.dsn, autocommit=True, connect_timeout=5)
+        return floorwatch_db.connection(self.dsn)   # pooled — see skills/lib/floorwatch_db.py
 
     @staticmethod
     def _row_to_dict(r) -> dict:
@@ -189,7 +199,7 @@ class PostgresEmployeeDirectory:
     def get(self, employee_number: str) -> Optional[dict]:
         with self._connect() as conn:
             row = conn.execute(
-                f"SELECT {self._COLUMNS} FROM floorwatch_employees WHERE employee_number=%s",
+                f"SELECT {self._COLUMNS} FROM floorwatch_employees WHERE employee_number=%s",  # nosec B608 - only a constant column list / fixed clause text is interpolated; every value is a bound %s parameter
                 (employee_number,),
             ).fetchone()
         return self._row_to_dict(row) if row else None
@@ -197,7 +207,7 @@ class PostgresEmployeeDirectory:
     def get_by_phone(self, phone: str) -> Optional[dict]:
         with self._connect() as conn:
             row = conn.execute(
-                f"SELECT {self._COLUMNS} FROM floorwatch_employees WHERE phone=%s AND active=true",
+                f"SELECT {self._COLUMNS} FROM floorwatch_employees WHERE phone=%s AND active=true",  # nosec B608 - only a constant column list / fixed clause text is interpolated; every value is a bound %s parameter
                 (normalize_phone(phone),),
             ).fetchone()
         return self._row_to_dict(row) if row else None
@@ -212,7 +222,7 @@ class PostgresEmployeeDirectory:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as conn:
             rows = conn.execute(
-                f"SELECT {self._COLUMNS} FROM floorwatch_employees {where} ORDER BY employee_number",
+                f"SELECT {self._COLUMNS} FROM floorwatch_employees {where} ORDER BY employee_number",  # nosec B608 - only a constant column list / fixed clause text is interpolated; every value is a bound %s parameter
                 tuple(params),
             ).fetchall()
         return [self._row_to_dict(r) for r in rows]
@@ -220,9 +230,54 @@ class PostgresEmployeeDirectory:
     def set_active(self, employee_number: str, active: bool) -> bool:
         with self._connect() as conn:
             cur = conn.execute(
-                "UPDATE floorwatch_employees SET active=%s WHERE employee_number=%s",
-                (active, employee_number))
+                "UPDATE floorwatch_employees SET active=%s, "
+                "deactivated_at = CASE WHEN %s THEN NULL ELSE COALESCE(deactivated_at, now()) END "
+                "WHERE employee_number=%s",
+                (active, active, employee_number))
             return cur.rowcount > 0
+
+    # ── privacy ──────────────────────────────────────────────────────────
+
+    def get_privacy_state(self, employee_number: str) -> Optional[dict]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT privacy_notice_version, privacy_notice_accepted_at, deactivated_at, anonymized_at "
+                "FROM floorwatch_employees WHERE employee_number=%s", (employee_number,)).fetchone()
+        if row is None:
+            return None
+        iso = lambda v: v.isoformat() if v else None  # noqa: E731
+        return {"privacy_notice_version": row[0], "privacy_notice_accepted_at": iso(row[1]),
+                "deactivated_at": iso(row[2]), "anonymized_at": iso(row[3])}
+
+    def record_privacy_notice_acceptance(self, employee_number: str, version: str) -> bool:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE floorwatch_employees SET privacy_notice_version=%s, privacy_notice_accepted_at=now() "
+                "WHERE employee_number=%s", (version, employee_number))
+            return cur.rowcount > 0
+
+    def anonymize(self, employee_number: str) -> bool:
+        """Erases the personal data, keeping the row: the employee NUMBER stays so the audit trail
+        (task and event history, which only ever reference that number) remains coherent, but with
+        the name, phone, push token, login and account link gone it no longer identifies anyone."""
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE floorwatch_employees SET name='Former employee', phone=%s, account_username=NULL, "
+                "fcm_token=NULL, channel=NULL, password_hash=NULL, is_primary_contact=false, active=false, "
+                "deactivated_at=COALESCE(deactivated_at, now()), anonymized_at=now(), "
+                "privacy_notice_version=NULL, privacy_notice_accepted_at=NULL "
+                "WHERE employee_number=%s", (f"erased:{employee_number}", employee_number))
+            return cur.rowcount > 0
+
+    def list_deactivated_for_longer_than(self, days: int) -> list:
+        """Employee numbers deactivated more than `days` ago whose data hasn't been erased yet."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT employee_number FROM floorwatch_employees "
+                "WHERE active = false AND anonymized_at IS NULL AND deactivated_at IS NOT NULL "
+                "AND deactivated_at < now() - (%s || ' days')::interval ORDER BY employee_number",
+                (days,)).fetchall()
+        return [r[0] for r in rows]
 
     def set_primary_contact(self, employee_number: str, is_primary_contact: bool) -> bool:
         """Toggles the flag on an ALREADY-EXISTING record — add()'s own
@@ -354,8 +409,64 @@ class JsonEmployeeDirectory:
         if employee_number not in data:
             return False
         data[employee_number]["active"] = active
+        if active:
+            data[employee_number]["deactivated_at"] = None
+        else:
+            data[employee_number].setdefault("deactivated_at", None)
+            data[employee_number]["deactivated_at"] = data[employee_number]["deactivated_at"] or _now_iso()
         self._save(data)
         return True
+
+    # ── privacy ──────────────────────────────────────────────────────────
+
+    def get_privacy_state(self, employee_number: str) -> Optional[dict]:
+        record = self._load().get(employee_number)
+        if record is None:
+            return None
+        return {"privacy_notice_version": record.get("privacy_notice_version"),
+                "privacy_notice_accepted_at": record.get("privacy_notice_accepted_at"),
+                "deactivated_at": record.get("deactivated_at"), "anonymized_at": record.get("anonymized_at")}
+
+    def record_privacy_notice_acceptance(self, employee_number: str, version: str) -> bool:
+        data = self._load()
+        if employee_number not in data:
+            return False
+        data[employee_number]["privacy_notice_version"] = version
+        data[employee_number]["privacy_notice_accepted_at"] = _now_iso()
+        self._save(data)
+        return True
+
+    def anonymize(self, employee_number: str) -> bool:
+        data = self._load()
+        record = data.get(employee_number)
+        if record is None:
+            return False
+        record.update({
+            "name": "Former employee", "phone": f"erased:{employee_number}", "account_username": None,
+            "fcm_token": None, "channel": None, "password_hash": None, "is_primary_contact": False,
+            "active": False, "deactivated_at": record.get("deactivated_at") or _now_iso(),
+            "anonymized_at": _now_iso(), "privacy_notice_version": None, "privacy_notice_accepted_at": None,
+        })
+        self._save(data)
+        return True
+
+    def list_deactivated_for_longer_than(self, days: int) -> list:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        out = []
+        for number, record in sorted(self._load().items()):
+            if record.get("active", True) or record.get("anonymized_at"):
+                continue
+            stamped = record.get("deactivated_at")
+            if not stamped:
+                # deactivated before this was recorded: start the clock now rather than guess an age
+                self.set_active(number, False)
+                continue
+            try:
+                if datetime.fromisoformat(stamped) < cutoff:
+                    out.append(number)
+            except ValueError:
+                continue
+        return out
 
     def set_primary_contact(self, employee_number: str, is_primary_contact: bool) -> bool:
         data = self._load()
@@ -407,7 +518,7 @@ def build_employee_directory(postgres_dsn: Optional[str], fallback_path: Path):
     if postgres_dsn:
         try:
             directory = PostgresEmployeeDirectory(postgres_dsn)
-            _log(f"Using PostgresEmployeeDirectory at {postgres_dsn}")
+            _log(f"Using PostgresEmployeeDirectory at {floorwatch_db.safe_target(postgres_dsn)}")
             return directory
         except Exception as e:
             _log(f"could not connect to Postgres for employee directory ({e}) — falling back "

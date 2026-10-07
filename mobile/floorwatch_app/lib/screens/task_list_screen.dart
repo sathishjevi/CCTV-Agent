@@ -8,6 +8,7 @@ import '../services/live_updates.dart';
 import '../services/token_storage.dart';
 import 'change_password_dialog.dart';
 import 'phone_entry_screen.dart';
+import 'privacy_security_screen.dart';
 import 'task_detail_screen.dart';
 
 class TaskListScreen extends StatefulWidget {
@@ -105,6 +106,11 @@ class _TaskListScreenState extends State<TaskListScreen> with WidgetsBindingObse
       appBar: AppBar(
         title: const Text('My tasks'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.shield_outlined),
+            tooltip: 'Privacy & security',
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const PrivacySecurityScreen())),
+          ),
           IconButton(
             icon: const Icon(Icons.lock_reset),
             tooltip: 'Change password',

@@ -45,6 +45,8 @@ def app_client(fake_redis_url, monkeypatch, tmp_path):
     monkeypatch.setattr(config, "EVENT_HISTORY_PATH", tmp_path / "event_history.jsonl")
     monkeypatch.setattr(config, "EMPLOYEE_DIRECTORY_PATH", tmp_path / "employee_directory.json")
     monkeypatch.setattr(config, "TASK_STORE_PATH", tmp_path / "tasks.json")
+    monkeypatch.setattr(config, "PRIVACY_REQUESTS_PATH", tmp_path / "privacy_requests.json")
+    monkeypatch.setattr(config, "MFA_STORE_PATH", tmp_path / "mfa.json")
     monkeypatch.setattr(config, "AUTH_SECRET", "test-fixture-secret-needs-32-bytes-minimum")
     # Some tests flip config.SHADOW_MODE directly ("so the sender is really reached"). Registering
     # it here makes monkeypatch restore the original at teardown whatever they do to it, instead
@@ -89,19 +91,37 @@ def test_gap_event_flows_through_redis_to_websocket(app_client):
     assert received["shadow_mode_suppressed"] is True  # shadow mode is the default
 
 
-def test_healthz_reports_shadow_mode(app_client):
+def _admin_headers(client, main_module):
+    main_module.users.create_user("diag-admin", "correct-horse-battery-9", role="admin", must_change_password=False)
+    token = client.post("/api/login", json={"username": "diag-admin", "password": "correct-horse-battery-9"}).json()["token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_healthz_is_public_and_reveals_nothing_about_configuration(app_client):
     client, _main_module, _url = app_client
-    resp = client.get("/healthz")
+    anonymous = client.get("/healthz", headers={"Authorization": ""})
+    assert anonymous.status_code == 200
+    assert anonymous.json() == {"ok": True}
+
+
+def test_diagnostics_reports_shadow_mode(app_client):
+    client, main_module, _url = app_client
+    resp = client.get("/api/admin/diagnostics", headers=_admin_headers(client, main_module))
     assert resp.status_code == 200
     assert resp.json()["shadow_mode"] is True
 
 
-def test_healthz_reports_push_not_ready_without_fcm_credentials(app_client):
-    """/healthz is public, so it only says whether push is configured (a
-    bool) — enough to tell "credentials variable missing/invalid" from "app
-    config missing" without exposing anything."""
-    client, _main_module, _url = app_client
-    assert client.get("/healthz").json()["fcm_ready"] is False
+def test_diagnostics_reports_push_not_ready_without_fcm_credentials(app_client):
+    """Whether push is configured (a bool) — enough to tell "credentials
+    variable missing/invalid" from "app config missing"."""
+    client, main_module, _url = app_client
+    assert client.get("/api/admin/diagnostics", headers=_admin_headers(client, main_module)).json()["fcm_ready"] is False
+
+
+def test_diagnostics_is_admin_only(app_client):
+    client, _main_module, _url = app_client     # logged in as a plain supervisor
+    assert client.get("/api/admin/diagnostics").status_code == 403
+    assert client.get("/api/admin/diagnostics", headers={"Authorization": "Bearer nope"}).status_code == 401
 
 
 def test_state_endpoint_reflects_zone_after_gap(app_client):

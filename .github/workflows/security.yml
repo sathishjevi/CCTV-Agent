@@ -1,0 +1,134 @@
+name: Security scans
+
+# Automated security scanning in CI/CD (checklist: "SAST, DAST, dependency scanning").
+#   dependency-audit  known-vulnerability check of every hash-pinned lockfile
+#   sast-bandit       static analysis of the Floorwatch Python code
+#   sast-codeql       GitHub CodeQL (Python + the JavaScript in the dashboards)
+#   secret-scan       gitleaks over the whole git history
+#   sbom              CycloneDX software bill of materials, kept as a build artifact
+#   dast-baseline     OWASP ZAP passive scan of the running service (only if enabled, see below)
+#
+# The weekly schedule matters: a vulnerability can be published for a package we haven't touched.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 5 * * 1"      # Mondays 05:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install pip-audit
+        run: python -m pip install --upgrade pip pip-audit
+      - name: Audit every lockfile (fails on any known vulnerability)
+        run: |
+          status=0
+          for f in \
+            services/floorwatch-rules-engine/requirements.txt \
+            services/floorwatch-rules-engine/tests/requirements-dev.txt \
+            services/floorwatch-intelligence/requirements.txt \
+            services/floorwatch-intelligence/tests/requirements-ci.txt \
+            services/floorwatch-pipeline/requirements.txt; do
+            echo "::group::pip-audit $f"
+            pip-audit -r "$f" --no-deps --disable-pip --progress-spinner off || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+  sast-bandit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --upgrade pip bandit
+      - name: Bandit (medium severity and above, medium confidence and above)
+        run: |
+          bandit -r services/floorwatch-rules-engine/app services/floorwatch-intelligence/app \
+            $(ls skills/lib/floorwatch_*.py | grep -v '/test_') -ll -ii
+
+  sast-codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [python, javascript-typescript]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # the whole history, not just the latest commit
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  sbom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --upgrade pip cyclonedx-bom
+      - name: Generate a CycloneDX SBOM for each deployed service
+        run: |
+          mkdir sbom
+          for svc in floorwatch-rules-engine floorwatch-intelligence floorwatch-pipeline; do
+            cyclonedx-py requirements "services/$svc/requirements.txt" --of JSON --sv 1.6 -o "sbom/$svc.cdx.json"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom/
+          retention-days: 90
+
+  # Passive scan only (spider + passive rules: missing headers, cookie flags, info leaks) — it
+  # sends ordinary GET requests, no attack payloads. OFF until you set a repository VARIABLE
+  # named DAST_TARGET_URL (Settings → Secrets and variables → Actions → Variables) to the base URL
+  # you are allowed to scan, e.g. your Railway staging service.
+  dast-baseline:
+    if: ${{ vars.DAST_TARGET_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: ${{ vars.DAST_TARGET_URL }}
+          allow_issue_writing: false
+          fail_action: false

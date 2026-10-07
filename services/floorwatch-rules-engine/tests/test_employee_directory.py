@@ -248,16 +248,21 @@ def test_json_add_rejects_primary_contact_on_employee(tmp_path):
 
 # ── PostgresEmployeeDirectory (mocked — no real Postgres in this sandbox) ──
 
-def _fake_psycopg_module(fake_conn):
-    fake_psycopg = MagicMock()
-    fake_psycopg.connect.return_value.__enter__ = MagicMock(return_value=fake_conn)
-    fake_psycopg.connect.return_value.__exit__ = MagicMock(return_value=False)
-    return fake_psycopg
+def _fake_db(fake_conn):
+    """Stores reach PostgreSQL through ONE seam — floorwatch_db.connection(), a connection
+    pool — so that is what gets faked: it yields `fake_conn` instead of a pooled connection."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_connection(dsn):
+        yield fake_conn
+
+    return patch("floorwatch_db.connection", fake_connection)
 
 
 def test_postgres_schema_and_indexes_created_on_init():
     fake_conn = MagicMock()
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         PostgresEmployeeDirectory("postgresql://fake/dsn")
 
     all_sql = " ".join(call.args[0] for call in fake_conn.execute.call_args_list)
@@ -267,7 +272,7 @@ def test_postgres_schema_and_indexes_created_on_init():
 
 def test_postgres_add_runs_upsert_with_normalized_phone():
     fake_conn = MagicMock()
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         d = PostgresEmployeeDirectory("postgresql://fake/dsn")
         d.add("101", "Pat", "employee", "janitorial", "(555) 123-4567", created_by="admin")
 
@@ -279,7 +284,7 @@ def test_postgres_add_runs_upsert_with_normalized_phone():
 
 def test_postgres_add_rejects_invalid_role():
     fake_conn = MagicMock()
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         d = PostgresEmployeeDirectory("postgresql://fake/dsn")
         with pytest.raises(ValueError):
             d.add("101", "Pat", "root", "janitorial", "+15551234567")
@@ -287,7 +292,7 @@ def test_postgres_add_rejects_invalid_role():
 
 def test_postgres_migration_adds_new_columns():
     fake_conn = MagicMock()
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         PostgresEmployeeDirectory("postgresql://fake/dsn")
 
     all_sql = " ".join(call.args[0] for call in fake_conn.execute.call_args_list)
@@ -299,7 +304,7 @@ def test_postgres_migration_adds_new_columns():
 def test_postgres_set_primary_contact_runs_update():
     fake_conn = MagicMock()
     fake_conn.execute.return_value.rowcount = 1
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         d = PostgresEmployeeDirectory("postgresql://fake/dsn")
         result = d.set_primary_contact("900", True)
 
@@ -312,7 +317,7 @@ def test_postgres_set_primary_contact_runs_update():
 def test_postgres_set_fcm_token_runs_update():
     fake_conn = MagicMock()
     fake_conn.execute.return_value.rowcount = 1
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         d = PostgresEmployeeDirectory("postgresql://fake/dsn")
         result = d.set_fcm_token("101", "tok-xyz789")
 
@@ -325,7 +330,7 @@ def test_postgres_set_fcm_token_runs_update():
 def test_postgres_set_channel_runs_update():
     fake_conn = MagicMock()
     fake_conn.execute.return_value.rowcount = 1
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         d = PostgresEmployeeDirectory("postgresql://fake/dsn")
         result = d.set_channel("101", "fcm")
 
@@ -337,7 +342,7 @@ def test_postgres_set_channel_runs_update():
 
 def test_postgres_add_rejects_invalid_channel():
     fake_conn = MagicMock()
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         d = PostgresEmployeeDirectory("postgresql://fake/dsn")
         with pytest.raises(ValueError):
             d.add("101", "Pat", "employee", "janitorial", "+15551234567", channel="pager")
@@ -345,7 +350,7 @@ def test_postgres_add_rejects_invalid_channel():
 
 def test_postgres_add_rejects_primary_contact_on_employee():
     fake_conn = MagicMock()
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         d = PostgresEmployeeDirectory("postgresql://fake/dsn")
         with pytest.raises(ValueError):
             d.add("101", "Pat", "employee", "janitorial", "+15551234567", is_primary_contact=True)
@@ -354,7 +359,7 @@ def test_postgres_add_rejects_primary_contact_on_employee():
 def test_postgres_get_by_phone_normalizes_lookup():
     fake_conn = MagicMock()
     fake_conn.execute.return_value.fetchone.return_value = None
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         d = PostgresEmployeeDirectory("postgresql://fake/dsn")
         d.get_by_phone("(555) 123-4567")
 

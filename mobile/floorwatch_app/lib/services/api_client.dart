@@ -72,6 +72,8 @@ class ApiClient {
       ['/api/employee/dashboard/history', '/api/history'],
       ['/api/employee/dashboard/', '/api/'],
       ['/api/employee/admin/users', '/api/admin/users'],
+      // two-step settings of the signed-in admin-login account
+      ['/api/employee/mfa/', '/api/mfa/'],
     ];
     for (final r in rules) {
       if (path.startsWith(r[0])) return r[1] + path.substring(r[0].length);
@@ -163,6 +165,83 @@ class ApiClient {
       body: jsonEncode({'current_password': currentPassword, 'new_password': newPassword}),
     );
     _decode(resp);
+  }
+
+  // ── Two-step verification ─────────────────────────────────────────────
+  //
+  // Sign-in: when an account uses it, login() answers {"mfa_required": true,
+  // "mfa_token": ...} (or "mfa_enrollment_required" for a role that must set it
+  // up) INSTEAD of a session. These three finish the sign-in and return the
+  // same shape a normal login does. `dashboard` picks the account kind.
+
+  Map<String, String> get _jsonHeaders => {'Content-Type': 'application/json'};
+
+  Future<Map<String, dynamic>> loginMfa(String mfaToken, String code, {required bool dashboard}) async {
+    final resp = await _post(dashboard ? '/api/login/mfa' : '/api/employee/auth/login/mfa',
+        headers: _jsonHeaders, body: jsonEncode({'mfa_token': mfaToken, 'code': code}));
+    return _decode(resp);
+  }
+
+  Future<Map<String, dynamic>> loginMfaSetup(String mfaToken, {required bool dashboard}) async {
+    final resp = await _post(dashboard ? '/api/login/mfa/setup' : '/api/employee/auth/login/mfa/setup',
+        headers: _jsonHeaders, body: jsonEncode({'mfa_token': mfaToken}));
+    return _decode(resp);
+  }
+
+  Future<Map<String, dynamic>> loginMfaEnable(String mfaToken, String code, {required bool dashboard}) async {
+    final resp = await _post(dashboard ? '/api/login/mfa/enable' : '/api/employee/auth/login/mfa/enable',
+        headers: _jsonHeaders, body: jsonEncode({'mfa_token': mfaToken, 'code': code}));
+    return _decode(resp);
+  }
+
+  // Settings for someone already signed in (paths are mapped for admin-login sessions by _resolvePath).
+
+  Future<Map<String, dynamic>> mfaStatus() async =>
+      _decode(await _get('/api/employee/mfa/status', headers: await _authHeaders()));
+
+  Future<Map<String, dynamic>> mfaSetup() async =>
+      _decode(await _post('/api/employee/mfa/setup', headers: await _authHeaders()));
+
+  /// Returns {"ok": true, "recovery_codes": [...]}.
+  Future<Map<String, dynamic>> mfaEnable(String code) async => _decode(await _post(
+      '/api/employee/mfa/enable', headers: await _authHeaders(), body: jsonEncode({'code': code})));
+
+  Future<void> mfaDisable(String password, String code) async {
+    _decode(await _post('/api/employee/mfa/disable',
+        headers: await _authHeaders(), body: jsonEncode({'password': password, 'code': code})));
+  }
+
+  /// Returns {"recovery_codes": [...]}.
+  Future<Map<String, dynamic>> mfaNewRecoveryCodes(String code) async => _decode(await _post(
+      '/api/employee/mfa/recovery-codes', headers: await _authHeaders(), body: jsonEncode({'code': code})));
+
+  // ── Privacy ───────────────────────────────────────────────────────────
+
+  /// Public — readable before signing in. {version, title, configured, text, sections}.
+  Future<Map<String, dynamic>> fetchPrivacyNotice() async =>
+      _decode(await _get('/api/privacy-notice', headers: const {}));
+
+  /// {notice_version, accepted_version, accepted, notice_configured}.
+  Future<Map<String, dynamic>> fetchPrivacyStatus() async =>
+      _decode(await _get('/api/employee/me/privacy', headers: await _authHeaders()));
+
+  Future<void> acceptPrivacyNotice(String version) async {
+    _decode(await _post('/api/employee/me/privacy-notice/accept',
+        headers: await _authHeaders(), body: jsonEncode({'version': version})));
+  }
+
+  /// Everything held about the signed-in employee (never includes credentials).
+  Future<Map<String, dynamic>> fetchMyDataExport() async =>
+      _decode(await _get('/api/employee/me/data-export', headers: await _authHeaders()));
+
+  Future<void> createPrivacyRequest(String kind, String? details) async {
+    _decode(await _post('/api/employee/me/privacy-request', headers: await _authHeaders(),
+        body: jsonEncode({'kind': kind, if (details != null && details.isNotEmpty) 'details': details})));
+  }
+
+  Future<List<Map<String, dynamic>>> fetchMyPrivacyRequests() async {
+    final body = _decode(await _get('/api/employee/me/privacy-requests', headers: await _authHeaders()));
+    return (body['requests'] as List).cast<Map<String, dynamic>>();
   }
 
   Future<void> requestOtp(String phone) async {

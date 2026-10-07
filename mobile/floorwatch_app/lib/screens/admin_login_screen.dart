@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/api_client.dart';
 import '../services/token_storage.dart';
+import 'mfa_dialogs.dart';
 import 'supervisor_home_screen.dart';
 
 /// Username + password login for dashboard accounts — the same accounts the
@@ -34,7 +35,26 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
       _error = null;
     });
     try {
-      final result = await ApiClient.instance.dashboardLogin(username, password);
+      var result = await ApiClient.instance.dashboardLogin(username, password);
+      // Two-step verification — see PhoneEntryScreen for the same flow on the staff sign-in.
+      if (!mounted) return;
+      if (result['mfa_required'] == true) {
+        final token = result['mfa_token'] as String;
+        final done = await promptForMfaCode<Map<String, dynamic>>(
+          context, verify: (code) => ApiClient.instance.loginMfa(token, code, dashboard: true));
+        if (done == null || !mounted) return; // cancelled
+        result = done;
+      } else if (result['mfa_enrollment_required'] == true) {
+        final token = result['mfa_token'] as String;
+        final done = await runMfaEnrollment(
+          context,
+          reason: 'Your role requires two-step verification.',
+          begin: () => ApiClient.instance.loginMfaSetup(token, dashboard: true),
+          confirm: (code) => ApiClient.instance.loginMfaEnable(token, code, dashboard: true),
+        );
+        if (done == null || !mounted) return; // cancelled
+        result = done;
+      }
       final role = result['role'] as String? ?? 'viewer';
       await TokenStorage.instance.save(
         token: result['token'] as String,

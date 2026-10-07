@@ -26,7 +26,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config  # noqa: E402 (also inserts skills/lib onto sys.path — see config.py)
@@ -36,6 +36,11 @@ from llm import build_assistant  # noqa: E402
 from mcp_server import build_mcp_server  # noqa: E402
 from floorwatch_logging import get_logger  # noqa: E402
 from floorwatch_rate_limit import RateLimiter  # noqa: E402
+from floorwatch_request_guard import (  # noqa: E402
+    GlobalRateLimitMiddleware, client_ip_from_headers, install_error_handlers,
+)
+from floorwatch_security_events import SecurityMonitor  # noqa: E402
+import floorwatch_error_monitoring as error_monitoring  # noqa: E402
 from floorwatch_security_headers import install_security_headers  # noqa: E402
 from tools import ReadOnlyTools  # noqa: E402
 from vector_store import build_vector_store  # noqa: E402
@@ -44,6 +49,15 @@ from embeddings import build_embedding_provider  # noqa: E402
 from floorwatch_auth import RevocationStore, make_auth_dependency  # noqa: E402
 
 log = get_logger("intelligence")
+security_monitor = SecurityMonitor(log)
+_error_monitoring_on = error_monitoring.init_error_monitoring(
+    config.POSTHOG_API_KEY, config.POSTHOG_HOST, config.MONITORING_ENVIRONMENT, config.MONITORING_RELEASE,
+    service="intelligence")
+
+
+def client_ip(request) -> str:
+    return client_ip_from_headers(
+        request.headers, request.client.host if request.client else None, config.TRUSTED_PROXY_HOPS)
 
 # Same auth used by floorwatch-rules-engine (shared secret) — a supervisor's
 # login there works here too. See SECURITY_REVIEW.md finding AUTH-1.
@@ -65,6 +79,8 @@ else:
 require_auth = make_auth_dependency(config.AUTH_SECRET, revocation_store=revocation_store)
 require_supervisor = make_auth_dependency(
     config.AUTH_SECRET, required_role="supervisor", revocation_store=revocation_store)
+require_admin = make_auth_dependency(
+    config.AUTH_SECRET, required_role="admin", revocation_store=revocation_store)
 
 
 vector_store = build_vector_store(config)
@@ -97,6 +113,7 @@ async def lifespan(app: FastAPI):
     task.cancel()
     if revocation_store is not None:
         await revocation_store.close()
+    error_monitoring.shutdown()  # flush the last queued error reports
 
 
 app = FastAPI(
@@ -108,15 +125,38 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware, allow_origins=config.CORS_ALLOWED_ORIGINS,
-    allow_methods=["*"], allow_headers=["*"], allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"], allow_headers=["Authorization", "Content-Type"],
+    allow_credentials=True,
 )
+app.add_middleware(
+    GlobalRateLimitMiddleware, secret=config.AUTH_SECRET,
+    anonymous_per_minute=config.GLOBAL_RATE_LIMIT_ANONYMOUS_PER_MINUTE,
+    identity_per_minute=config.GLOBAL_RATE_LIMIT_IDENTITY_PER_MINUTE,
+    ip_total_per_minute=config.GLOBAL_RATE_LIMIT_IP_TOTAL_PER_MINUTE,
+    trusted_hops=config.TRUSTED_PROXY_HOPS,
+    on_limited=lambda why, ip, ident: security_monitor.record(
+        "request_rate_limited", keys=[f"ip:{ip}"], limited_by=why, ip=ip, identity=ident),
+)
+if _error_monitoring_on:
+    app.add_middleware(error_monitoring.ErrorReportingMiddleware)
 install_security_headers(app)  # DP-M2 — see floorwatch_security_headers.py
+install_error_handlers(app, security_monitor, client_ip)
 
 
 @app.get("/healthz")
 async def healthz():
+    """Public liveness probe — says nothing about configuration. The detail
+    that used to be here (LLM key present, vector store, record count) is at
+    /api/diagnostics, admin only."""
+    return {"ok": True}
+
+
+@app.get("/api/diagnostics")
+async def diagnostics(user=Depends(require_admin)):
     return {"ok": True, "assistant_available": assistant is not None,
-            "vector_store": type(vector_store).__name__, "indexed_records": len(vector_store.all_ids())}
+            "vector_store": type(vector_store).__name__, "indexed_records": len(vector_store.all_ids()),
+            "error_monitoring_enabled": _error_monitoring_on,
+            "security_events": dict(security_monitor.counts)}
 
 
 @app.get("/api/tools")
@@ -133,8 +173,14 @@ async def list_tools(user=Depends(require_auth)):
     ]
 
 
-class ChatRequest(BaseModel):
-    question: str
+class StrictModel(BaseModel):
+    """Unknown fields are an error, not silently ignored."""
+    model_config = ConfigDict(extra="forbid")
+
+
+class ChatRequest(StrictModel):
+    # Every character is sent to a paid LLM API — see config.MAX_QUESTION_CHARS.
+    question: str = Field(max_length=config.MAX_QUESTION_CHARS)
 
 
 @app.post("/api/chat")
@@ -155,9 +201,9 @@ async def chat(body: ChatRequest, user=Depends(require_auth)):
     return result
 
 
-class IncidentNoteRequest(BaseModel):
-    text: str
-    zone_id: str | None = None
+class IncidentNoteRequest(StrictModel):
+    text: str = Field(max_length=config.MAX_NOTE_CHARS)
+    zone_id: str | None = Field(default=None, max_length=64)
 
 
 @app.post("/api/incident-notes")

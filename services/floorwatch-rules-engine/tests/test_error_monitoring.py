@@ -15,9 +15,9 @@ sys.path.insert(0, str(APP_DIR))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "skills" / "lib"))
 
 import floorwatch_logging  # noqa: E402
-import error_monitoring  # noqa: E402
-from error_monitoring import (  # noqa: E402
-    DISTINCT_ID, ErrorReportingMiddleware, _before_send, init_error_monitoring, scrub,
+import floorwatch_error_monitoring as error_monitoring  # noqa: E402
+from floorwatch_error_monitoring import (  # noqa: E402
+    ErrorReportingMiddleware, _before_send, init_error_monitoring, scrub,
 )
 
 KEY = "phc_testkey"
@@ -65,6 +65,7 @@ def test_init_configures_privacy_settings_and_wires_the_reporter():
     assert kwargs["capture_exception_code_variables"] is False   # locals can hold secrets
     assert kwargs["disable_geoip"] is True
     assert kwargs["super_properties"] == {"service": "rules-engine", "environment": "prod", "release": "abc123"}
+    assert init_error_monitoring is not None
     assert floorwatch_logging._error_reporter is not None
 
 
@@ -83,7 +84,7 @@ def test_error_level_logs_are_reported_with_the_service_wide_identity():
     exc = client.capture_exception.call_args.args[0]
     kwargs = client.capture_exception.call_args.kwargs
     assert str(exc) == "push delivery failed"
-    assert kwargs["distinct_id"] == DISTINCT_ID   # a service, never a person
+    assert kwargs["distinct_id"] == "floorwatch-rules-engine"   # a service, never a person
     assert kwargs["properties"]["logger"] == "rules-engine.test"
 
 

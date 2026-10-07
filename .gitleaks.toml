@@ -1,0 +1,33 @@
+# Secret-scanning configuration (gitleaks) — run in CI by .github/workflows/security.yml
+# over the FULL git history on every push, pull request and weekly.
+#
+# Everything allow-listed below was individually reviewed (docs/compliance/SECURITY_AUDIT.md,
+# "Secrets in history"). Nothing is allow-listed by pattern, only by commit or by the specific
+# test-fixture paths, so a NEW secret anywhere still fails the build.
+
+title = "Floorwatch gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Reviewed historical findings and test fixtures"
+commits = [
+  # Initial import of the upstream repository: sample/test fixtures from third-party skills
+  # (fake AWS/Anthropic-style keys in test files, an expired S3 pre-signed URL). Reviewed: no live secret.
+  "f8092a0ccb291546b5debd443abc78471c47959a",
+  # android/app/google-services.json was committed once, then removed (the Firebase client settings
+  # now come from Railway variables). The key in it is a Firebase CLIENT key, which is designed to ship
+  # inside the app; mitigation = restrict it to this app's package + certificate in Google Cloud
+  # (docs/compliance/ACTIONS_FOR_OWNER.md #4). It stays in git history; history was not rewritten.
+  "eabcea8f6fa5ee13d9d0336e926a8d01e5154507",
+  # services/floorwatch-rules-engine/token.txt: a dashboard session token that expired on 2026-08-22
+  # (12 h lifetime). The file has been removed from the tree.
+  "ac80f905b639c4fa7931fdfe13fb74bfadb4fe87",
+]
+paths = [
+  # test fixtures with deliberately fake credentials
+  '''services/.*/tests/.*''',
+  '''tools/test_check_no_secrets\.py''',
+  '''skills/lib/test_.*''',
+]

@@ -51,6 +51,8 @@ def app_client(fake_redis_url, monkeypatch, tmp_path):
     monkeypatch.setattr(config, "EVENT_HISTORY_PATH", tmp_path / "event_history.jsonl")
     monkeypatch.setattr(config, "EMPLOYEE_DIRECTORY_PATH", tmp_path / "employee_directory.json")
     monkeypatch.setattr(config, "TASK_STORE_PATH", tmp_path / "tasks.json")
+    monkeypatch.setattr(config, "PRIVACY_REQUESTS_PATH", tmp_path / "privacy_requests.json")
+    monkeypatch.setattr(config, "MFA_STORE_PATH", tmp_path / "mfa.json")
     monkeypatch.setattr(config, "AUTH_SECRET", "test-fixture-secret-needs-32-bytes-minimum")
     # Some tests flip config.SHADOW_MODE directly ("so the sender is really reached"). Registering
     # it here makes monkeypatch restore the original at teardown whatever they do to it, instead

@@ -43,17 +43,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # and shouldn't need), so its dependency line is intentionally NOT
 # pip-installed wholesale below; its other two deps (numpy, httpx) are
 # listed explicitly instead.
-COPY skills/detection/yolo-detection-2026/requirements.txt ./req/yolo-detection-2026.txt
-COPY skills/detection/floorwatch-coverage/requirements.txt ./req/floorwatch-coverage.txt
-COPY skills/detection/floorwatch-pose/requirements.txt ./req/floorwatch-pose.txt
-
-RUN pip install --no-cache-dir \
-        opencv-python-headless numpy httpx \
-        onnxruntime \
-    && pip install --no-cache-dir -r req/yolo-detection-2026.txt \
-    && pip install --no-cache-dir -r req/floorwatch-coverage.txt \
-    && pip install --no-cache-dir -r req/floorwatch-pose.txt \
-    && pip install --no-cache-dir boto3 azure-storage-blob google-cloud-storage pyezvizapi
+# One hash-pinned lock for the whole image (services/floorwatch-pipeline/requirements.in lists
+# what goes into it: the four skills' dependencies plus the cloud camera-source libraries,
+# which used to be installed here with no version pins at all). --require-hashes makes pip
+# refuse anything that doesn't match its recorded hash. See docs/compliance/DEPENDENCIES.md.
+COPY services/floorwatch-pipeline/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 
 # Shared modules every skill's config.py / env_config.py imports from.
 COPY skills/lib/ ./skills/lib/

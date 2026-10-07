@@ -25,7 +25,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install dependencies first (better layer caching).
 COPY services/floorwatch-intelligence/requirements.txt ./services/floorwatch-intelligence/requirements.txt
-RUN pip install --no-cache-dir -r services/floorwatch-intelligence/requirements.txt
+# --require-hashes: requirements.txt is a hash-pinned lock (generated from requirements.in). pip
+# refuses any package whose file doesn't match its recorded hash. See docs/compliance/DEPENDENCIES.md.
+RUN pip install --no-cache-dir --require-hashes -r services/floorwatch-intelligence/requirements.txt
 
 # Copy the shared modules this service's config.py imports from/reads —
 # same relative layout as the real repo.

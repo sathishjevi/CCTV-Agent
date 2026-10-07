@@ -1,1 +1,28 @@
 .floorwatch_auth_secret
+
+# Session tokens and local credentials must never be committed (one was, once — see
+# docs/compliance/SECURITY_AUDIT.md).
+token.txt
+*.token
+*.jks
+*.keystore
+key.properties
+.env
+.env.*
+!.env.template
+
+# Local-file data stores (used when no Postgres is configured). They hold staff names, phone numbers,
+# password hashes and activity history — runtime DATA, never source. contacts.json / roster.json /
+# zones_meta.json / task_type_thresholds.json are configuration TEMPLATES and stay tracked.
+*/users.json
+*/employee_directory.json
+*/zone_directory.json
+*/tasks.json
+*/privacy_requests.json
+*/mfa.json
+*/event_history.jsonl
+*/shift_digest.jsonl
+*/incident_notes.jsonl
+*/vectors.sqlite3
+*/archive/
+*/*.cdx.json.tmp

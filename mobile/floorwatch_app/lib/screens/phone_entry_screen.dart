@@ -5,6 +5,8 @@ import '../services/crash_reporting.dart';
 import '../services/push_service.dart';
 import '../services/token_storage.dart';
 import 'admin_login_screen.dart';
+import 'mfa_dialogs.dart';
+import 'privacy_notice_screen.dart';
 import 'supervisor_home_screen.dart';
 import 'task_list_screen.dart';
 
@@ -36,7 +38,27 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
       _error = null;
     });
     try {
-      final result = await ApiClient.instance.login(phone, password);
+      var result = await ApiClient.instance.login(phone, password);
+      // Password right, but this account uses two-step verification (or its role must): the server sent a
+      // challenge instead of a session. Finish it with a code (or an enrolment) before going any further.
+      if (!mounted) return;
+      if (result['mfa_required'] == true) {
+        final token = result['mfa_token'] as String;
+        final done = await promptForMfaCode<Map<String, dynamic>>(
+          context, verify: (code) => ApiClient.instance.loginMfa(token, code, dashboard: false));
+        if (done == null || !mounted) return; // cancelled
+        result = done;
+      } else if (result['mfa_enrollment_required'] == true) {
+        final token = result['mfa_token'] as String;
+        final done = await runMfaEnrollment(
+          context,
+          reason: 'Your role requires two-step verification.',
+          begin: () => ApiClient.instance.loginMfaSetup(token, dashboard: false),
+          confirm: (code) => ApiClient.instance.loginMfaEnable(token, code, dashboard: false),
+        );
+        if (done == null || !mounted) return; // cancelled
+        result = done;
+      }
       final role = result['role'] as String? ?? 'employee';
       await TokenStorage.instance.save(
         token: result['token'] as String,
@@ -53,9 +75,11 @@ class _PhoneEntryScreenState extends State<PhoneEntryScreen> {
       if (!mounted) return;
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(
-          builder: (_) => (role == 'supervisor' || role == 'secondary_admin' || role == 'admin')
-              ? const SupervisorHomeScreen()
-              : const TaskListScreen(),
+          builder: (_) => PrivacyGate(
+            child: (role == 'supervisor' || role == 'secondary_admin' || role == 'admin')
+                ? const SupervisorHomeScreen()
+                : const TaskListScreen(),
+          ),
         ),
         (route) => false,
       );

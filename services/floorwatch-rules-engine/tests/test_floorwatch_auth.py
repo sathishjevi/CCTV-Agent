@@ -591,11 +591,16 @@ def test_purge_stale_deactivated_accounts_archives_before_deleting(tmp_path):
 
 # ── PostgresUserStore (mocked — no real Postgres in this sandbox) ─────────
 
-def _fake_psycopg_module(fake_conn):
-    fake_psycopg = MagicMock()
-    fake_psycopg.connect.return_value.__enter__ = MagicMock(return_value=fake_conn)
-    fake_psycopg.connect.return_value.__exit__ = MagicMock(return_value=False)
-    return fake_psycopg
+def _fake_db(fake_conn):
+    """Stores reach PostgreSQL through ONE seam — floorwatch_db.connection(), a connection
+    pool — so that is what gets faked: it yields `fake_conn` instead of a pooled connection."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake_connection(dsn):
+        yield fake_conn
+
+    return patch("floorwatch_db.connection", fake_connection)
 
 
 def test_postgres_user_store_authenticate_success():
@@ -603,7 +608,7 @@ def test_postgres_user_store_authenticate_success():
     fake_conn = MagicMock()
     fake_conn.execute.return_value.fetchone.return_value = (password_hash, "supervisor", True, False)
 
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         store = PostgresUserStore("postgresql://fake/dsn")
         result = store.authenticate("alice", "pw12345")
 
@@ -615,7 +620,7 @@ def test_postgres_user_store_authenticate_rejects_inactive_account():
     fake_conn = MagicMock()
     fake_conn.execute.return_value.fetchone.return_value = (password_hash, "supervisor", False, False)
 
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         store = PostgresUserStore("postgresql://fake/dsn")
         result = store.authenticate("alice", "pw12345")
 
@@ -626,7 +631,7 @@ def test_postgres_user_store_authenticate_unknown_user_returns_none():
     fake_conn = MagicMock()
     fake_conn.execute.return_value.fetchone.return_value = None
 
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         store = PostgresUserStore("postgresql://fake/dsn")
         result = store.authenticate("nobody", "whatever")
 
@@ -635,7 +640,7 @@ def test_postgres_user_store_authenticate_unknown_user_returns_none():
 
 def test_postgres_user_store_create_user_runs_upsert():
     fake_conn = MagicMock()
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         store = PostgresUserStore("postgresql://fake/dsn")
         store.create_user("alice", "pw12345", role="admin", created_by="bob")
 
@@ -646,7 +651,7 @@ def test_postgres_user_store_create_user_runs_upsert():
 
 def test_postgres_user_store_create_user_rejects_invalid_role():
     fake_conn = MagicMock()
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         store = PostgresUserStore("postgresql://fake/dsn")
         with pytest.raises(ValueError):
             store.create_user("alice", "pw12345", role="root")
@@ -654,11 +659,11 @@ def test_postgres_user_store_create_user_rejects_invalid_role():
 
 def test_postgres_user_store_schema_created_on_init():
     fake_conn = MagicMock()
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         PostgresUserStore("postgresql://fake/dsn")
 
-    schema_call = fake_conn.execute.call_args_list[0]
-    assert "CREATE TABLE IF NOT EXISTS floorwatch_users" in schema_call[0][0]
+    statements = [c[0][0] for c in fake_conn.execute.call_args_list]
+    assert any("CREATE TABLE IF NOT EXISTS floorwatch_users" in sql for sql in statements)
 
 
 def test_postgres_user_store_migrates_deactivated_at_column_on_init():
@@ -666,18 +671,17 @@ def test_postgres_user_store_migrates_deactivated_at_column_on_init():
     needs this column backfilled explicitly — CREATE TABLE IF NOT EXISTS is
     a no-op against an existing table."""
     fake_conn = MagicMock()
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         PostgresUserStore("postgresql://fake/dsn")
 
-    migration_call = fake_conn.execute.call_args_list[1]
-    assert "ALTER TABLE floorwatch_users" in migration_call[0][0]
-    assert "deactivated_at" in migration_call[0][0]
+    statements = [c[0][0] for c in fake_conn.execute.call_args_list]
+    assert any("ALTER TABLE floorwatch_users" in sql and "deactivated_at" in sql for sql in statements)
 
 
 def test_postgres_user_store_set_active_false_sets_deactivated_at():
     fake_conn = MagicMock()
     fake_conn.execute.return_value.rowcount = 1
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         store = PostgresUserStore("postgresql://fake/dsn")
         result = store.set_active("alice", False)
 
@@ -690,7 +694,7 @@ def test_postgres_user_store_set_active_false_sets_deactivated_at():
 def test_postgres_user_store_delete_user_runs_delete():
     fake_conn = MagicMock()
     fake_conn.execute.return_value.rowcount = 1
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         store = PostgresUserStore("postgresql://fake/dsn")
         result = store.delete_user("alice")
 
@@ -703,7 +707,7 @@ def test_postgres_user_store_delete_user_runs_delete():
 def test_postgres_user_store_delete_user_unknown_returns_false():
     fake_conn = MagicMock()
     fake_conn.execute.return_value.rowcount = 0
-    with patch.dict(sys.modules, {"psycopg": _fake_psycopg_module(fake_conn)}):
+    with _fake_db(fake_conn):
         store = PostgresUserStore("postgresql://fake/dsn")
         assert store.delete_user("nobody") is False
 

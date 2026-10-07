@@ -1,4 +1,4 @@
-"""Error monitoring (PostHog Error Tracking) — off unless an API key is set.
+"""Error monitoring (PostHog Error Tracking), shared by both services — off unless an API key is set.
 
 Without this, a crash or a failing notification is only visible to someone
 reading Railway's raw log stream. With FLOORWATCH_POSTHOG_API_KEY set on
@@ -26,10 +26,11 @@ from typing import Optional
 
 from floorwatch_logging import get_logger, set_error_reporter
 
-log = get_logger("rules-engine.error_monitoring")
+log = get_logger("floorwatch.error_monitoring")
 
-# One fixed identity for the whole service — deliberately NOT a person.
-DISTINCT_ID = "floorwatch-rules-engine"
+# One fixed identity per service — deliberately NOT a person.
+DISTINCT_ID = "floorwatch-service"
+_distinct_id = DISTINCT_ID
 
 _BEARER = re.compile(r"(?i)bearer\s+[A-Za-z0-9._\-]+")
 _JWT = re.compile(r"eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}")
@@ -63,12 +64,13 @@ def _before_send(event):
 
 
 def init_error_monitoring(api_key: str, host: str = "", environment: str = "production",
-                          release: str = "") -> bool:
+                          release: str = "", service: str = "rules-engine") -> bool:
     """Returns True if monitoring is now active, False if it's off (no key)
     or couldn't start. Never raises."""
-    global _client
+    global _client, _distinct_id
     if not api_key:
         return False
+    _distinct_id = f"floorwatch-{service}"
     try:
         from posthog import Posthog
     except ImportError:
@@ -82,7 +84,7 @@ def init_error_monitoring(api_key: str, host: str = "", environment: str = "prod
             disable_geoip=True,
             before_send=_before_send,
             super_properties={
-                "service": "rules-engine", "environment": environment,
+                "service": service, "environment": environment,
                 **({"release": release} if release else {}),
             },
         )
@@ -92,7 +94,7 @@ def init_error_monitoring(api_key: str, host: str = "", environment: str = "prod
 
         def _report(service: str, message: str, fields: dict):
             _client.capture_exception(
-                RuntimeError(scrub(message)), distinct_id=DISTINCT_ID,
+                RuntimeError(scrub(message)), distinct_id=_distinct_id,
                 properties={"logger": service, "logged_error": True})
 
         set_error_reporter(_report)
@@ -112,7 +114,7 @@ def capture_request_exception(exc: BaseException, method: str = "", route: str =
         return
     try:
         _client.capture_exception(
-            exc, distinct_id=DISTINCT_ID,
+            exc, distinct_id=_distinct_id,
             properties={"http_method": method, "route": route or "unknown", "unhandled_in_request": True})
     except Exception:
         pass

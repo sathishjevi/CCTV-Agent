@@ -1,4 +1,10 @@
-# Test-only dependencies — not needed at runtime (see ../requirements.txt).
+# Test-only dependencies. Because google-genai needs an older `websockets` than the
+# production lock pins, the CI environment is its OWN full lock
+# (tests/requirements-ci.txt = ../requirements.in + this file), not the production lock plus
+# extras. The production lock (../requirements.txt) is verified separately in CI: a
+# `pip install --require-hashes --dry-run` step proves it installs cleanly.
+# Regenerate: see ../../../docs/compliance/DEPENDENCIES.md
+# Test-only dependencies — not needed at runtime (see ../requirements.in).
 pytest>=8.0
 pytest-asyncio>=0.23
 pytest-timeout>=2.3

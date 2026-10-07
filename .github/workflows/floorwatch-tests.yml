@@ -28,6 +28,22 @@ jobs:
   rules-engine:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # A throwaway PostgreSQL for tests/test_postgres_stores.py — every other test runs the stores
+    # on their local-file fallbacks, so without this the real SQL would never execute in CI.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      FLOORWATCH_TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
 
@@ -39,11 +55,13 @@ jobs:
             services/floorwatch-rules-engine/requirements.txt
             services/floorwatch-rules-engine/tests/requirements-dev.txt
 
-      - name: Install dependencies
+      # Both files are hash-pinned locks (see docs/compliance/DEPENDENCIES.md): pip refuses any
+      # file whose hash differs, so CI tests exactly the versions that ship.
+      - name: Install dependencies (hash-verified)
         working-directory: services/floorwatch-rules-engine
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r tests/requirements-dev.txt
+          pip install --require-hashes -r requirements.txt -r tests/requirements-dev.txt
 
       - name: Run tests
         working-directory: services/floorwatch-rules-engine
@@ -61,13 +79,20 @@ jobs:
           cache: "pip"
           cache-dependency-path: |
             services/floorwatch-intelligence/requirements.txt
-            services/floorwatch-intelligence/tests/requirements-dev.txt
+            services/floorwatch-intelligence/tests/requirements-ci.txt
 
-      - name: Install dependencies
+      # The test environment is its own full lock (tests/requirements-ci.txt) because a
+      # test-only package needs an older `websockets` than production pins. So, separately,
+      # prove the PRODUCTION lock installs cleanly and hash-verified, as Docker will do it.
+      - name: Verify the production lockfile installs (hash-verified)
         working-directory: services/floorwatch-intelligence
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r tests/requirements-dev.txt
+          pip install --require-hashes --dry-run -r requirements.txt
+
+      - name: Install test dependencies (hash-verified)
+        working-directory: services/floorwatch-intelligence
+        run: pip install --require-hashes -r tests/requirements-ci.txt
 
       - name: Run tests
         working-directory: services/floorwatch-intelligence

@@ -57,6 +57,7 @@ EVENT_HISTORY_RETENTION_DAYS = int(os.environ.get("FLOORWATCH_EVENT_HISTORY_RETE
 EMPLOYEE_DIRECTORY_PATH = Path(os.environ.get(
     "FLOORWATCH_EMPLOYEE_DIRECTORY_PATH", SERVICE_DIR / "employee_directory.json"))
 TASK_STORE_PATH = Path(os.environ.get("FLOORWATCH_TASK_STORE_PATH", SERVICE_DIR / "tasks.json"))
+PRIVACY_REQUESTS_PATH = Path(os.environ.get("FLOORWATCH_PRIVACY_REQUESTS_PATH", SERVICE_DIR / "privacy_requests.json"))
 
 # Minutes a CCTV-auto-assigned task gets by default (an admin/supervisor
 # manually assigning a task always sets this explicitly via the form).
@@ -270,10 +271,26 @@ OTP_RATE_LIMIT_PER_PHONE_PER_MINUTE = int(os.environ.get("FLOORWATCH_OTP_RATE_LI
 # Employee mobile-app password login — same per-IP/per-identifier pairing
 # as LOGIN_RATE_LIMIT_PER_IP/USERNAME above, since employees had no
 # brute-force protection at all before password login existed.
+# Per-IP is generous on purpose: staff at one venue share ONE public IP, and a
+# shift change has many of them signing in within a minute. The per-phone limit
+# below is what actually stops guessing against an account.
 EMPLOYEE_LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE = int(
-    os.environ.get("FLOORWATCH_EMPLOYEE_LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE", 10))
+    os.environ.get("FLOORWATCH_EMPLOYEE_LOGIN_RATE_LIMIT_PER_IP_PER_MINUTE", 30))
 EMPLOYEE_LOGIN_RATE_LIMIT_PER_PHONE_PER_MINUTE = int(
     os.environ.get("FLOORWATCH_EMPLOYEE_LOGIN_RATE_LIMIT_PER_PHONE_PER_MINUTE", 5))
+
+# How many reverse proxies sit in front of this service and append to
+# X-Forwarded-For (Railway's edge = 1). The client address is the entry just
+# before the trusted proxies' own; anything the client put further left is
+# ignored. Set 0 if the service is reachable directly, 2 if a CDN sits in front
+# of Railway. See skills/lib/floorwatch_request_guard.py.
+TRUSTED_PROXY_HOPS = int(os.environ.get("FLOORWATCH_TRUSTED_PROXY_HOPS", 1))
+
+# Global request ceilings (floorwatch_request_guard.GlobalRateLimitMiddleware).
+# Deliberately generous — they stop floods and runaway clients, not normal use.
+GLOBAL_RATE_LIMIT_ANONYMOUS_PER_MINUTE = int(os.environ.get("FLOORWATCH_GLOBAL_RATE_LIMIT_ANONYMOUS_PER_MINUTE", 120))
+GLOBAL_RATE_LIMIT_IDENTITY_PER_MINUTE = int(os.environ.get("FLOORWATCH_GLOBAL_RATE_LIMIT_IDENTITY_PER_MINUTE", 1200))
+GLOBAL_RATE_LIMIT_IP_TOTAL_PER_MINUTE = int(os.environ.get("FLOORWATCH_GLOBAL_RATE_LIMIT_IP_TOTAL_PER_MINUTE", 6000))
 
 # Account storage — see skills/lib/floorwatch_auth.py's build_user_store().
 # Empty falls back to the local users.json (dev/pilot only — doesn't
@@ -325,6 +342,48 @@ DOCS_ENABLED = os.environ.get("FLOORWATCH_DOCS_ENABLED", "false").lower() in ("1
 # via env; see retention.py for the actual rotation/deletion job.
 RETENTION_DAYS = int(os.environ.get("FLOORWATCH_RETENTION_DAYS", 90))
 
+# How long the other kinds of personal data are kept. These feed BOTH the automatic daily deletion
+# (retention_jobs.py) and the privacy notice staff are shown (privacy_notice.py) — one source of truth,
+# so what staff are told is what actually happens.
+TASK_RETENTION_DAYS = int(os.environ.get("FLOORWATCH_TASK_RETENTION_DAYS", 90))            # finished tasks
+EMPLOYEE_RETENTION_DAYS = int(os.environ.get("FLOORWATCH_EMPLOYEE_RETENTION_DAYS", 365))   # deactivated staff, then erased
+PRIVACY_REQUEST_RETENTION_DAYS = int(os.environ.get("FLOORWATCH_PRIVACY_REQUEST_RETENTION_DAYS", 1095))  # 3 years
+
+# Automatic retention. Previously retention.py was a command-line script "meant to run on a schedule"
+# that nothing scheduled, so in production nothing was ever deleted. Now the service does it itself.
+AUTO_RETENTION_ENABLED = os.environ.get("FLOORWATCH_AUTO_RETENTION_ENABLED", "true").lower() in ("1", "true", "yes")
+# Dry run: log what WOULD be deleted, delete nothing. Useful for the first day after turning this on.
+AUTO_RETENTION_DRY_RUN = os.environ.get("FLOORWATCH_AUTO_RETENTION_DRY_RUN", "false").lower() in ("1", "true", "yes")
+RETENTION_INTERVAL_HOURS = float(os.environ.get("FLOORWATCH_RETENTION_INTERVAL_HOURS", 24))
+RETENTION_FIRST_RUN_DELAY_SECONDS = float(os.environ.get("FLOORWATCH_RETENTION_FIRST_RUN_DELAY_SECONDS", 600))
+
+# Data-subject requests (access, erasure, ...): the deadline we promise, in days. 30 satisfies the
+# strictest of GDPR (30) / PIPEDA (30) / CCPA (45).
+PRIVACY_REQUEST_DUE_DAYS = int(os.environ.get("FLOORWATCH_PRIVACY_REQUEST_DUE_DAYS", 30))
+
+# ── Two-step verification (TOTP) — see mfa_service.py ──
+# Roles that MUST have it; anyone in one of them who hasn't enrolled is walked through enrolment at sign-in
+# and can't get a session until done. Empty = optional for everyone. Applies to both kinds of login:
+# dashboard roles (admin / supervisor / viewer) and phone-staff roles (employee / supervisor /
+# secondary_admin / admin) are matched by name. Suggested once the admins have enrolled: "admin,secondary_admin".
+MFA_REQUIRED_ROLES = {r.strip() for r in os.environ.get("FLOORWATCH_MFA_REQUIRED_ROLES", "").split(",") if r.strip()}
+MFA_ISSUER = os.environ.get("FLOORWATCH_MFA_ISSUER", "")      # the name shown in the authenticator app
+MFA_STORE_PATH = Path(os.environ.get("FLOORWATCH_MFA_STORE_PATH", SERVICE_DIR / "mfa.json"))
+# Key(s) that encrypt authenticator secrets at rest — a Railway variable, never stored with the data. Several,
+# comma-separated, for rotation ("new,old": the first encrypts, all decrypt). Empty falls back to a key derived
+# from the auth secret (reported by diagnostics); see skills/lib/floorwatch_crypto.py for why a dedicated key is better.
+DATA_ENCRYPTION_KEY = os.environ.get("FLOORWATCH_DATA_ENCRYPTION_KEY", "")
+
+# ── Privacy notice (privacy_notice.py) — facts about YOUR organisation that can't be guessed. ──
+ORG_NAME = os.environ.get("FLOORWATCH_ORG_NAME", "")
+PRIVACY_CONTACT = os.environ.get("FLOORWATCH_PRIVACY_CONTACT", "")          # an email address or postal address
+PRIVACY_OFFICER = os.environ.get("FLOORWATCH_PRIVACY_OFFICER", "")          # name of the privacy officer / DPO, if any
+PRIVACY_REGULATOR = os.environ.get("FLOORWATCH_PRIVACY_REGULATOR", "")      # e.g. "the Office of the Privacy Commissioner of Canada"
+PRIVACY_LEGAL_BASIS = os.environ.get("FLOORWATCH_PRIVACY_LEGAL_BASIS", "")  # leave empty for the default wording
+HOSTING_REGION = os.environ.get("FLOORWATCH_HOSTING_REGION", "the region configured for this deployment")
+PRIVACY_AI_ASSISTANT = os.environ.get("FLOORWATCH_PRIVACY_AI_ASSISTANT", "false").lower() in ("1", "true", "yes")
+PRIVACY_NOTICE_VERSION = os.environ.get("FLOORWATCH_PRIVACY_NOTICE_VERSION", "")  # empty = derived from the text
+
 SOURCE_MODEL_VERSION = "floorwatch-rules-engine/0.1.0"
 
 # ── Secrets hygiene (small hardening, not a replacement for a real
@@ -334,4 +393,5 @@ from floorwatch_secrets_guard import check_file_permissions, install_stderr_reda
 check_file_permissions(REPO_ROOT / "config" / "secrets.env")
 check_file_permissions(Path(os.environ.get("FLOORWATCH_AUTH_SECRET_PATH", REPO_ROOT / "services" / ".floorwatch_auth_secret")))
 install_stderr_redaction([TWILIO_AUTH_TOKEN, TWILIO_ACCOUNT_SID, AUTH_SECRET, POSTGRES_DSN, ADMIN_PASSWORD,
+                          *[k.strip() for k in DATA_ENCRYPTION_KEY.split(",")],
                           MSG91_AUTH_KEY, FAST2SMS_API_KEY])

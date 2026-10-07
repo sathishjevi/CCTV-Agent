@@ -138,6 +138,9 @@ Everything above is about rotating a credential *before* or *in response to* sus
 1. This is a genuine data-protection incident, not just a rotation task. Given this system's data classification (`DATA_PROTECTION_SECURITY_ANALYSIS.md` §1 — employee zone-presence data is personal data), assess whether it triggers a legal notification obligation (breach notification laws vary by jurisdiction and depend on what was actually exposed) — that determination is outside this document's scope and needs whoever handles legal/compliance for this deployment, not just an engineering rotation.
 2. Preserve whatever logs exist *before* they roll off Railway's retention window — there's no long-term log store today (`DATA_PROTECTION_SECURITY_ANALYSIS.md`'s "no monitoring/alerting" gap), so act quickly if you need evidence of what happened.
 3. Complete the relevant rotation(s) above regardless — containment first, investigation continues in parallel.
+4. Notification clocks (GDPR/UK GDPR: authority within 72 hours of becoming aware; many US states 30-60 days; others vary) and the breach register template are in `docs/compliance/BREACH_NOTIFICATION_PLAYBOOK.md`.
+5. Security events (failed sign-ins, lockouts, MFA failures) are now recorded by the security monitor and error-level logs reach PostHog, so the "no alerting" gap below is partly closed; check `/api/admin/diagnostics` and the dashboard's Security view first.
+6. Also rotate `FLOORWATCH_DATA_ENCRYPTION_KEY` if it may have leaked: put the new key first and keep the old one after it (comma separated) until stored secrets are re-encrypted.
 
 ---
 

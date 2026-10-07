@@ -32,6 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import floorwatch_db
 from floorwatch_logging import get_logger
 from floorwatch_retention import prune_jsonl_file
 
@@ -68,16 +69,12 @@ class PostgresEventHistoryStore:
     ]
 
     def __init__(self, dsn: str):
-        import psycopg
         self.dsn = dsn
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as conn:
-            conn.execute(self.SCHEMA_SQL)
-            for stmt in self.INDEX_SQL:
-                conn.execute(stmt)
+        with floorwatch_db.connection(dsn) as conn:
+            floorwatch_db.apply_schema(conn, "event_history", [self.SCHEMA_SQL, *self.INDEX_SQL])
 
     def _connect(self):
-        import psycopg
-        return psycopg.connect(self.dsn, autocommit=True, connect_timeout=5)
+        return floorwatch_db.connection(self.dsn)   # pooled — see skills/lib/floorwatch_db.py
 
     def record(self, event: dict):
         event_id = event.get("event_id")
@@ -115,10 +112,19 @@ class PostgresEventHistoryStore:
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self._connect() as conn:
             rows = conn.execute(
-                f"SELECT data FROM floorwatch_event_history {where} "
+                f"SELECT data FROM floorwatch_event_history {where} "  # nosec B608 - only a constant column list / fixed clause text is interpolated; every value is a bound %s parameter
                 f"ORDER BY event_timestamp DESC LIMIT %s",
                 (*params, limit),
             ).fetchall()
+        return [r[0] for r in rows]
+
+    def query_for_employee(self, employee_number: str, limit: int = 1000) -> list:
+        """Every event naming this employee as the assignee — what a person is entitled to see
+        about themselves. (Events only ever carry the employee NUMBER, never a name.)"""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT data FROM floorwatch_event_history WHERE data->>'assigned_to' = %s "
+                "ORDER BY event_timestamp DESC LIMIT %s", (employee_number, limit)).fetchall()
         return [r[0] for r in rows]
 
     def purge_older_than(self, days: int, archive_dir: Optional[Path] = None,
@@ -208,6 +214,21 @@ class JsonlEventHistoryStore:
                 break
         return results
 
+    def query_for_employee(self, employee_number: str, limit: int = 1000) -> list:
+        if not self.path.exists():
+            return []
+        results = []
+        for line in reversed(self.path.read_text(encoding="utf-8").splitlines()):
+            try:
+                evt = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if evt.get("assigned_to") == employee_number:
+                results.append(evt)
+                if len(results) >= limit:
+                    break
+        return results
+
     def purge_older_than(self, days: int, archive_dir: Optional[Path] = None,
                           archive_prefix: str = "event_history_archived",
                           dry_run: bool = False) -> dict:
@@ -222,7 +243,7 @@ def build_event_history_store(postgres_dsn: Optional[str], fallback_path: Path):
     if postgres_dsn:
         try:
             store = PostgresEventHistoryStore(postgres_dsn)
-            _log(f"Using PostgresEventHistoryStore at {postgres_dsn}")
+            _log(f"Using PostgresEventHistoryStore at {floorwatch_db.safe_target(postgres_dsn)}")
             return store
         except Exception as e:
             _log(f"could not connect to Postgres for event history ({e}) — falling back to "
