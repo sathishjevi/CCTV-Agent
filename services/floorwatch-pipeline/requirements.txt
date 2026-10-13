@@ -500,7 +500,7 @@ cuda-bindings==13.4.3 \
 cuda-pathfinder==1.8.3 \
     --hash=sha256:e29e59829c297a7a5233bd9cc71094fc5bddbd076951482670178f9eade39b1f
     # via cuda-bindings
-cuda-toolkit==13.0.3.0 \
+cuda-toolkit[cublas,cudart,cufft,cufile,cupti,curand,cusolver,cusparse,nvjitlink,nvrtc,nvtx]==13.0.3.0 \
     --hash=sha256:d693caaa261214ddd7dbb60d68e71cbed884e68c2be7509778f3051da0b91c3f
     # via torch
 cycler==0.12.1 \
@@ -1827,10 +1827,6 @@ scipy==1.18.1 \
     # via
     #   supervision
     #   trackers
-setuptools==84.0.0 \
-    --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670 \
-    --hash=sha256:f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73
-    # via torch
 six==1.17.0 \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
     --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
@@ -1843,9 +1839,9 @@ sounddevice==0.5.6 \
     --hash=sha256:de099612311ad81e55d31ccbd83f43ea6bf4d87b48f9b6ea55a1fbcde0eee4e0 \
     --hash=sha256:e3aef00ad8b1d1740eb66d9a7671eab88a4d2b8fa4ab33498d742e63b65c309c
     # via mediapipe
-supervision==0.30.8 \
-    --hash=sha256:0e3f818d0f62d9b5c9d6d8b53a21131a98e5355c64c12cf7bb58da5b4316114a \
-    --hash=sha256:fadc3efcd9ce1e3c30a1b6d1d6c604883486075281f78f8dbff3b7311cc6c48f
+supervision==0.30.9 \
+    --hash=sha256:13468b993d60903cbc64ca956892fe47939bf5996f17fc052f262a023f80751a \
+    --hash=sha256:704ed1ce3d53fbc8cc88d3f5e9f9e6bf154481969106c4e12e02054ef923f257
     # via
     #   -r requirements.in
     #   trackers
