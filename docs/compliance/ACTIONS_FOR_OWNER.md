@@ -7,7 +7,7 @@ Things the code cannot do for you. Roughly in priority order.
 | Variable | Service(s) | Why |
 |---|---|---|
 | `FLOORWATCH_DATA_ENCRYPTION_KEY` | rules-engine | Fernet key (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`). Required to enrol MFA. Keep a copy somewhere safe: losing it locks enrolled users out. Rotation: put the new key first, old keys after, comma separated |
-| `FLOORWATCH_ORG_NAME`, `FLOORWATCH_ORG_CONTACT_EMAIL` (and other `FLOORWATCH_ORG_*` / `FLOORWATCH_PRIVACY_*`) | rules-engine | Fill the generated privacy notice |
+| `FLOORWATCH_ORG_NAME`, `FLOORWATCH_PRIVACY_CONTACT` (and optional `FLOORWATCH_PRIVACY_OFFICER`, `_REGULATOR`) | rules-engine | Fill the generated privacy notice |
 | `FLOORWATCH_POSTHOG_API_KEY` | intelligence too | Error tracking for that service |
 | `FLOORWATCH_TRUSTED_PROXY_HOPS` | all | Number of proxies in front (Railway: 1) so rate limits see the real client IP |
 | `FLOORWATCH_DB_REQUIRE_TLS=1` | all using Postgres | Refuse non-TLS DB connections, once confirmed the Railway URL supports it |

@@ -6,6 +6,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="Floorwatch"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="false"
         android:name=".FloorwatchApplication"
         android:icon="@mipmap/ic_launcher">
         <activity
