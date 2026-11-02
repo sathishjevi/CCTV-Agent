@@ -2388,18 +2388,18 @@
     },
     {
       "bom-ref": "requirements-L575",
-      "description": "requirements line 575: filelock==4.0.12     --hash=sha256:5f17ee83ecee8a6f3e389c75822fb70a1c2f0506b99438a6dffa1d56793588c8     --hash=sha256:cf42711a7ac791818b299fab0332a088c65aeeefa36290de98db92c434303b0c",
+      "description": "requirements line 575: filelock==4.2.7     --hash=sha256:31f6f7e3a8b6f0bd89114d30c5d5218ea1cfb63e5c4aa695b7559314a209bc7f     --hash=sha256:d08972bbca2b8767ee552aff877b091dd111ffb1d22de7de885766ea7d719d5e",
       "externalReferences": [
         {
           "comment": "implicit dist url",
           "hashes": [
             {
               "alg": "SHA-256",
-              "content": "5f17ee83ecee8a6f3e389c75822fb70a1c2f0506b99438a6dffa1d56793588c8"
+              "content": "31f6f7e3a8b6f0bd89114d30c5d5218ea1cfb63e5c4aa695b7559314a209bc7f"
             },
             {
               "alg": "SHA-256",
-              "content": "cf42711a7ac791818b299fab0332a088c65aeeefa36290de98db92c434303b0c"
+              "content": "d08972bbca2b8767ee552aff877b091dd111ffb1d22de7de885766ea7d719d5e"
             }
           ],
           "type": "distribution",
@@ -2407,9 +2407,9 @@
         }
       ],
       "name": "filelock",
-      "purl": "pkg:pypi/filelock@4.0.12",
+      "purl": "pkg:pypi/filelock@4.2.7",
       "type": "library",
-      "version": "4.0.12"
+      "version": "4.2.7"
     },
     {
       "bom-ref": "requirements-L579",
@@ -12676,7 +12676,7 @@
     }
   ],
   "metadata": {
-    "timestamp": "2026-10-23T16:23:47.525657+00:00",
+    "timestamp": "2026-11-02T18:05:49.653442+00:00",
     "tools": {
       "components": [
         {
@@ -12780,7 +12780,7 @@
       ]
     }
   },
-  "serialNumber": "urn:uuid:20cb7578-dc96-42fa-874d-f57914ecc29e",
+  "serialNumber": "urn:uuid:a39a6d97-ef47-47f2-ac58-a8bda10094dc",
   "version": 1,
   "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
   "bomFormat": "CycloneDX",

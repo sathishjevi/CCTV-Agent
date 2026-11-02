@@ -23,3 +23,6 @@ posthog>=7.0
 
 # Encrypts two-step-verification secrets at rest (skills/lib/floorwatch_crypto.py).
 cryptography>=43.0
+
+# Starlette needs this to parse form bodies: the Twilio SMS webhook (/api/webhooks/twilio-sms) reads request.form().
+python-multipart>=0.0.9

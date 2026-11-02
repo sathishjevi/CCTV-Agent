@@ -2168,18 +2168,18 @@
     },
     {
       "bom-ref": "requirements-L514",
-      "description": "requirements line 514: filelock==4.0.12     --hash=sha256:5f17ee83ecee8a6f3e389c75822fb70a1c2f0506b99438a6dffa1d56793588c8     --hash=sha256:cf42711a7ac791818b299fab0332a088c65aeeefa36290de98db92c434303b0c",
+      "description": "requirements line 514: filelock==4.2.7     --hash=sha256:31f6f7e3a8b6f0bd89114d30c5d5218ea1cfb63e5c4aa695b7559314a209bc7f     --hash=sha256:d08972bbca2b8767ee552aff877b091dd111ffb1d22de7de885766ea7d719d5e",
       "externalReferences": [
         {
           "comment": "implicit dist url",
           "hashes": [
             {
               "alg": "SHA-256",
-              "content": "5f17ee83ecee8a6f3e389c75822fb70a1c2f0506b99438a6dffa1d56793588c8"
+              "content": "31f6f7e3a8b6f0bd89114d30c5d5218ea1cfb63e5c4aa695b7559314a209bc7f"
             },
             {
               "alg": "SHA-256",
-              "content": "cf42711a7ac791818b299fab0332a088c65aeeefa36290de98db92c434303b0c"
+              "content": "d08972bbca2b8767ee552aff877b091dd111ffb1d22de7de885766ea7d719d5e"
             }
           ],
           "type": "distribution",
@@ -2187,9 +2187,9 @@
         }
       ],
       "name": "filelock",
-      "purl": "pkg:pypi/filelock@4.0.12",
+      "purl": "pkg:pypi/filelock@4.2.7",
       "type": "library",
-      "version": "4.0.12"
+      "version": "4.2.7"
     },
     {
       "bom-ref": "requirements-L518",
@@ -6204,18 +6204,18 @@
     },
     {
       "bom-ref": "requirements-L1454",
-      "description": "requirements line 1454: pyasn1==0.6.4     --hash=sha256:9c447d8431c947fe4c8febc4ed9e760bc29011a5b01e5c74b67025bd9fb8ce81     --hash=sha256:deda9277cfd454080ec40b207fb6df82206a3a2688735233cdcd8d3d565f088b",
+      "description": "requirements line 1454: pyasn1==0.6.5     --hash=sha256:4017b0fce125096b8573b39c989fdb1a4b19cf761e683398184550fea0e66587     --hash=sha256:6b11616a6bcf3a40e635f082bb232fa57b5e0dd7f517bd7ddd69ec3794508a47",
       "externalReferences": [
         {
           "comment": "implicit dist url",
           "hashes": [
             {
               "alg": "SHA-256",
-              "content": "9c447d8431c947fe4c8febc4ed9e760bc29011a5b01e5c74b67025bd9fb8ce81"
+              "content": "4017b0fce125096b8573b39c989fdb1a4b19cf761e683398184550fea0e66587"
             },
             {
               "alg": "SHA-256",
-              "content": "deda9277cfd454080ec40b207fb6df82206a3a2688735233cdcd8d3d565f088b"
+              "content": "6b11616a6bcf3a40e635f082bb232fa57b5e0dd7f517bd7ddd69ec3794508a47"
             }
           ],
           "type": "distribution",
@@ -6223,9 +6223,9 @@
         }
       ],
       "name": "pyasn1",
-      "purl": "pkg:pypi/pyasn1@0.6.4",
+      "purl": "pkg:pypi/pyasn1@0.6.5",
       "type": "library",
-      "version": "0.6.4"
+      "version": "0.6.5"
     },
     {
       "bom-ref": "requirements-L1458",
@@ -7785,18 +7785,18 @@
     },
     {
       "bom-ref": "requirements-L1826",
-      "description": "requirements line 1826: setuptools==84.0.0     --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670     --hash=sha256:f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73",
+      "description": "requirements line 1826: setuptools==84.2.1     --hash=sha256:3ff8b3b5492a0aa66960f4419365a86b84e013070d4313e4d4a6894f5d64d6bc     --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2",
       "externalReferences": [
         {
           "comment": "implicit dist url",
           "hashes": [
             {
               "alg": "SHA-256",
-              "content": "51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670"
+              "content": "3ff8b3b5492a0aa66960f4419365a86b84e013070d4313e4d4a6894f5d64d6bc"
             },
             {
               "alg": "SHA-256",
-              "content": "f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73"
+              "content": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
             }
           ],
           "type": "distribution",
@@ -7804,9 +7804,9 @@
         }
       ],
       "name": "setuptools",
-      "purl": "pkg:pypi/setuptools@84.0.0",
+      "purl": "pkg:pypi/setuptools@84.2.1",
       "type": "library",
-      "version": "84.0.0"
+      "version": "84.2.1"
     },
     {
       "bom-ref": "requirements-L1830",
@@ -8768,7 +8768,7 @@
     }
   ],
   "metadata": {
-    "timestamp": "2026-10-23T16:23:51.995819+00:00",
+    "timestamp": "2026-11-02T18:05:54.018212+00:00",
     "tools": {
       "components": [
         {
@@ -8872,7 +8872,7 @@
       ]
     }
   },
-  "serialNumber": "urn:uuid:5b8cc453-a381-46c9-97f4-2ee3a4d2d1d7",
+  "serialNumber": "urn:uuid:5d5b399a-c78b-4a50-a49a-398a43f903d8",
   "version": 1,
   "$schema": "http://cyclonedx.org/schema/bom-1.6.schema.json",
   "bomFormat": "CycloneDX",

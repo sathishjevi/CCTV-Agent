@@ -168,7 +168,13 @@ def test_assign_task_creates_open_task_and_broadcasts(app_client):
             "assigned_minutes": 60, "task_type": "clean_door",
         })
         assert resp.status_code == 200
+        # The engine's periodic tick can broadcast a task_active_time_update between the POST and
+        # the assignment event on a slow runner, so wait for the one we want instead of taking the first.
         evt = ws.receive_json()
+        for _ in range(10):
+            if evt["event_type"] == "task_assigned":
+                break
+            evt = ws.receive_json()
     assert resp.json()["event_type"] == "task_assigned"
     assert evt["event_type"] == "task_assigned"
     assert evt["zone_id"] == "theatre3"

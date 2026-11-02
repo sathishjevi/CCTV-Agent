@@ -18,3 +18,7 @@ httpx>=0.27
 # skip here is strictly better than that. Pulling in a second skill's
 # full dependency chain just to enable 2 tests isn't proportionate for
 # this service's own CI job.
+
+# tests/test_shadow_mode_e2e.py launches the floorwatch-coverage skill as a subprocess, which imports these.
+numpy>=1.24
+supervision>=0.24
