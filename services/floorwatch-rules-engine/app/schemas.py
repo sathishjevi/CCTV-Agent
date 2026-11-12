@@ -42,6 +42,8 @@ Note = _text(2000)          # a free-text note a person writes (privacy request 
 
 # A task budget is a working-day-sized number of minutes, never NaN/inf/negative.
 AssignedMinutes = Annotated[float, Field(gt=0, le=1440, allow_inf_nan=False)]
+# How long a supervisor may disarm the security alarm for in one go (the engine also enforces a configured maximum).
+DisarmMinutes = Annotated[float, Field(gt=0, le=1440, allow_inf_nan=False)]
 # Extensions keep their sign check in the engine (it returns a specific error);
 # here we only block NaN/inf and absurd magnitudes.
 ExtraMinutes = Annotated[float, Field(ge=-1440, le=1440, allow_inf_nan=False)]

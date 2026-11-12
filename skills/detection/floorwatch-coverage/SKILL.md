@@ -113,6 +113,19 @@ Every emitted event is validated against the shared schema (`skills/lib/floorwat
 
 `entity_ref` is a per-frame anonymous placeholder (`track_<n>` derived from detection order within that frame) — Phase 3+ wires in real cross-frame track IDs from DeepCamera's re-ID, per the global constraint that only anonymous `entity_ref` values are used unless a supervisor has escalated. `zone_gap` events always carry `entity_ref: null` (no one there).
 
+### Presence readings (for security alerts)
+Besides the slow, debounced coverage events above, the skill emits fast, anonymous **presence** readings per zone (`presence.py`), which the rules engine's security alerts are built on (see `docs/floorwatch/SECURITY_ALERTS.md`):
+
+```jsonl
+{"event_type": "zone_person_present", "action_type": "arrived",   "zone_id": "back_door", "confidence": 0.93, ...}
+{"event_type": "zone_person_present", "action_type": "heartbeat", "zone_id": "back_door", "confidence": 0.91, ...}
+{"event_type": "zone_person_cleared", "action_type": "cleared",   "zone_id": "back_door", "confidence": 1.0, ...}
+```
+- `arrived` fires once a person has been confidently seen (≥ `presence_confidence`, default 0.6) for `presence_arrive_seconds` (default 3 s). A single flicker, or two stray detections minutes apart, never counts.
+- `heartbeat` repeats every `presence_heartbeat_seconds` (default 30 s) while they stay, so the rules engine can tell someone passing through from someone staying, and recover after a restart.
+- `cleared` fires after `presence_clear_seconds` (default 30 s) of an empty zone; one missed frame never clears a person who is still there.
+- These carry no identity and no image, and the rules engine neither broadcasts nor stores them — only the alerts they cause. They are not a judgement: whether presence is *allowed* (opening hours, off-limits rooms, door/window zones) is policy the rules engine applies, so it can be changed from the dashboard without recalibrating a camera. Use `role_tag: "security"` for door/window/restricted zones in the calibration file. `--no-presence-events` switches them off.
+
 ### Debounce behavior
 - `zone_covered` fires **immediately** on any frame where a person is detected in the zone with confidence ≥ `gap_confidence_threshold` (default 0.8), and the zone wasn't already covered.
 - `zone_gap` only fires after the zone has been continuously unoccupied (or only seeing sub-threshold detections) for ≥ `debounce_seconds` (default 60s) — filtering momentary detection misses/occlusion, per the brief's Phase 2 spec.

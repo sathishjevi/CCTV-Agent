@@ -32,6 +32,7 @@ import supervision as sv
 
 from zone_utils import load_all_zones, build_polygon_zone  # noqa: E402
 from debounce import DebouncerRegistry  # noqa: E402
+from presence import PresenceRegistry  # noqa: E402
 
 # Locate skills/lib/floorwatch_schema.py — same multi-candidate pattern
 # yolo-detection-2026/scripts/detect.py uses for env_config.py.
@@ -50,7 +51,7 @@ for _lib_path in _lib_candidates:
 if not _schema_loaded:
     raise ImportError("floorwatch_schema.py not found — expected at skills/lib/floorwatch_schema.py")
 
-SKILL_VERSION = "0.2.0"
+SKILL_VERSION = "0.3.0"
 
 
 def parse_args():
@@ -63,6 +64,18 @@ def parse_args():
     parser.add_argument("--gap-confidence-threshold", type=float, default=0.8,
                         help="Confidence a person detection must clear to count as 'covered' for debounce purposes")
     parser.add_argument("--debounce-seconds", type=float, default=60.0)
+    # Presence readings for the rules engine's security alerts (restricted zones, closed hours,
+    # door/window entry). Deliberately much faster than the 60 s coverage debounce - see presence.py.
+    parser.add_argument("--presence-arrive-seconds", type=float, default=3.0,
+                        help="A person must be confidently seen this long before zone_person_present(arrived) fires")
+    parser.add_argument("--presence-clear-seconds", type=float, default=30.0,
+                        help="Zone must look empty this long before zone_person_cleared fires")
+    parser.add_argument("--presence-heartbeat-seconds", type=float, default=30.0,
+                        help="While someone stays, repeat zone_person_present(heartbeat) at this interval")
+    parser.add_argument("--presence-confidence", type=float, default=0.6,
+                        help="Confidence a detection must clear to count toward presence")
+    parser.add_argument("--no-presence-events", action="store_true", default=False,
+                        help="Do not emit zone_person_present/cleared (coverage events only)")
     parser.add_argument("--anchor-point", type=str, default="bottom_center",
                         choices=["bottom_center", "center"])
     parser.add_argument("--redis-url", type=str, default=None,
@@ -95,6 +108,11 @@ def load_config(args):
         "min_confidence": args.min_confidence,
         "gap_confidence_threshold": args.gap_confidence_threshold,
         "debounce_seconds": args.debounce_seconds,
+        "presence_arrive_seconds": args.presence_arrive_seconds,
+        "presence_clear_seconds": args.presence_clear_seconds,
+        "presence_heartbeat_seconds": args.presence_heartbeat_seconds,
+        "presence_confidence": args.presence_confidence,
+        "presence_events": not args.no_presence_events,
         "anchor_point": args.anchor_point,
         "redis_url": args.redis_url,
         "redis_stream": args.redis_stream,
@@ -189,11 +207,39 @@ def compute_zone_occupancy(msg: dict, zones_by_camera: dict, person_class: str, 
     return observations
 
 
+def _emit_validated(raw_event: dict) -> list:
+    """Validate one raw event against the shared schema; [] (and a log line) if it is malformed."""
+    # timestamp is a required non-null field in the shared schema; fall back if upstream omitted it
+    if not raw_event.get("timestamp"):
+        raw_event.pop("timestamp", None)
+    validated = validate_event(raw_event, log=log)
+    return [validated.model_dump()] if validated is not None else []
+
+
 def process_detections(msg: dict, zones_by_camera: dict, registry: DebouncerRegistry,
-                        person_class: str, min_confidence: float, anchor: str = "bottom_center"):
-    """Map one detections event into zero or more schema-validated zone_covered/zone_gap events."""
+                        person_class: str, min_confidence: float, anchor: str = "bottom_center",
+                        presence: "PresenceRegistry | None" = None):
+    """Map one detections event into zero or more schema-validated events:
+    zone_covered / zone_gap (slow, debounced coverage) and - when `presence` is given -
+    zone_person_present / zone_person_cleared (fast presence readings for security alerts)."""
     events = []
     for obs in compute_zone_occupancy(msg, zones_by_camera, person_class, min_confidence, anchor):
+        if presence is not None:
+            reading = presence.get(obs["camera_id"], obs["zone_id"]).update(
+                obs["occupied"], obs["confidence"], obs["entity_ref"], obs["timestamp"])
+            if reading is not None:
+                events.extend(_emit_validated({
+                    "camera_id": obs["camera_id"],
+                    "zone_id": obs["zone_id"],
+                    "role_tag": obs["role_tag"],
+                    "timestamp": obs["timestamp"] or None,
+                    "entity_ref": reading["entity_ref"],
+                    "event_type": reading["event_type"],
+                    "action_type": reading["action_type"],
+                    "confidence": round(reading["confidence"], 3),
+                    "source_model_version": f"floorwatch-coverage/{SKILL_VERSION}",
+                }))
+
         debouncer = registry.get(obs["camera_id"], obs["zone_id"])
         transition = debouncer.update(obs["occupied"], obs["confidence"], obs["entity_ref"], obs["timestamp"])
         if transition is None:
@@ -209,13 +255,7 @@ def process_detections(msg: dict, zones_by_camera: dict, registry: DebouncerRegi
             "confidence": round(transition["confidence"], 3),
             "source_model_version": f"floorwatch-coverage/{SKILL_VERSION}",
         }
-        # timestamp is a required non-null field in the shared schema; fall back if upstream omitted it
-        if not raw_event["timestamp"]:
-            del raw_event["timestamp"]
-
-        validated = validate_event(raw_event, log=log)
-        if validated is not None:
-            events.append(validated.model_dump())
+        events.extend(_emit_validated(raw_event))
     return events
 
 
@@ -232,6 +272,7 @@ def main():
     anchor_point = config.get("anchor_point", "bottom_center")
     gap_confidence_threshold = config.get("gap_confidence_threshold", 0.8)
     debounce_seconds = config.get("debounce_seconds", 60.0)
+    presence_enabled = config.get("presence_events", True)
     shadow_mode = config.get("shadow_mode", True)
     redis_url = config.get("redis_url")
     redis_stream = config.get("redis_stream", "floorwatch:events")
@@ -243,6 +284,12 @@ def main():
             f"no zone_covered/zone_gap output will be emitted until zones are calibrated")
 
     registry = DebouncerRegistry(debounce_seconds=debounce_seconds, min_confidence=gap_confidence_threshold)
+    presence = PresenceRegistry(
+        arrive_seconds=config.get("presence_arrive_seconds", 3.0),
+        clear_seconds=config.get("presence_clear_seconds", 30.0),
+        heartbeat_seconds=config.get("presence_heartbeat_seconds", 30.0),
+        min_confidence=config.get("presence_confidence", 0.6),
+    ) if presence_enabled else None
 
     publish = None
     if redis_url:
@@ -260,6 +307,7 @@ def main():
         "zone_count": total_zones,
         "debounce_seconds": debounce_seconds,
         "gap_confidence_threshold": gap_confidence_threshold,
+        "presence_events": presence is not None,
         "shadow_mode": shadow_mode,
         "redis_enabled": publish is not None,
     })
@@ -287,7 +335,7 @@ def main():
         if msg.get("event") == "detections":
             try:
                 for evt in process_detections(msg, zones_by_camera, registry, person_class, min_confidence,
-                                               anchor_point):
+                                               anchor_point, presence):
                     emit(evt)
                     if publish:
                         publish(evt)

@@ -48,6 +48,36 @@ params:
     default: 0.8
     description: "Minimum detection confidence required to count as coverage for debounce purposes (per Phase 2 spec)"
 
+  - key: presence_events
+    label: Presence Events (security alerts)
+    type: boolean
+    default: true
+    description: "Also emit fast zone_person_present / zone_person_cleared readings, which the rules engine's security alerts (restricted areas, closed hours, door/window entry, hiding) are built on. Off = coverage events only."
+
+  - key: presence_arrive_seconds
+    label: Presence Arrival Time
+    type: number
+    default: 3
+    description: "Seconds a person must be confidently seen before zone_person_present(arrived) fires. Higher = fewer false alarms, slower alert"
+
+  - key: presence_clear_seconds
+    label: Presence Clear Time
+    type: number
+    default: 30
+    description: "Seconds the zone must look empty before zone_person_cleared fires"
+
+  - key: presence_heartbeat_seconds
+    label: Presence Heartbeat
+    type: number
+    default: 30
+    description: "While a person stays in a zone, repeat zone_person_present(heartbeat) this often (lets the rules engine tell passing through from staying, and recover after a restart)"
+
+  - key: presence_confidence
+    label: Presence Confidence
+    type: number
+    default: 0.6
+    description: "Minimum detection confidence that counts toward presence"
+
   - key: redis_url
     label: Redis URL
     type: string

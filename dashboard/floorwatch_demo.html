@@ -226,6 +226,23 @@
   </div>
 </div>
 
+<!-- Security alerts (supervisor+): break-in / after-hours / restricted-area / hiding alerts, and the alarm's arm state. -->
+<div class="login-overlay" id="securityAlertsOverlay" style="display:none;align-items:flex-start;padding:40px 20px;overflow-y:auto;">
+  <div class="login-card" style="width:min(860px,100%);">
+    <div class="brand" style="justify-content:space-between;display:flex;">
+      <div style="display:flex;align-items:center;"><div class="brand-mark" style="display:inline-flex;">FW</div><strong style="margin-left:8px;font-size:15px;">Security alerts</strong></div>
+      <button class="btn" id="closeSecurityAlertsBtn" style="width:auto;padding:6px 12px;">Close</button>
+    </div>
+    <div id="securityAlertsError" class="login-error" style="min-height:0;"></div>
+    <div id="securityAlertsStatus" style="font-size:12.5px;margin-bottom:14px;"></div>
+    <h2 style="margin:6px 0;">Open alerts</h2>
+    <p style="font-size:11.5px;color:var(--dim);line-height:1.5;margin:0 0 8px;">A detection means a person was seen on camera in that area at that time &mdash; nothing more. Check the cameras, then acknowledge (you are on it) or close the alert with what you found. Alerts never close themselves quickly: they stay open until someone confirms.</p>
+    <div id="securityAlertsList"></div>
+    <h2 style="margin:18px 0 6px;">Recently closed</h2>
+    <div id="securityAlertsRecent" style="font-size:12px;"></div>
+  </div>
+</div>
+
 <!-- System status (admin): what is configured, what is healthy, what needs attention. -->
 <div class="login-overlay" id="systemStatusOverlay" style="display:none;align-items:flex-start;padding:40px 20px;overflow-y:auto;">
   <div class="login-card" style="width:min(720px,100%);">
@@ -478,7 +495,7 @@
     <div style="overflow-x:auto;margin:12px 0 20px;">
     <table id="zonesTable" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:12.5px;">
       <colgroup>
-        <col style="width:15%;"><col style="width:22%;"><col style="width:15%;"><col style="width:13%;"><col style="width:15%;"><col style="width:20%;">
+        <col style="width:11%;"><col style="width:17%;"><col style="width:11%;"><col style="width:10%;"><col style="width:8%;"><col style="width:26%;"><col style="width:17%;">
       </colgroup>
       <thead>
         <tr style="text-align:left;color:var(--dim);font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:0.4px;">
@@ -487,6 +504,7 @@
           <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Role tag</th>
           <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Status</th>
           <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Staffed</th>
+          <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Security</th>
           <th style="padding:6px 8px;border-bottom:1px solid var(--line);">Actions</th>
         </tr>
       </thead>
@@ -504,8 +522,13 @@
         <input type="checkbox" id="newZoneStaffed" checked style="width:auto;">
         <label for="newZoneStaffed" style="margin:0;">Staffed</label>
       </div>
+      <div class="field" style="margin-bottom:0;min-width:150px;"><label for="newZoneAccess">Security rule</label>
+        <select id="newZoneAccess"><option value="open">No rule</option><option value="closed_hours">Alert when closed</option><option value="restricted">Off-limits (always)</option></select></div>
+      <div class="field" style="margin-bottom:0;min-width:150px;"><label for="newZoneEntry">Entry point</label>
+        <select id="newZoneEntry"><option value="">Not an entry point</option><option value="door">Door</option><option value="window">Window</option></select></div>
       <button type="submit" class="btn primary" style="width:auto;">Add</button>
     </form>
+    <div style="font-family:var(--mono);font-size:10.5px;color:var(--dimmer);margin-top:8px;line-height:1.5;"><b>Security:</b> "Alert when closed" raises an alert if a person is seen there while the venue is closed (needs opening hours &mdash; see System status); "Off-limits" alerts at any time; a door or window marks a way in, so a person seen there while closed is a possible break-in. The camera needs a calibrated zone for each. Changes are recorded in History.</div>
     <div style="font-family:var(--mono);font-size:10.5px;color:var(--dimmer);margin-top:8px;line-height:1.5;">Zone ID is a stable identifier (letters/numbers/hyphens only) used internally and in URLs — pick something short and permanent. Role tag should match employees' Department field so auto-assignment can find who covers this zone. "Staffed" must be checked for a zone to accept task assignments — this is Global Constraint 5's roster cross-check, not just a display flag; uncheck it for a zone that exists on the floor plan but has nobody covering it right now.</div>
   </div>
 </div>
@@ -542,6 +565,10 @@
           <option value="task_flag">task_flag</option>
           <option value="task_flag_confirmed">task_flag_confirmed</option>
           <option value="task_resolved">task_resolved</option>
+          <option value="security_alert">security_alert</option>
+          <option value="security_alert_update">security_alert_update</option>
+          <option value="security_alert_resolved">security_alert_resolved</option>
+          <option value="security_mode_changed">security_mode_changed</option>
         </select>
       </div>
       <div class="field">
@@ -576,6 +603,7 @@
       <button class="btn" id="manageZonesBtn" style="padding:4px 10px;font-size:11px;display:none;">Manage Zones</button>
       <button class="btn" id="historyBtn" style="padding:4px 10px;font-size:11px;">History</button>
       <button class="btn" id="privacyBtn" style="padding:4px 10px;font-size:11px;display:none;">Privacy requests</button>
+      <button class="btn" id="securityAlertsBtn" style="padding:4px 10px;font-size:11px;display:none;">Security alerts <span id="securityAlertsBadge" style="display:none;margin-left:4px;padding:1px 6px;border-radius:9px;background:var(--red);color:#fff;font-weight:700;"></span></button>
       <button class="btn" id="systemStatusBtn" style="padding:4px 10px;font-size:11px;display:none;">System status</button>
       <button class="btn" id="securityBtn" style="padding:4px 10px;font-size:11px;">Security</button>
       <button class="btn" id="changePasswordBtn" style="padding:4px 10px;font-size:11px;">Change password</button>
@@ -774,6 +802,8 @@
     document.getElementById('manageUsersBtn').style.display = currentAuth.role === 'admin' ? 'inline-block' : 'none';
     document.getElementById('privacyBtn').style.display = currentAuth.role === 'admin' ? 'inline-block' : 'none';
     document.getElementById('systemStatusBtn').style.display = currentAuth.role === 'admin' ? 'inline-block' : 'none';
+    document.getElementById('securityAlertsBtn').style.display =
+      (currentAuth.role === 'admin' || currentAuth.role === 'supervisor') ? 'inline-block' : 'none';
     document.getElementById('manageEmployeesBtn').style.display =
       (currentAuth.role === 'admin' || currentAuth.role === 'supervisor') ? 'inline-block' : 'none';
     document.getElementById('manageZonesBtn').style.display =
@@ -1197,6 +1227,10 @@
   // and updating zoneState/tasks accordingly. renderZones/renderQueue/
   // renderTasks are unchanged from the original prototype.
   function applyEvent(evt){
+    if(evt && typeof evt.event_type === 'string' && evt.event_type.indexOf('security_') === 0){
+      handleSecurityEvent(evt);      // not a coverage-board event: no zone card to update
+      return;
+    }
     if(!evt || !evt.zone_id) return;
     if(!zoneState[evt.zone_id]) zoneState[evt.zone_id] = {state:'covered'};
 
@@ -1399,6 +1433,7 @@
       renderZones(); renderQueue(); renderTasks();
       loadEmployeesForPicker();
       loadZones();
+      refreshSecurityStatus();
       logEvent('info', 'Loaded current zone and task state from rules engine.');
     } catch(err){
       logEvent('crit', `Could not load initial state: ${escapeHtml(err.message)}`);
@@ -1728,6 +1763,20 @@
       const pv = d.privacy || {};
       rows.push(statusRow(pv.notice_configured ? 'ok' : 'bad', 'Privacy notice', pv.notice_configured ? `Published (version ${pv.notice_version}).` : 'Organisation name / privacy contact not set (FLOORWATCH_ORG_NAME, FLOORWATCH_PRIVACY_CONTACT).'));
       rows.push(statusRow(pv.overdue_requests ? 'bad' : 'ok', 'Privacy requests', `${pv.open_requests || 0} open, ${pv.overdue_requests || 0} overdue.`));
+      const sa = d.security_alerts || {};
+      rows.push(statusRow(!sa.enabled ? 'warn' : (sa.schedule_error ? 'bad' : (sa.schedule_configured ? 'ok' : 'warn')), 'Security alerts: opening hours',
+        !sa.enabled ? 'Security alerts are switched off (FLOORWATCH_SECURITY_ALERTS_ENABLED).'
+          : sa.schedule_error ? `Opening hours could not be read (${sa.schedule_error}). Door/window and closed-hours alerts are OFF until FLOORWATCH_OPEN_HOURS is fixed.`
+          : sa.schedule_configured ? `Set (${sa.timezone}). Right now: ${(sa.phase || '').replace('_', ' ')}.`
+          : 'Not set. Without FLOORWATCH_OPEN_HOURS (and FLOORWATCH_TIMEZONE) only "off-limits" zones can alert.'));
+      rows.push(statusRow(!sa.enabled ? 'warn' : ((sa.zones_with_rules || sa.entry_point_zones) ? 'ok' : 'warn'), 'Security alerts: zones',
+        `${sa.zones_with_rules || 0} zone(s) with a rule, ${sa.entry_point_zones || 0} door/window zone(s). ${(sa.zones_with_rules || sa.entry_point_zones) ? '' : 'None marked yet: use Manage Zones -> Security.'}`));
+      const reach = sa.recipients_reachable || 0;
+      rows.push(statusRow(!sa.enabled ? 'warn' : (reach === 0 ? 'bad' : (reach < (sa.recipients || 0) ? 'warn' : 'ok')), 'Security alerts: who is messaged',
+        !sa.recipients ? `Nobody: no active staff with a role in ${(sa.alert_roles || []).join(', ')}. Alerts would show here but no one would be told.`
+          : reach === 0 ? `${sa.recipients} account(s) have the right role but none can be reached (no phone/app login set up). Alerts would show here but no one would be told.`
+          : reach < sa.recipients ? `${reach} of ${sa.recipients} ${(sa.alert_roles || []).join('/')} account(s) can be reached; the others have no phone number or app login yet.`
+          : `${reach} ${(sa.alert_roles || []).join('/')} account(s) get a push/text.`));
       const events = Object.entries(d.security_events || {}).sort();
       body.replaceChildren(...rows,
         el('h2', {text: 'Security events since this service started', style: 'margin:16px 0 6px;'}),
@@ -1740,6 +1789,171 @@
   }
   document.getElementById('systemStatusBtn').onclick = () => { openOverlay('systemStatusOverlay'); renderSystemStatus(); };
   document.getElementById('closeSystemStatusBtn').onclick = () => closeOverlay('systemStatusOverlay');
+
+  // ── Security alerts (supervisor+) ──
+  // Everything dynamic here (zone names, messages, who closed what) is user-typed text, so it is put in with
+  // textContent via el() — never concatenated into HTML.
+  const SEC_KIND_LABEL = {
+    break_in_door: 'Possible break-in (door)', break_in_window: 'Possible break-in (window)',
+    after_hours_presence: 'Person here while closed', restricted_zone_entry: 'Person in an off-limits area',
+    hiding_after_close: 'Someone still inside after closing'};
+  const SEC_PHASE_TEXT = {
+    open: 'Venue open', closing_grace: 'Closed: locking-up grace period (not armed yet)',
+    opening_grace: 'Opening soon: grace period (not armed)', armed: 'ARMED: venue closed',
+    disarmed: 'DISARMED by a supervisor', unscheduled: 'No opening hours set', off: 'Security alerts are off', unknown: 'Unknown'};
+  let securityStatus = null;
+  let securityRefreshTimer = null;
+  let audioCtx = null;
+
+  function canSeeSecurity(){ return currentAuth && (currentAuth.role === 'admin' || currentAuth.role === 'supervisor'); }
+
+  function beep(){
+    // A monitor left on in a back office should make a noise for a possible break-in. Browsers only allow
+    // sound after the page has had a click, so this quietly does nothing until then.
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      [0, 0.35, 0.7].forEach(t => {
+        const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+        o.type = 'square'; o.frequency.value = 880; g.gain.value = 0.08;
+        o.connect(g); g.connect(audioCtx.destination); o.start(audioCtx.currentTime + t); o.stop(audioCtx.currentTime + t + 0.22);
+      });
+    } catch(e) { /* no audio available: the red badge and the feed still show it */ }
+  }
+
+  function updateSecurityBadge(){
+    const badge = document.getElementById('securityAlertsBadge');
+    const btn = document.getElementById('securityAlertsBtn');
+    const open = (securityStatus && securityStatus.alerts) ? securityStatus.alerts.filter(a => a.status === 'open').length : 0;
+    badge.style.display = open ? 'inline-block' : 'none';
+    badge.textContent = String(open);
+    btn.style.borderColor = open ? 'var(--red)' : '';
+    btn.style.color = open ? 'var(--red)' : '';
+  }
+
+  async function refreshSecurityStatus(){
+    if(!canSeeSecurity()) return;
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}/api/security/status`);
+      if(!res.ok) return;
+      securityStatus = await res.json();
+      updateSecurityBadge();
+      if(document.getElementById('securityAlertsOverlay').style.display === 'flex') renderSecurityAlerts();
+    } catch(e) { /* transient: the next event or reconnect refreshes it */ }
+  }
+  function scheduleSecurityRefresh(){
+    clearTimeout(securityRefreshTimer);
+    securityRefreshTimer = setTimeout(refreshSecurityStatus, 250);
+  }
+
+  function handleSecurityEvent(evt){
+    const where = escapeHtml(evt.zone_name || evt.zone_id || '');
+    const msg = escapeHtml(evt.message || '');
+    if(evt.event_type === 'security_alert'){
+      logEvent('crit', `<b>SECURITY ALERT</b> &mdash; ${msg}${evt.shadow_mode_suppressed ? ' (shadow mode: nobody was messaged)' : ''}`);
+      beep();
+    } else if(evt.event_type === 'security_alert_update'){
+      logEvent('warn', `Security &mdash; ${where}: ${msg}`);
+    } else if(evt.event_type === 'security_alert_resolved'){
+      logEvent('ok', `Security &mdash; ${where}: ${msg}`);
+    } else {
+      logEvent('info', `Security &mdash; ${msg}`);
+    }
+    scheduleSecurityRefresh();
+  }
+
+  async function securityAction(path, body, okText){
+    const errEl = document.getElementById('securityAlertsError');
+    errEl.textContent = '';
+    try {
+      const res = await authFetch(`${currentAuth.backendBase}${path}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+      const d = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(d.error || (d.detail && JSON.stringify(d.detail)) || `HTTP ${res.status}`);
+      await refreshSecurityStatus();
+    } catch(err){ errEl.textContent = err.message; }
+  }
+
+  let securityRenderDeferred = false;
+  function renderSecurityAlerts(){
+    // A live update arrives every few seconds while an alert is unresolved. Redrawing the panel would wipe a
+    // note someone is halfway through typing (or close a dropdown they have open), so while they are editing
+    // a field the redraw waits until they leave it.
+    const overlay = document.getElementById('securityAlertsOverlay');
+    const active = document.activeElement;
+    if(active && overlay.contains(active) && (active.tagName === 'INPUT' || active.tagName === 'SELECT')){
+      securityRenderDeferred = true;
+      return;
+    }
+    securityRenderDeferred = false;
+    const st = securityStatus;
+    const statusBox = document.getElementById('securityAlertsStatus');
+    const list = document.getElementById('securityAlertsList');
+    const recent = document.getElementById('securityAlertsRecent');
+    if(!st){ statusBox.replaceChildren(el('p', {text: 'Loading…'})); list.replaceChildren(); recent.replaceChildren(); return; }
+
+    const armedNow = st.phase === 'armed';
+    const phaseColor = st.phase === 'armed' ? 'var(--red)' : (st.phase === 'disarmed' ? 'var(--amber)' : 'var(--ok)');
+    const bits = [el('div', {style: 'display:flex;flex-wrap:wrap;align-items:center;gap:10px;'}, [
+      el('span', {text: SEC_PHASE_TEXT[st.phase] || st.phase, style: `font-weight:700;color:${phaseColor};`}),
+      el('span', {text: st.schedule && st.schedule.configured ? `Opening hours set (${st.schedule.timezone})` : 'No opening hours set: only off-limits zones can alert', style: 'color:var(--dim);font-size:11.5px;'}),
+    ])];
+    if(st.schedule_error) bits.push(el('div', {text: `Opening hours setting could not be read: ${st.schedule_error}`, style: 'color:var(--red);margin-top:4px;'}));
+    if(st.shadow_mode) bits.push(el('div', {text: 'Shadow mode is ON: alerts appear here but nobody is texted or pushed.', style: 'color:var(--amber);margin-top:4px;'}));
+    if(st.phase === 'disarmed'){
+      bits.push(el('div', {style: 'margin-top:8px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;'}, [
+        el('span', {text: `Disarmed by ${st.disarmed_by} until ${new Date(st.disarmed_until).toLocaleTimeString()}. Off-limits zones still alert.`}),
+        el('button', {className: 'btn primary', style: 'width:auto;padding:5px 12px;font-size:11px;', text: 'Re-arm now', onclick: () => securityAction('/api/security/arm')})]));
+    } else {
+      const minutes = el('select', {style: 'font-size:11.5px;padding:4px;'}, [30, 60, 120, 240, 480, 720].map(m => el('option', {value: String(m), text: m >= 60 ? `${m / 60} h` : `${m} min`})));
+      const reason = el('input', {placeholder: 'Why? (e.g. cleaning crew)', maxLength: 120, style: 'font-size:11.5px;padding:4px 6px;min-width:200px;'});
+      bits.push(el('div', {style: 'margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;'}, [
+        el('span', {text: 'Expecting people (cleaners, a delivery)?', style: 'color:var(--dim);font-size:11.5px;'}), minutes, reason,
+        el('button', {className: 'btn', style: 'width:auto;padding:5px 12px;font-size:11px;', text: 'Disarm', onclick: () => {
+          if(!confirm('Disarm the alarm? Door, window and closed-hours alerts stop until it runs out or you re-arm. This is recorded and the team is told.')) return;
+          securityAction('/api/security/disarm', {minutes: Number(minutes.value), reason: reason.value.trim()});
+        }})]));
+    }
+    if((st.occupied_zones || []).length){
+      bits.push(el('div', {text: 'Currently detected in: ' + st.occupied_zones.map(z => z.zone_name).join(', '), style: 'margin-top:8px;color:var(--dim);font-size:11.5px;'}));
+    }
+    statusBox.replaceChildren(...bits);
+
+    const alerts = st.alerts || [];
+    if(!alerts.length){
+      list.replaceChildren(el('div', {className: 'empty', text: 'No open alerts.'}));
+    } else {
+      list.replaceChildren(...alerts.map(a => {
+        const color = a.severity === 'critical' ? 'var(--red)' : 'var(--amber)';
+        const outcome = el('select', {style: 'font-size:11.5px;padding:4px;'}, [
+          el('option', {value: 'handled', text: 'Handled'}), el('option', {value: 'false_alarm', text: 'False alarm'}),
+          el('option', {value: 'authorised', text: 'Authorised person'})]);
+        const note = el('input', {placeholder: 'Note (optional)', maxLength: 500, style: 'font-size:11.5px;padding:4px 6px;min-width:180px;flex:1;'});
+        const actions = [outcome, note, el('button', {className: 'btn primary', style: 'width:auto;padding:5px 12px;font-size:11px;', text: 'Close alert',
+          onclick: () => securityAction(`/api/security/alerts/${encodeURIComponent(a.alert_id)}/resolve`, {outcome: outcome.value, note: note.value.trim()})})];
+        if(a.status === 'open') actions.unshift(el('button', {className: 'btn', style: 'width:auto;padding:5px 12px;font-size:11px;', text: "I'm on it",
+          onclick: () => securityAction(`/api/security/alerts/${encodeURIComponent(a.alert_id)}/acknowledge`)}));
+        return el('div', {style: `border:1px solid ${color};border-left-width:5px;border-radius:8px;padding:10px 12px;margin-bottom:10px;`}, [
+          el('div', {style: 'display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;'}, [
+            el('span', {text: (a.severity || '').toUpperCase(), style: `color:${color};font-weight:800;font-size:11px;`}),
+            el('strong', {text: SEC_KIND_LABEL[a.kind] || a.kind}),
+            el('span', {text: `${a.zone_name} · since ${new Date(a.created_at).toLocaleTimeString()}`, style: 'color:var(--dim);font-size:11.5px;'}),
+            el('span', {text: a.status === 'acknowledged' ? `acknowledged by ${a.acknowledged_by}` : (a.still_present ? 'person still detected' : 'no longer detected'), style: 'color:var(--dim);font-size:11.5px;'})]),
+          el('div', {text: a.message, style: 'margin:6px 0 8px;line-height:1.5;'}),
+          el('div', {style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;'}, actions)]);
+      }));
+    }
+
+    const done = st.recently_resolved || [];
+    recent.replaceChildren(...(done.length ? done.map(a => el('div', {style: 'padding:5px 0;border-bottom:1px solid var(--line);color:var(--dim);'}, [
+      el('span', {text: `${new Date(a.resolved_at || a.created_at).toLocaleString()} · ${SEC_KIND_LABEL[a.kind] || a.kind} · ${a.zone_name} · `}),
+      el('span', {text: `${(a.outcome || '').replace('_', ' ')} by ${a.resolved_by}${a.note ? ': ' + a.note : ''}`})])) : [el('div', {className: 'empty', text: 'Nothing closed yet.'})]));
+  }
+  document.getElementById('securityAlertsBtn').onclick = () => { openOverlay('securityAlertsOverlay'); renderSecurityAlerts(); refreshSecurityStatus(); };
+  document.getElementById('closeSecurityAlertsBtn').onclick = () => closeOverlay('securityAlertsOverlay');
+  document.getElementById('securityAlertsOverlay').addEventListener('focusout', () => {
+    setTimeout(() => { if(securityRenderDeferred) renderSecurityAlerts(); }, 0);
+  });
+  setInterval(refreshSecurityStatus, 30000);   // the armed/open phase changes with the clock, not with an event
 
   // ── Privacy requests (admin) ──
   let resolvingRequestId = null;
@@ -2271,7 +2485,7 @@
   function renderZonesTable(zoneList){
     const tbody = document.getElementById('zonesTableBody');
     if(!zoneList.length){
-      tbody.innerHTML = '<tr><td colspan="5" class="empty">No zones added yet.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="empty">No zones added yet.</td></tr>';
       return;
     }
     tbody.innerHTML = zoneList.map(z => `
@@ -2284,6 +2498,18 @@
           <label style="display:flex;align-items:center;gap:4px;font-size:10.5px;color:var(--dim);cursor:pointer;">
             <input type="checkbox" data-staffed-toggle data-zoneid="${escapeHtml(z.zone_id)}" ${z.staffed ? 'checked' : ''} style="width:auto;">
           </label>
+        </td>
+        <td style="padding:8px;">
+          <select data-security-access data-zoneid="${escapeHtml(z.zone_id)}" style="width:100%;font-size:11px;padding:3px;margin-bottom:4px;" title="When should a person here raise an alert?">
+            <option value="open" ${z.access === 'open' || !z.access ? 'selected' : ''}>No rule</option>
+            <option value="closed_hours" ${z.access === 'closed_hours' ? 'selected' : ''}>Alert when closed</option>
+            <option value="restricted" ${z.access === 'restricted' ? 'selected' : ''}>Off-limits (always)</option>
+          </select>
+          <select data-security-entry data-zoneid="${escapeHtml(z.zone_id)}" style="width:100%;font-size:11px;padding:3px;" title="Is this a way into the building?">
+            <option value="" ${!z.entry_point ? 'selected' : ''}>Not an entry point</option>
+            <option value="door" ${z.entry_point === 'door' ? 'selected' : ''}>Door (entry)</option>
+            <option value="window" ${z.entry_point === 'window' ? 'selected' : ''}>Window (entry)</option>
+          </select>
         </td>
         <td style="padding:8px;">
           ${z.active
@@ -2324,10 +2550,12 @@
     const role_tag = document.getElementById('newZoneRoleTag').value.trim();
     const camera_id = document.getElementById('newZoneCameraId').value.trim() || null;
     const staffed = document.getElementById('newZoneStaffed').checked;
+    const access = document.getElementById('newZoneAccess').value;
+    const entry_point = document.getElementById('newZoneEntry').value;
     try {
       const res = await authFetch(`${currentAuth.backendBase}/api/admin/zones`, {
         method: 'POST', headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({zone_id, name, role_tag, camera_id, staffed}),
+        body: JSON.stringify({zone_id, name, role_tag, camera_id, staffed, access, entry_point}),
       });
       const data = await res.json();
       if(!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -2363,6 +2591,22 @@
   });
 
   document.getElementById('zonesTableBody').addEventListener('change', async (e) => {
+    const sel = e.target.closest('select[data-security-access], select[data-security-entry]');
+    if(sel){
+      const zoneId = sel.dataset.zoneid;
+      const errEl = document.getElementById('manageZonesError');
+      errEl.textContent = '';
+      const body = ('securityAccess' in sel.dataset) ? {access: sel.value} : {entry_point: sel.value};
+      try {
+        const res = await authFetch(`${currentAuth.backendBase}/api/admin/zones/${encodeURIComponent(zoneId)}/set-security`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+        if(!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+      } catch(err){
+        errEl.textContent = err.message;
+        loadZonesForManagement();      // put the dropdown back to what the server actually has
+      }
+      return;
+    }
     const box = e.target.closest('input[data-staffed-toggle]');
     if(!box) return;
     const zoneId = box.dataset.zoneid;
@@ -2395,6 +2639,9 @@
       case 'zone_resolved': return evt.resolved_by === 'auto' ? 'ok' : 'info';
       case 'task_assigned': case 'task_auto_assigned': case 'task_reassigned':
       case 'task_flag': case 'task_flag_confirmed': case 'task_resolved': return 'eff';
+      case 'security_alert': return 'crit';
+      case 'security_alert_update': return 'warn';
+      case 'security_alert_resolved': return 'ok';
       default: return 'info';
     }
   }

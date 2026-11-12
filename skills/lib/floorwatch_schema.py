@@ -40,9 +40,20 @@ EventType = Literal[
     # existed on this schema for task_assigned, reused rather than adding
     # new ones.
     "scene_task_suggested",
+    # Security. `zone_person_present` / `zone_person_cleared` are detector readings from the coverage
+    # skill (a person is, or is no longer, in a zone — fast-debounced, anonymous, never stored in the
+    # history). The rest are produced by the rules engine's security engine when those readings break a
+    # rule (restricted zone, closed hours, door/window entry, someone still inside after closing).
+    "zone_person_present",
+    "zone_person_cleared",
+    "security_alert",
+    "security_alert_update",
+    "security_alert_resolved",
+    "security_mode_changed",
 ]
 
 Tier = Literal[1, 2, 3]
+Severity = Literal["medium", "high", "critical"]
 
 
 class FloorwatchEvent(BaseModel):
@@ -68,6 +79,11 @@ class FloorwatchEvent(BaseModel):
     resolved_by: Optional[str] = None   # "auto" | "supervisor:<id>" — never an HR/employment action
     task_name: Optional[str] = None     # human-readable task label for dashboard display
     task_type: Optional[str] = None     # key into per-task-type effort thresholds (Phase 3)
+
+    # Security alerts (optional, like everything above — only security events carry them).
+    alert_id: Optional[str] = None
+    alert_kind: Optional[str] = None    # break_in_door | break_in_window | after_hours_presence | restricted_zone_entry | hiding_after_close
+    severity: Optional[Severity] = None
 
 
 def validate_event(data: dict, log=lambda msg: print(msg, file=sys.stderr, flush=True)) -> Optional[FloorwatchEvent]:

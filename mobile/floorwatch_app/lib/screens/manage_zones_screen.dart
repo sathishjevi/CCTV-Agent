@@ -119,6 +119,38 @@ class _ManageZonesScreenState extends State<ManageZonesScreen> {
                               Text(z.active ? 'active' : 'deactivated',
                                   style: TextStyle(color: z.active ? Colors.green : Colors.red)),
                               const SizedBox(height: 8),
+                              // Security alerts (security_engine.py): when should a person here raise an alert,
+                              // and is this a way into the building?
+                              DropdownButtonFormField<String>(
+                                key: ValueKey('${z.zoneId}-access-${z.access}'),
+                                initialValue: z.access,
+                                isExpanded: true,
+                                decoration: const InputDecoration(labelText: 'Security rule', isDense: true),
+                                items: const [
+                                  DropdownMenuItem(value: 'open', child: Text('No rule')),
+                                  DropdownMenuItem(value: 'closed_hours', child: Text('Alert when closed')),
+                                  DropdownMenuItem(value: 'restricted', child: Text('Off-limits (always alert)')),
+                                ],
+                                onChanged: (v) => v == null
+                                    ? null
+                                    : _runAction(() => ApiClient.instance.setZoneSecurity(z.zoneId, access: v)),
+                              ),
+                              const SizedBox(height: 8),
+                              DropdownButtonFormField<String>(
+                                key: ValueKey('${z.zoneId}-entry-${z.entryPoint}'),
+                                initialValue: z.entryPoint,
+                                isExpanded: true,
+                                decoration: const InputDecoration(labelText: 'Entry point', isDense: true),
+                                items: const [
+                                  DropdownMenuItem(value: '', child: Text('Not an entry point')),
+                                  DropdownMenuItem(value: 'door', child: Text('Door (break-in when closed)')),
+                                  DropdownMenuItem(value: 'window', child: Text('Window (break-in when closed)')),
+                                ],
+                                onChanged: (v) => v == null
+                                    ? null
+                                    : _runAction(() => ApiClient.instance.setZoneSecurity(z.zoneId, entryPoint: v)),
+                              ),
+                              const SizedBox(height: 8),
                               Wrap(
                                 spacing: 8,
                                 runSpacing: 8,

@@ -252,6 +252,43 @@ def test_zone_directory_on_real_sql(dsn):
     assert z.list_all(active_only=True) == [] and len(z.list_all()) == 1
 
 
+def test_zone_security_settings_on_real_sql_including_upgrading_an_existing_table(dsn):
+    from zone_directory import PostgresZoneDirectory
+    # The table exactly as every production database has it today: created before the security columns existed.
+    with floorwatch_db.connection(dsn) as conn:
+        conn.execute(
+            "CREATE TABLE floorwatch_zones (zone_id TEXT PRIMARY KEY, name TEXT NOT NULL, role_tag TEXT NOT NULL, "
+            "camera_id TEXT, active BOOLEAN NOT NULL DEFAULT true, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), "
+            "created_by TEXT, staffed BOOLEAN NOT NULL DEFAULT true)")
+        conn.execute("INSERT INTO floorwatch_zones (zone_id, name, role_tag) VALUES ('old', 'Old Zone', 'usher')")
+
+    z = PostgresZoneDirectory(dsn)                      # starting up runs the migration
+    old = z.get("old")
+    assert (old["access"], old["entry_point"]) == ("open", "")          # existing zones change nothing
+
+    z.add("door", "Back Door", "security", "cam1", created_by="t", access="open", entry_point="door")
+    assert (z.get("door")["access"], z.get("door")["entry_point"]) == ("open", "door")
+
+    assert z.set_security("old", access="restricted") is True
+    assert (z.get("old")["access"], z.get("old")["entry_point"]) == ("restricted", "")      # only what was sent changes
+    assert z.set_security("old", entry_point="window") is True
+    assert (z.get("old")["access"], z.get("old")["entry_point"]) == ("restricted", "window")
+    assert z.set_security("missing", access="open") is False
+    with pytest.raises(ValueError):
+        z.set_security("old", access="whenever")
+    with pytest.raises(ValueError):
+        z.set_security("old", entry_point="roof")
+
+    z.add("old", "Renamed Zone", "usher")               # editing a zone's name must not wipe its security settings
+    kept = z.get("old")
+    assert kept["name"] == "Renamed Zone" and (kept["access"], kept["entry_point"]) == ("restricted", "window")
+
+    before = z.version
+    z.set_security("old", access="closed_hours")
+    assert z.version > before                          # the security engine watches this to refresh at once
+    assert [r["access"] for r in z.list_all()] == ["open", "closed_hours"]
+
+
 def test_event_history_on_real_sql_record_query_and_purge(dsn):
     from event_history import PostgresEventHistoryStore
     h = PostgresEventHistoryStore(dsn)

@@ -16,6 +16,8 @@ recognition is used. See `DATA_MAP.md`.
 
 | Risk | Likelihood | Severity | Mitigation | Residual |
 |---|---|---|---|---|
+| A security alert is read as an accusation against a staff member (it cannot identify anyone, and detections can be wrong) | Medium | High | Alerts say "possible", carry no identity, ask a person to check the cameras first, need a human to close them with an outcome and note, and are audited; no automatic action is ever taken; *Authorised person* / *False alarm* outcomes exist; staff are told in the privacy notice | Low-Medium: needs a written rule that an alert alone is never grounds for discipline |
+| Security alerts used to track individual staff movements after hours | Low | High | Presence readings are zone-level, anonymous and not stored; only alerts (zone, time, response) are kept, for the short event-history period; no per-person tracking exists | Low |
 | Used for individual performance surveillance | Medium | High | Notice states purpose; objection / human-review request route; access limited by role | Medium: needs written management policy |
 | Unauthorised access to staff data | Low | High | MFA, scrypt, rate limits, role checks, least-privilege DB role, encryption of MFA secrets | Low |
 | Over-retention | Medium | Medium | Automatic retention loop | Low |

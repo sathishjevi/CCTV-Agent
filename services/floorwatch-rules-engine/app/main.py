@@ -16,10 +16,12 @@ import asyncio
 import json
 import re
 import sys
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,6 +50,8 @@ import retention_jobs  # noqa: E402
 from mfa_service import RESULT_INVALID, RESULT_OK_RECOVERY, RESULT_RATE_LIMITED, MfaService  # noqa: E402
 from mfa_store import build_mfa_store  # noqa: E402
 from zone_directory import build_zone_directory, validate_zone_id  # noqa: E402
+from security_engine import SecurityEngine  # noqa: E402
+from security_schedule import OpenHours, ScheduleError  # noqa: E402
 
 from floorwatch_auth import (  # noqa: E402
     VALID_ROLES, RevocationStore, build_user_store, hash_password, issue_mfa_challenge, issue_token,
@@ -58,7 +62,7 @@ from floorwatch_auth import (  # noqa: E402
 from floorwatch_crypto import FieldCipher  # noqa: E402
 from floorwatch_logging import get_logger  # noqa: E402
 from schemas import (  # noqa: E402
-    AssignedMinutes, ChallengeToken, ExtraMinutes, Identifier, MfaCode, Name, Note, OtpCode, Password, Phone,
+    AssignedMinutes, ChallengeToken, DisarmMinutes, ExtraMinutes, Identifier, MfaCode, Name, Note, OtpCode, Password, Phone,
     PushToken, StrictModel, Username,
 )
 from floorwatch_rate_limit import RateLimiter  # noqa: E402
@@ -258,10 +262,13 @@ if not zone_directory.list_all():
         zone_directory.add(_zid, _zmeta.get("name", _zid), _zmeta.get("role_tag", "concession"),
                             _zmeta.get("camera_id"), created_by="system:seed")
 
-zones_meta = {
-    z["zone_id"]: {"name": z["name"], "role_tag": z["role_tag"], "camera_id": z["camera_id"]}
-    for z in zone_directory.list_all(active_only=True)
-}
+def _zone_meta(z: dict) -> dict:
+    """What the engines need to know about a zone — a view of one zone_directory row."""
+    return {"name": z["name"], "role_tag": z["role_tag"], "camera_id": z["camera_id"],
+            "access": z.get("access") or "open", "entry_point": z.get("entry_point") or ""}
+
+
+zones_meta = {z["zone_id"]: _zone_meta(z) for z in zone_directory.list_all(active_only=True)}
 task_type_thresholds = (json.loads(config.TASK_TYPE_THRESHOLDS_PATH.read_text())
                          if config.TASK_TYPE_THRESHOLDS_PATH.exists() else {"_default": {"expected_active_ratio": 0.5}})
 roster = Roster(config.ROSTER_PATH, zone_directory)
@@ -351,7 +358,7 @@ _task_started_at: dict = {}
 
 # Heartbeat-style events excluded from durable history — see
 # event_history.py's module docstring for why.
-EVENT_HISTORY_EXCLUDED_TYPES = {"task_active_time_update"}
+EVENT_HISTORY_EXCLUDED_TYPES = {"task_active_time_update", "zone_person_present", "zone_person_cleared"}
 
 contacts = ContactBook(config.CONTACTS_PATH)
 notify_sender = build_sender(config.NOTIFY_CHANNEL, config)
@@ -416,6 +423,39 @@ effort_engine = EffortEngine(
 )
 
 
+# ── Security alerts (security_engine.py). Opening hours come from FLOORWATCH_OPEN_HOURS; a value that can't be
+# parsed must not take the whole service down, but it must not silently switch the feature off either — so it is
+# logged at error level (which reaches error monitoring), shown red on the System status page, and the venue is
+# treated as "never closed" (restricted-area alerts, which need no schedule, keep working). ──
+try:
+    security_schedule = OpenHours(config.OPEN_HOURS, config.TIMEZONE, config.SECURITY_CLOSING_GRACE_MINUTES,
+                                  config.SECURITY_OPENING_GRACE_MINUTES)
+    security_schedule_error = None
+except ScheduleError as _schedule_error:
+    security_schedule_error = str(_schedule_error)
+    log(f"FLOORWATCH_OPEN_HOURS / FLOORWATCH_TIMEZONE could not be used ({_schedule_error}) — closed-hours and "
+        f"door/window alerts are OFF until it is fixed; restricted-area alerts still work.", level="error")
+    security_schedule = OpenHours("", "UTC")
+security_engine = SecurityEngine(
+    {z["zone_id"]: _zone_meta(z) for z in zone_directory.list_all(active_only=True)}, security_schedule,
+    enabled=config.SECURITY_ALERTS_ENABLED, repeat_seconds=config.SECURITY_REPEAT_MINUTES * 60,
+    max_repeats=config.SECURITY_MAX_REPEATS, max_disarm_minutes=config.SECURITY_MAX_DISARM_MINUTES,
+    auto_close_hours=config.SECURITY_AUTO_CLOSE_HOURS)
+_security_zones_seen = {"version": -1, "at": 0.0}
+
+
+async def _ensure_security_zones(max_age_seconds: float = 15.0):
+    """Keep the security engine's view of the zone settings current. A zone edited on THIS replica is picked
+    up at once (the directory's version counter changed); one edited on another replica within max_age."""
+    version = getattr(zone_directory, "version", 0)
+    now = time.monotonic()
+    if version == _security_zones_seen["version"] and now - _security_zones_seen["at"] < max_age_seconds:
+        return
+    rows = await asyncio.to_thread(zone_directory.list_all, True)
+    security_engine.set_zones({z["zone_id"]: _zone_meta(z) for z in rows})
+    _security_zones_seen.update(version=version, at=now)
+
+
 # ── Horizontal scaling: shared read-state + event fan-out ───────────────
 # Production-readiness gap: "the WebSocket connection manager and
 # in-memory state assume exactly one running instance." engine/
@@ -429,6 +469,7 @@ SNAPSHOT_STATE_KEY = "floorwatch:snapshot:state"
 SNAPSHOT_QUEUE_KEY = "floorwatch:snapshot:queue"
 SNAPSHOT_TASKS_KEY = "floorwatch:snapshot:tasks"
 SNAPSHOT_QUEUE_TASKS_KEY = "floorwatch:snapshot:queue_tasks"
+SNAPSHOT_SECURITY_KEY = "floorwatch:snapshot:security"
 
 
 _snapshot_lock = asyncio.Lock()
@@ -474,6 +515,7 @@ async def _refresh_snapshots_locked():
     await write_snapshot(cluster_redis, SNAPSHOT_QUEUE_KEY, engine.pending_commands())
     await write_snapshot(cluster_redis, SNAPSHOT_TASKS_KEY, tasks)
     await write_snapshot(cluster_redis, SNAPSHOT_QUEUE_TASKS_KEY, effort_engine.pending_flags())
+    await write_snapshot(cluster_redis, SNAPSHOT_SECURITY_KEY, security_engine.snapshot())
 
 
 async def _emit(evt: dict):
@@ -915,7 +957,108 @@ async def _handle_resolve_after_review(payload: dict) -> dict:
     return {"event": evt}
 
 
+def _security_sms_text(evt: dict) -> str:
+    """One GSM-7-safe SMS segment (see _notify_assignee for why): plain ASCII, <= 160 characters."""
+    zone = evt.get("zone_name") or evt.get("zone_id") or "the venue"
+    kind = evt.get("alert_kind")
+    if evt.get("event_type") == "security_mode_changed":
+        body = evt.get("message") or "Alarm mode changed."
+    else:
+        body = {
+            "break_in_door": f"Possible break-in at {zone} (door). Check the cameras now.",
+            "break_in_window": f"Possible break-in at {zone} (window). Check the cameras now.",
+            "after_hours_presence": f"Person detected in {zone} while closed. Check the cameras.",
+            "restricted_zone_entry": f"Person detected in restricted area {zone}. Check the cameras.",
+            "hiding_after_close": f"Someone is still inside {zone} after closing. Check the cameras.",
+        }.get(kind) or evt.get("message") or "Security alert."
+        if evt.get("event_type") == "security_alert_update":
+            body = "REMINDER: " + body
+    text = f"Floorwatch ALERT: {body}".encode("ascii", "replace").decode("ascii")
+    return effort_engine.truncate_for_sms(text, 160)
+
+
+async def _notify_security(evt: dict):
+    """Tell the people who should know (FLOORWATCH_SECURITY_ALERT_ROLES), each through their own channel."""
+    try:
+        staff = await asyncio.to_thread(employee_directory.list_all, active_only=True)
+        recipients = [e["employee_number"] for e in staff if e.get("role") in config.SECURITY_ALERT_ROLES]
+        what = evt.get("alert_kind") or evt.get("event_type")
+        if not recipients:
+            # error level on purpose: an alert nobody was told about is a configuration problem a human must fix
+            log(f"security alert '{what}' for zone '{evt.get('zone_id')}' had NOBODY to notify — no active staff "
+                f"with a role in {sorted(config.SECURITY_ALERT_ROLES)}", level="error")
+            return
+        text = _security_sms_text(evt)
+        results = await asyncio.gather(
+            *[asyncio.to_thread(_send_task_notification, number, text, None) for number in recipients],
+            return_exceptions=True)
+        delivered = sum(1 for r in results if isinstance(r, dict)
+                        and (r.get("sent") or r.get("channel") == "shadow_mode_suppressed"))
+        if delivered == 0:
+            log(f"security alert '{what}' for zone '{evt.get('zone_id')}' could not be delivered to any of "
+                f"{len(recipients)} recipient(s) — check their notification channels", level="error")
+        else:
+            log(f"security alert '{what}' for zone '{evt.get('zone_id')}' sent to {delivered}/{len(recipients)} "
+                f"recipient(s)")
+    except Exception as e:
+        log(f"could not send security notifications: {type(e).__name__}: {e}", level="error")
+
+
+async def _emit_security(events: list):
+    """Broadcast + durably record security events (leader only, like every _emit), then notify for the ones
+    the engine flagged. The `_notify` marker is internal and never leaves this function."""
+    for evt in events:
+        notify = bool(evt.pop("_notify", False))
+        if notify:
+            evt["shadow_mode_suppressed"] = config.SHADOW_MODE
+        await _emit(evt)
+        if notify:
+            await _notify_security(evt)
+
+
+async def _handle_security_ack(payload: dict) -> dict:
+    evt = security_engine.acknowledge(payload["alert_id"], payload["user"])
+    if evt is None:
+        return {"error": "that alert is not open (it may already be closed)"}
+    await _emit_security([evt])
+    return {"event": evt}
+
+
+async def _handle_security_resolve(payload: dict) -> dict:
+    evt = security_engine.resolve(payload["alert_id"], payload["user"], payload["outcome"], payload.get("note", ""))
+    if evt is None:
+        return {"error": "that alert is not open (it may already be closed)"}
+    await _emit_security([evt])
+    return {"event": evt}
+
+
+async def _handle_security_disarm(payload: dict) -> dict:
+    evt = security_engine.disarm(payload["minutes"], payload["user"], payload.get("reason", ""))
+    await _emit_security([evt])
+    return {"event": evt}
+
+
+async def _handle_security_arm(payload: dict) -> dict:
+    evt = security_engine.arm(payload["user"])
+    if evt is None:
+        return {"error": "the alarm is not disarmed"}
+    await _emit_security([evt])
+    return {"event": evt}
+
+
+async def _handle_security_audit(payload: dict) -> dict:
+    await _ensure_security_zones(max_age_seconds=0)
+    evt = security_engine.audit_event(payload["zone_id"], payload["message"])
+    await _emit_security([evt])
+    return {"event": evt}
+
+
 COMMAND_DISPATCH = {
+    "security_ack": _handle_security_ack,
+    "security_resolve": _handle_security_resolve,
+    "security_disarm": _handle_security_disarm,
+    "security_arm": _handle_security_arm,
+    "security_audit": _handle_security_audit,
     "approve_zone": _handle_approve_zone,
     "reassign_zone": _handle_reassign_zone,
     "assign_task": _handle_assign_task,
@@ -979,6 +1122,15 @@ async def redis_consumer_loop():
                     # straight to the same primary-contact auto-assign
                     # path zone_escalated uses (see _maybe_auto_assign).
                     await _maybe_auto_assign(evt_dict)
+                    await client.xack(config.REDIS_STREAM, config.REDIS_CONSUMER_GROUP, entry_id)
+                    continue
+
+                if evt_dict.get("event_type") in ("zone_person_present", "zone_person_cleared"):
+                    # Fast presence readings from the coverage skill: judged by the security engine. They are
+                    # anonymous and frequent (heartbeats), so they are neither broadcast nor kept in history —
+                    # only the alerts they cause are.
+                    await _ensure_security_zones()
+                    await _emit_security(security_engine.process_presence_event(evt_dict))
                     await client.xack(config.REDIS_STREAM, config.REDIS_CONSUMER_GROUP, entry_id)
                     continue
 
@@ -1046,6 +1198,8 @@ async def _tick_once():
     for evt in engine.tick():
         await _emit(evt)
         await _maybe_auto_assign(evt)
+    await _ensure_security_zones()
+    await _emit_security(security_engine.tick())
     for evt in effort_engine.tick():
         await _emit(evt)
         if evt.get("event_type") == "task_status_nudge":
@@ -1127,6 +1281,12 @@ async def _start_leader_tasks():
         for rec in await asyncio.to_thread(task_store.list_open):
             if rec["task_id"] in effort_engine.tasks:
                 _task_started_at[rec["task_id"]] = rec["started_at"]
+
+    try:
+        await _ensure_security_zones(max_age_seconds=0)
+        security_engine.load_state(await read_snapshot(cluster_redis, SNAPSHOT_SECURITY_KEY, default={}))
+    except Exception as e:
+        log(f"could not restore open security alerts from the shared snapshot: {e}", level="warning")
 
     _leader_tasks = [
         asyncio.create_task(redis_consumer_loop()),
@@ -1282,6 +1442,32 @@ def _privacy_diagnostics() -> dict:
             "open_requests": len(open_requests), "overdue_requests": sum(1 for r in open_requests if r["overdue"])}
 
 
+def _can_be_reached(employee: dict) -> bool:
+    """Has a notification channel AND the detail that channel needs (a phone for SMS, a push token for the app)."""
+    channel = _resolve_task_channel(employee)
+    return (channel == "sms" and bool(employee.get("phone"))) or (channel == "fcm" and bool(employee.get("fcm_token")))
+
+
+async def _security_diagnostics() -> dict:
+    zones = await asyncio.to_thread(zone_directory.list_all, True)
+    staff = await asyncio.to_thread(employee_directory.list_all, active_only=True)
+    status = await _security_status()
+    recipients = [e for e in staff if e.get("role") in config.SECURITY_ALERT_ROLES]
+    return {
+        "enabled": config.SECURITY_ALERTS_ENABLED,
+        "schedule_configured": security_schedule.configured, "schedule_error": security_schedule_error,
+        "timezone": security_schedule.timezone_name, "phase": status.get("phase"),
+        "open_alerts": len(status.get("alerts") or []),
+        "zones_with_rules": sum(1 for z in zones if (z.get("access") or "open") != "open"),
+        "entry_point_zones": sum(1 for z in zones if z.get("entry_point")),
+        "alert_roles": sorted(config.SECURITY_ALERT_ROLES),
+        # having the right role is not the same as being reachable: no channel, or no push token yet
+        # (nobody has logged in to the app), means the alert shows on screen but that person is never told
+        "recipients": len(recipients),
+        "recipients_reachable": sum(1 for e in recipients if _can_be_reached(e)),
+    }
+
+
 @app.get("/api/admin/diagnostics")
 async def diagnostics(user=Depends(require_admin)):
     """What /healthz used to show, plus whether the database connection is
@@ -1310,6 +1496,7 @@ async def diagnostics(user=Depends(require_admin)):
                       # only the current leader replica runs retention, so a follower shows None
                       "last_run": dict(last_retention_run) or None},
         "privacy": await asyncio.to_thread(_privacy_diagnostics),
+        "security_alerts": await _security_diagnostics(),
         "two_step_verification": {
             "required_roles": sorted(config.MFA_REQUIRED_ROLES),
             "enrolled_accounts": len(await asyncio.to_thread(mfa.store.enabled_subjects)),
@@ -1673,6 +1860,8 @@ class AddZoneRequest(StrictModel):
     staffed: bool = True  # roster.py's fallback source for zones not listed in the static roster.json —
                            # see that module's docstring. True by default: adding a zone here is an
                            # assertion it's a real, currently-covered floor section.
+    access: Literal["open", "closed_hours", "restricted"] | None = None   # security_engine.py; omitted = "open"
+    entry_point: Literal["", "door", "window"] | None = None                # a way into the building, if it is one
 
 
 @app.get("/api/admin/zones")
@@ -1691,10 +1880,12 @@ async def add_zone(body: AddZoneRequest, user=Depends(require_supervisor)):
         return JSONResponse(status_code=400, content={"error": "role_tag is required"})
     await asyncio.to_thread(
         zone_directory.add, body.zone_id, body.name, body.role_tag,
-        camera_id=body.camera_id, created_by=user["sub"], staffed=body.staffed)
+        camera_id=body.camera_id, created_by=user["sub"], staffed=body.staffed,
+        access=body.access, entry_point=body.entry_point)
     # Live-update the SAME dict object engine.py/effort_engine.py were
     # constructed with, so a new zone is usable immediately — no restart.
-    zones_meta[body.zone_id] = {"name": body.name, "role_tag": body.role_tag, "camera_id": body.camera_id}
+    zones_meta[body.zone_id] = {"name": body.name, "role_tag": body.role_tag, "camera_id": body.camera_id,
+                                "access": body.access or "open", "entry_point": body.entry_point or ""}
     log(f"'{user['sub']}' added zone '{body.zone_id}' ({body.name})")
     return {"ok": True}
 
@@ -1714,7 +1905,7 @@ async def reactivate_zone(zone_id: str, user=Depends(require_supervisor)):
         return JSONResponse(status_code=404, content={"error": f"zone '{zone_id}' not found"})
     z = await asyncio.to_thread(next, (z for z in zone_directory.list_all() if z["zone_id"] == zone_id), None)
     if z:
-        zones_meta[zone_id] = {"name": z["name"], "role_tag": z["role_tag"], "camera_id": z["camera_id"]}
+        zones_meta[zone_id] = _zone_meta(z)
     log(f"'{user['sub']}' reactivated zone '{zone_id}'")
     return {"ok": True}
 
@@ -2857,8 +3048,10 @@ async def employee_dashboard_add_zone(body: AddZoneRequest, user=Depends(require
         return JSONResponse(status_code=400, content={"error": "role_tag is required"})
     await asyncio.to_thread(
         zone_directory.add, body.zone_id, body.name, body.role_tag,
-        camera_id=body.camera_id, created_by=f"employee:{user['sub']}", staffed=body.staffed)
-    zones_meta[body.zone_id] = {"name": body.name, "role_tag": body.role_tag, "camera_id": body.camera_id}
+        camera_id=body.camera_id, created_by=f"employee:{user['sub']}", staffed=body.staffed,
+        access=body.access, entry_point=body.entry_point)
+    zones_meta[body.zone_id] = {"name": body.name, "role_tag": body.role_tag, "camera_id": body.camera_id,
+                                "access": body.access or "open", "entry_point": body.entry_point or ""}
     log(f"employee:{user['sub']} added zone '{body.zone_id}' ({body.name})")
     return {"ok": True}
 
@@ -2878,7 +3071,7 @@ async def employee_dashboard_reactivate_zone(zone_id: str, user=Depends(require_
         return JSONResponse(status_code=404, content={"error": f"zone '{zone_id}' not found"})
     z = await asyncio.to_thread(next, (z for z in zone_directory.list_all() if z["zone_id"] == zone_id), None)
     if z:
-        zones_meta[zone_id] = {"name": z["name"], "role_tag": z["role_tag"], "camera_id": z["camera_id"]}
+        zones_meta[zone_id] = _zone_meta(z)
     log(f"employee:{user['sub']} reactivated zone '{zone_id}'")
     return {"ok": True}
 
@@ -2891,6 +3084,132 @@ async def employee_dashboard_set_zone_staffed(
         return JSONResponse(status_code=404, content={"error": f"zone '{zone_id}' not found"})
     log(f"employee:{user['sub']} set zone '{zone_id}'s staffed flag to {body.staffed}")
     return {"ok": True}
+
+
+# ── Security alerts — see security_engine.py. Reading is a snapshot read (any replica can answer);
+# every change goes through the command bus to the leader, which owns the engine. ──────────────
+
+class SetZoneSecurityRequest(StrictModel):
+    access: Literal["open", "closed_hours", "restricted"] | None = None
+    entry_point: Literal["", "door", "window"] | None = None
+
+
+class ResolveSecurityAlertRequest(StrictModel):
+    outcome: Literal["false_alarm", "authorised", "handled"]
+    note: Note = ""
+
+
+class DisarmRequest(StrictModel):
+    minutes: DisarmMinutes
+    reason: Name = ""
+
+
+_ACCESS_WORDS = {"open": "open (no rule)", "closed_hours": "alert during closed hours", "restricted": "restricted (always alert)"}
+
+
+async def _security_status() -> dict:
+    snap = await read_snapshot(cluster_redis, SNAPSHOT_SECURITY_KEY, default=None)
+    status = dict((snap or {}).get("status") or {
+        "enabled": config.SECURITY_ALERTS_ENABLED, "phase": "unknown", "armed": False, "disarmed_until": None,
+        "disarmed_by": None, "schedule": security_schedule.describe(), "alerts": [], "recently_resolved": [],
+        "occupied_zones": []})
+    status["shadow_mode"] = config.SHADOW_MODE
+    status["schedule_error"] = security_schedule_error
+    return status
+
+
+async def _change_zone_security(zone_id: str, body: SetZoneSecurityRequest, actor: str):
+    if body.access is None and body.entry_point is None:
+        return JSONResponse(status_code=400, content={"error": "Nothing to change: send access and/or entry_point."})
+    if not await asyncio.to_thread(zone_directory.set_security, zone_id, body.access, body.entry_point):
+        return JSONResponse(status_code=404, content={"error": f"zone '{zone_id}' not found"})
+    zone = await asyncio.to_thread(zone_directory.get, zone_id)
+    meta = zones_meta.get(zone_id)
+    if meta is not None:
+        meta["access"], meta["entry_point"] = zone["access"], zone["entry_point"]
+    entry = zone["entry_point"] or "none"
+    log(f"{actor} set zone '{zone_id}' security: access={zone['access']}, entry point={entry}")
+    # a durable, visible record: loosening a zone's monitoring is exactly what an insider would do first
+    await submit_command(cluster_redis, "security_audit", {
+        "zone_id": zone_id,
+        "message": f"{actor} set {zone['name']} to: {_ACCESS_WORDS[zone['access']]}; entry point: {entry}."})
+    return {"ok": True, "access": zone["access"], "entry_point": zone["entry_point"]}
+
+
+@app.get("/api/security/status")
+async def security_status(user=Depends(require_supervisor)):
+    return await _security_status()
+
+
+@app.post("/api/security/alerts/{alert_id}/acknowledge")
+async def security_acknowledge(alert_id: str, user=Depends(require_supervisor)):
+    reply = await submit_command(cluster_redis, "security_ack", {"alert_id": alert_id, "user": user["sub"]})
+    return _command_reply_to_response(reply)
+
+
+@app.post("/api/security/alerts/{alert_id}/resolve")
+async def security_resolve(alert_id: str, body: ResolveSecurityAlertRequest, user=Depends(require_supervisor)):
+    reply = await submit_command(cluster_redis, "security_resolve", {
+        "alert_id": alert_id, "user": user["sub"], "outcome": body.outcome, "note": body.note})
+    return _command_reply_to_response(reply)
+
+
+@app.post("/api/security/disarm")
+async def security_disarm(body: DisarmRequest, user=Depends(require_supervisor)):
+    reply = await submit_command(cluster_redis, "security_disarm", {
+        "minutes": body.minutes, "user": user["sub"], "reason": body.reason})
+    return _command_reply_to_response(reply)
+
+
+@app.post("/api/security/arm")
+async def security_arm(user=Depends(require_supervisor)):
+    reply = await submit_command(cluster_redis, "security_arm", {"user": user["sub"]})
+    return _command_reply_to_response(reply, error_status=409)
+
+
+@app.post("/api/admin/zones/{zone_id}/set-security")
+async def set_zone_security(zone_id: str, body: SetZoneSecurityRequest, user=Depends(require_supervisor)):
+    return await _change_zone_security(zone_id, body, user["sub"])
+
+
+@app.get("/api/employee/dashboard/security/status")
+async def employee_dashboard_security_status(user=Depends(require_employee_supervisor)):
+    return await _security_status()
+
+
+@app.post("/api/employee/dashboard/security/alerts/{alert_id}/acknowledge")
+async def employee_dashboard_security_acknowledge(alert_id: str, user=Depends(require_employee_supervisor)):
+    reply = await submit_command(cluster_redis, "security_ack", {"alert_id": alert_id, "user": f"employee:{user['sub']}"})
+    return _command_reply_to_response(reply)
+
+
+@app.post("/api/employee/dashboard/security/alerts/{alert_id}/resolve")
+async def employee_dashboard_security_resolve(
+    alert_id: str, body: ResolveSecurityAlertRequest, user=Depends(require_employee_supervisor)
+):
+    reply = await submit_command(cluster_redis, "security_resolve", {
+        "alert_id": alert_id, "user": f"employee:{user['sub']}", "outcome": body.outcome, "note": body.note})
+    return _command_reply_to_response(reply)
+
+
+@app.post("/api/employee/dashboard/security/disarm")
+async def employee_dashboard_security_disarm(body: DisarmRequest, user=Depends(require_employee_supervisor)):
+    reply = await submit_command(cluster_redis, "security_disarm", {
+        "minutes": body.minutes, "user": f"employee:{user['sub']}", "reason": body.reason})
+    return _command_reply_to_response(reply)
+
+
+@app.post("/api/employee/dashboard/security/arm")
+async def employee_dashboard_security_arm(user=Depends(require_employee_supervisor)):
+    reply = await submit_command(cluster_redis, "security_arm", {"user": f"employee:{user['sub']}"})
+    return _command_reply_to_response(reply, error_status=409)
+
+
+@app.post("/api/employee/dashboard/zones/{zone_id}/set-security")
+async def employee_dashboard_set_zone_security(
+    zone_id: str, body: SetZoneSecurityRequest, user=Depends(require_employee_manager)
+):
+    return await _change_zone_security(zone_id, body, f"employee:{user['sub']}")
 
 
 @app.get("/api/employee/dashboard/history")

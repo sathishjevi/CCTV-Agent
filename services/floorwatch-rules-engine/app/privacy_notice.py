@@ -49,6 +49,8 @@ def build_privacy_notice(config) -> dict:
                           "Questions and the zone/task information they refer to are sent to them; it works from "
                           "employee numbers, not names or phone numbers.")
 
+    security_alerts = bool(getattr(config, "SECURITY_ALERTS_ENABLED", False))
+
     sections = [
         ("Who we are", [
             f"{org} runs this system. Questions or requests about your information: {contact}."
@@ -70,7 +72,13 @@ def build_privacy_notice(config) -> dict:
              "No video or images are stored by this system and no facial recognition is used; the "
              "measurements are counts and timings tied to an area and a time, not to your face or body.",
              "Records of sign-ins and security events (such as failed sign-in attempts), including network "
-             "addresses, to protect accounts."],
+             "addresses, to protect accounts."]
+            + (["Security alerts: where a supervisor has marked an area as restricted or off-limits while the venue "
+                "is closed, or has marked a door or window as an entry point, the same zone-level detection raises "
+                "an alert to supervisors when a person is detected there at a time they are not expected — for "
+                "example at a door or window while the venue is closed, or still inside after closing. The alert "
+                "records only the area, the time and that a person was detected; it does not identify anyone, and "
+                "a supervisor checks before anything is done."] if security_alerts else []),
         ]),
         ("Why we're allowed to use it", [
             f"We rely on {basis}. We use your information only for the purposes above — assigning and tracking "

@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/admin.dart';
 import '../models/dashboard.dart';
+import '../models/security.dart';
 import '../models/task.dart';
 import 'token_storage.dart';
 
@@ -537,6 +538,47 @@ class ApiClient {
     final resp =
         await _post('/api/employee/dashboard/zones/$zoneId/reactivate', headers: await _authHeaders());
     _decode(resp);
+  }
+
+  /// How a zone takes part in security alerts: [access] is open | closed_hours | restricted and
+  /// [entryPoint] is '' | door | window. Either may be omitted to leave it as it is.
+  Future<void> setZoneSecurity(String zoneId, {String? access, String? entryPoint}) async {
+    final resp = await _post(
+      '/api/employee/dashboard/zones/$zoneId/set-security',
+      headers: await _authHeaders(),
+      body: jsonEncode({
+        if (access != null) 'access': access,
+        if (entryPoint != null) 'entry_point': entryPoint,
+      }),
+    );
+    _decode(resp);
+  }
+
+  // ── Security alerts (require_employee_supervisor) ───────────────────
+
+  Future<SecurityStatus> fetchSecurityStatus() async {
+    final resp = await _get('/api/employee/dashboard/security/status', headers: await _authHeaders());
+    return SecurityStatus.fromJson(_decode(resp));
+  }
+
+  Future<void> acknowledgeSecurityAlert(String alertId) async {
+    _decode(await _post('/api/employee/dashboard/security/alerts/$alertId/acknowledge',
+        headers: await _authHeaders()));
+  }
+
+  /// [outcome] is handled | false_alarm | authorised.
+  Future<void> resolveSecurityAlert(String alertId, String outcome, String note) async {
+    _decode(await _post('/api/employee/dashboard/security/alerts/$alertId/resolve',
+        headers: await _authHeaders(), body: jsonEncode({'outcome': outcome, 'note': note})));
+  }
+
+  Future<void> disarmSecurity(int minutes, String reason) async {
+    _decode(await _post('/api/employee/dashboard/security/disarm',
+        headers: await _authHeaders(), body: jsonEncode({'minutes': minutes, 'reason': reason})));
+  }
+
+  Future<void> armSecurity() async {
+    _decode(await _post('/api/employee/dashboard/security/arm', headers: await _authHeaders()));
   }
 
   Future<void> setZoneStaffed(String zoneId, bool staffed) async {

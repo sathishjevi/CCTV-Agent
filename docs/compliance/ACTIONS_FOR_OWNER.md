@@ -22,6 +22,27 @@ Things the code cannot do for you. Roughly in priority order.
 * Employee login has a per-IP limit of 30; offices behind one NAT should be fine, but watch for 429s.
 * Passwords upgrade to scrypt on each user's next successful login; no action needed.
 
+## Security alerts (break-in, after-hours, off-limits, hiding)
+
+Full guide: `docs/floorwatch/SECURITY_ALERTS.md`. Nothing alerts until you opt a zone in, so deploying changes nothing by itself.
+
+1. **Deploy order:** the rules-engine first, then the pipeline (the pipeline image carries the camera skill that now emits the
+   presence readings; an older rules-engine would reject them as unknown events and log noise).
+2. **Set on the rules-engine:** `FLOORWATCH_OPEN_HOURS` (e.g. `mon-fri 09:00-23:00; sat 10:00-02:00; sun closed`) and
+   `FLOORWATCH_TIMEZONE` (e.g. `Asia/Kolkata`). Without them only *Off-limits* zones can alert. Optional tuning variables are in the guide.
+3. **In the dashboard:** Manage Zones -> set each door/window zone's *Entry point* and each stockroom/office's *Security rule*.
+   The zone must also be drawn in the camera calibration tool with the same `zone_id` (`role_tag: security`).
+4. **Check System status** (admin): it should show opening hours set, zones marked, and who is messaged. "Nobody" means alerts
+   would show on screen but no one would be told.
+5. **Run in shadow mode first** (`FLOORWATCH_SHADOW_MODE=true`, the default): alerts appear on screen, nobody is messaged. Do the walk
+   test in the guide, at night, in real lighting. Only then set shadow mode to `false`.
+6. **Everyone will be asked to re-read the privacy notice** at their next login: the notice now describes security alerts, which changes
+   its version. That is intended.
+7. **Decide who may disarm.** Any supervisor, secondary admin or admin can (bounded to 12 h, recorded, the team is told). Tighten
+   `FLOORWATCH_SECURITY_ALERT_ROLES` / role assignments if that is too broad for you.
+8. **It is not a burglar alarm** (no siren, no dispatch, no 24/7 monitoring, and night-time detection accuracy must be proved in your
+   building). Keep any existing alarm. Check local rules on workplace monitoring.
+
 ## Accounts and keys
 
 1. Restrict the Firebase API key to the app's package name and SHA-1/SHA-256 (Google Cloud console, Credentials).

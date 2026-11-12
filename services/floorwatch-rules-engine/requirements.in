@@ -26,3 +26,6 @@ cryptography>=43.0
 
 # Starlette needs this to parse form bodies: the Twilio SMS webhook (/api/webhooks/twilio-sms) reads request.form().
 python-multipart>=0.0.9
+
+# Opening hours are evaluated in the venue's timezone (FLOORWATCH_TIMEZONE); slim images and Windows ship no tz database.
+tzdata>=2024.1

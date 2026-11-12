@@ -41,6 +41,8 @@ class ZoneRecord {
   final String? cameraId;
   final bool active;
   final bool staffed;
+  final String access; // open | closed_hours | restricted — see security_engine.py
+  final String entryPoint; // '' | door | window
 
   ZoneRecord({
     required this.zoneId,
@@ -49,6 +51,8 @@ class ZoneRecord {
     required this.cameraId,
     required this.active,
     required this.staffed,
+    this.access = 'open',
+    this.entryPoint = '',
   });
 
   factory ZoneRecord.fromJson(Map<String, dynamic> json) {
@@ -59,6 +63,8 @@ class ZoneRecord {
       cameraId: json['camera_id'] as String?,
       active: json['active'] as bool? ?? true,
       staffed: json['staffed'] as bool? ?? true,
+      access: json['access'] as String? ?? 'open',
+      entryPoint: json['entry_point'] as String? ?? '',
     );
   }
 }

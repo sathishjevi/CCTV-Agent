@@ -384,6 +384,28 @@ HOSTING_REGION = os.environ.get("FLOORWATCH_HOSTING_REGION", "the region configu
 PRIVACY_AI_ASSISTANT = os.environ.get("FLOORWATCH_PRIVACY_AI_ASSISTANT", "false").lower() in ("1", "true", "yes")
 PRIVACY_NOTICE_VERSION = os.environ.get("FLOORWATCH_PRIVACY_NOTICE_VERSION", "")  # empty = derived from the text
 
+# ── Security alerts (security_engine.py) — break-in, after-hours, restricted-area and "hiding" alerts ──
+# Zones are opted in one by one from the dashboard (Manage Zones -> "Security" column), so switching this on
+# changes nothing until a zone is marked. Door/window and "closed hours" rules also need opening hours:
+#   FLOORWATCH_OPEN_HOURS="mon-fri 09:00-23:00; sat-sun 10:00-02:00"   (see security_schedule.py for the format)
+# With no opening hours set the venue is never "closed", so only restricted-area alerts can fire.
+SECURITY_ALERTS_ENABLED = os.environ.get("FLOORWATCH_SECURITY_ALERTS_ENABLED", "true").lower() in ("1", "true", "yes")
+TIMEZONE = os.environ.get("FLOORWATCH_TIMEZONE", "UTC")                      # e.g. "Asia/Kolkata", "America/New_York"
+OPEN_HOURS = os.environ.get("FLOORWATCH_OPEN_HOURS", "")
+# People are around just after closing and just before opening (locking up, staff arriving). The venue is
+# only "armed" once it has been closed this long, and stops being armed this long before it opens.
+SECURITY_CLOSING_GRACE_MINUTES = float(os.environ.get("FLOORWATCH_SECURITY_CLOSING_GRACE_MINUTES", 30))
+SECURITY_OPENING_GRACE_MINUTES = float(os.environ.get("FLOORWATCH_SECURITY_OPENING_GRACE_MINUTES", 30))
+# An unresolved alert with the person still on camera is re-sent this often, up to this many times.
+SECURITY_REPEAT_MINUTES = float(os.environ.get("FLOORWATCH_SECURITY_REPEAT_MINUTES", 10))
+SECURITY_MAX_REPEATS = int(os.environ.get("FLOORWATCH_SECURITY_MAX_REPEATS", 6))
+# The longest a supervisor can disarm for in one go (a cleaning crew, an early delivery).
+SECURITY_MAX_DISARM_MINUTES = float(os.environ.get("FLOORWATCH_SECURITY_MAX_DISARM_MINUTES", 720))
+SECURITY_AUTO_CLOSE_HOURS = float(os.environ.get("FLOORWATCH_SECURITY_AUTO_CLOSE_HOURS", 24))
+# Who is messaged (push/SMS, through each person's own channel) when an alert fires.
+SECURITY_ALERT_ROLES = {r.strip() for r in os.environ.get(
+    "FLOORWATCH_SECURITY_ALERT_ROLES", "supervisor,secondary_admin,admin").split(",") if r.strip()}
+
 SOURCE_MODEL_VERSION = "floorwatch-rules-engine/0.1.0"
 
 # ── Secrets hygiene (small hardening, not a replacement for a real

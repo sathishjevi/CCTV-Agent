@@ -127,6 +127,10 @@ class RulesEngine:
 
     def process_detection_event(self, evt: dict) -> list:
         """evt is a validated shared-schema event (zone_covered | zone_gap)."""
+        if evt["event_type"] in ("zone_person_present", "zone_person_cleared"):
+            # Fast presence readings are the security engine's input (security_engine.py), not coverage
+            # transitions: they must not touch a zone's coverage state or role tag.
+            return []
         zone_id = evt["zone_id"]
         camera_id = evt["camera_id"]
         role_tag = evt["role_tag"]
