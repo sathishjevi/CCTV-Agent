@@ -18,7 +18,7 @@
 #
 # NOT BUILD-TESTED against a real Docker daemon in this environment (see
 # RAILWAY_DEPLOYMENT.md's own note on this) — verify with a real deploy.
-FROM python:3.13-slim
+FROM python:3.15-slim
 
 WORKDIR /app
 
